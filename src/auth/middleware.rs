@@ -12,6 +12,14 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         parts: &mut Parts,
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
+        if state.config.dev_mode {
+            return Ok(AdminAuth(SessionClaims {
+                id: "dev".to_string(),
+                oidc_subject: "dev".to_string(),
+                email: "dev@localhost".to_string(),
+            }));
+        }
+
         let token = parts
             .headers
             .get("Authorization")

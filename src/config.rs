@@ -6,6 +6,8 @@ pub struct Config {
     pub database_url: String,
     pub listen_addr: String,
 
+    pub dev_mode: bool,
+
     pub oidc_issuer_url: String,
     pub oidc_client_id: String,
     pub oidc_client_secret: String,
@@ -21,20 +23,24 @@ impl Config {
     pub fn from_env() -> Result<Self> {
         dotenvy::dotenv().ok();
 
+        let dev_mode = env::var("ENV").as_deref() == Ok("DEVELOPMENT");
+
         Ok(Config {
             database_url: env::var("DATABASE_URL")
                 .context("DATABASE_URL is required")?,
             listen_addr: env::var("LISTEN_ADDR")
                 .unwrap_or_else(|_| "0.0.0.0:3000".to_string()),
 
+            dev_mode,
+
             oidc_issuer_url: env::var("OIDC_ISSUER_URL")
-                .context("OIDC_ISSUER_URL is required")?,
+                .unwrap_or_default(),
             oidc_client_id: env::var("OIDC_CLIENT_ID")
-                .context("OIDC_CLIENT_ID is required")?,
+                .unwrap_or_default(),
             oidc_client_secret: env::var("OIDC_CLIENT_SECRET")
-                .context("OIDC_CLIENT_SECRET is required")?,
+                .unwrap_or_default(),
             oidc_redirect_uri: env::var("OIDC_REDIRECT_URI")
-                .context("OIDC_REDIRECT_URI is required")?,
+                .unwrap_or_default(),
 
             session_signing_key: env::var("SESSION_SIGNING_KEY").unwrap_or_else(|_| {
                 use rand::RngCore;
