@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM kv_entries WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "f049affe29fadd4e7803de6b535db3b640c1317555e34275250354f2654a587f"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT datetime(?) <= datetime('now')",
+  "describe": {
+    "columns": [
+      {
+        "name": "datetime(?) <= datetime('now')",
+        "ordinal": 0,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "57dee38db939957fcedefd1c4fc5ad9917b6667ecd36da3ab7a1852be1910d18"
+}

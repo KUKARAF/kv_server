@@ -1,0 +1,35 @@
+<section>
+  <h2>Current Session</h2>
+
+  <div id="session-info"
+       hx-get="/api/admin/session"
+       hx-trigger="load"
+       hx-swap="innerHTML">
+    Loading...
+  </div>
+</section>
+
+<script>
+  document.addEventListener('htmx:afterRequest', function(e) {
+    if (e.detail.pathInfo?.requestPath === '/api/admin/session') {
+      renderSession(e.detail.xhr.response, e.detail.xhr.status);
+    }
+  });
+
+  function renderSession(json, status) {
+    const el = document.getElementById('session-info');
+    if (status !== 200) { el.innerHTML = '<p>Not authenticated.</p>'; return; }
+    const s = JSON.parse(json);
+    el.innerHTML = `
+      <dl>
+        <dt>Email</dt><dd>${esc(s.email)}</dd>
+        <dt>Subject</dt><dd><code>${esc(s.oidc_subject)}</code></dd>
+        <dt>Expires</dt><dd>${esc(s.expires_at)}</dd>
+        <dt>Created</dt><dd>${esc(s.created_at)}</dd>
+      </dl>`;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+</script>

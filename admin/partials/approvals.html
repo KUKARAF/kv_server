@@ -1,0 +1,49 @@
+<section>
+  <h2>Pending Approvals</h2>
+  <p>Compare the emoji shown here with what the requester sees. If they match, approve.</p>
+
+  <div id="approvals-list"
+       hx-get="/api/admin/approvals"
+       hx-trigger="load, every 30s"
+       hx-swap="innerHTML">
+    Loading...
+  </div>
+</section>
+
+<template id="approvals-tmpl"></template>
+
+<script>
+  document.addEventListener('htmx:afterRequest', function(e) {
+    if (e.detail.pathInfo?.requestPath === '/api/admin/approvals') {
+      renderApprovals(e.detail.xhr.response);
+    }
+  });
+
+  function renderApprovals(json) {
+    const items = JSON.parse(json);
+    const el = document.getElementById('approvals-list');
+    if (!items.length) { el.innerHTML = '<p>No pending approvals.</p>'; return; }
+    el.innerHTML = items.map(a => `
+      <div class="approval-card">
+        <div class="emoji">${a.emoji_sequence}</div>
+        <div class="info">
+          <strong>${esc(a.api_key_label)}</strong>
+          <small>requested ${esc(a.requested_at)} · expires ${esc(a.expires_at)}</small>
+        </div>
+        <div class="actions">
+          <button class="btn-approve"
+                  hx-post="/api/admin/approvals/${a.id}/approve"
+                  hx-target="#approvals-list"
+                  hx-swap="innerHTML">Approve</button>
+          <button class="btn-reject"
+                  hx-post="/api/admin/approvals/${a.id}/reject"
+                  hx-target="#approvals-list"
+                  hx-swap="innerHTML">Reject</button>
+        </div>
+      </div>`).join('');
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+</script>

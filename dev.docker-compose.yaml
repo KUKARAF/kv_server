@@ -1,0 +1,16 @@
+services:
+  kv:
+    build:
+      context: .
+      target: dev
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - .:/workspace
+    environment:
+      DATABASE_URL: /app/data/kv.db
+      PORT: "3000"
+      SQLX_OFFLINE: "true"

@@ -1,0 +1,90 @@
+<section>
+  <h2>API Keys</h2>
+
+  <form hx-post="/api/admin/keys"
+        hx-target="#keys-list"
+        hx-swap="outerHTML"
+        hx-on::after-request="this.reset()">
+    <fieldset>
+      <legend>Create key</legend>
+      <label>Label <input name="label" required></label>
+      <label>Type
+        <select name="key_type">
+          <option value="standard">Standard</option>
+          <option value="one_time">One-time</option>
+          <option value="approval_required">Approval required</option>
+        </select>
+      </label>
+      <label>Expires at (optional) <input name="expires_at" type="datetime-local"></label>
+
+      <details>
+        <summary>Scope rules</summary>
+        <div id="scope-rules">
+          <div class="scope-row">
+            <input name="scopes[0][key_pattern]" placeholder="payments-*" required>
+            <input name="scopes[0][ops]" placeholder="read,write" required>
+          </div>
+        </div>
+        <button type="button" onclick="addScope()">+ Add scope</button>
+      </details>
+
+      <button type="submit">Create</button>
+    </fieldset>
+  </form>
+
+  <div id="keys-list"
+       hx-get="/api/admin/keys"
+       hx-trigger="load"
+       hx-swap="outerHTML">
+    Loading...
+  </div>
+</section>
+
+<script>
+  let scopeIdx = 1;
+  function addScope() {
+    const div = document.createElement('div');
+    div.className = 'scope-row';
+    div.innerHTML = `
+      <input name="scopes[${scopeIdx}][key_pattern]" placeholder="key-*" required>
+      <input name="scopes[${scopeIdx}][ops]" placeholder="read,write" required>
+    `;
+    document.getElementById('scope-rules').appendChild(div);
+    scopeIdx++;
+  }
+
+  // Render keys list when HTMX loads it
+  document.addEventListener('htmx:afterRequest', function(e) {
+    if (e.detail.pathInfo?.requestPath === '/api/admin/keys') {
+      renderKeys(e.detail.xhr.response);
+    }
+  });
+
+  function renderKeys(json) {
+    const keys = JSON.parse(json);
+    const el = document.getElementById('keys-list');
+    if (!keys.length) { el.innerHTML = '<p>No keys yet.</p>'; return; }
+    el.innerHTML = `<table>
+      <thead><tr><th>Label</th><th>Type</th><th>Status</th><th>Scopes</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
+      <tbody>${keys.map(k => `
+        <tr>
+          <td>${esc(k.label)}</td>
+          <td><span class="badge badge-${k.key_type}">${k.key_type}</span></td>
+          <td><span class="badge badge-${k.status}">${k.status}</span></td>
+          <td><small>${k.scopes.map(s => `${esc(s.key_pattern)} [${esc(s.ops)}]`).join('<br>')}</small></td>
+          <td>${k.expires_at ? esc(k.expires_at) : '—'}</td>
+          <td>${k.last_used_at ? esc(k.last_used_at) : '—'}</td>
+          <td>
+            <button hx-delete="/api/admin/keys/${k.id}"
+                    hx-target="#keys-list"
+                    hx-swap="outerHTML"
+                    hx-confirm="Revoke this key?">Revoke</button>
+          </td>
+        </tr>`).join('')}
+      </tbody></table>`;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+</script>

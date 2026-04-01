@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO approval_requests (id, api_key_id, emoji_sequence, expires_at)\n         VALUES (?, ?, ?, datetime('now', '+10 minutes'))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ef17ef995baae74e157273c4d8ea4db557f6e1fdbf993af97e42329ca345fd98"
+}

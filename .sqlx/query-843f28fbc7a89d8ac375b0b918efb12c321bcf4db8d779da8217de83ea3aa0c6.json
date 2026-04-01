@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO session_tokens (id, token_hash, oidc_subject, email, expires_at)\n         VALUES (?, ?, ?, ?, datetime('now', '+10 hours'))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "843f28fbc7a89d8ac375b0b918efb12c321bcf4db8d779da8217de83ea3aa0c6"
+}

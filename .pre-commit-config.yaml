@@ -1,0 +1,30 @@
+repos:
+  # Credential / secret scanning (same version as claw-code)
+  - repo: https://github.com/trufflesecurity/trufflehog
+    rev: v3.94.1
+    hooks:
+      - id: trufflehog
+        stages: [pre-commit]
+
+  - repo: local
+    hooks:
+      - id: cargo-check
+        name: cargo check
+        entry: bash -c 'SQLX_OFFLINE=true cargo check 2>&1'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: bash -c 'SQLX_OFFLINE=true cargo clippy -- -D warnings 2>&1'
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cargo-test
+        name: cargo test
+        entry: bash -c './.tools/test.sh -q'
+        language: system
+        pass_filenames: false
+        always_run: true

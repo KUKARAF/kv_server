@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin — kv.osmosis.page</title>
+  <script src="https://unpkg.com/htmx.org@2.0.3" integrity="sha384-0895/pl5MgCQGFKTNW5GxGNiRrHQAzFI7HQxvUaVzgBxKCBYzJTcSV2Lgq7OjrH" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="/admin/style.css">
+</head>
+<body>
+  <nav>
+    <span class="brand">kv.osmosis.page</span>
+    <button onclick="showTab('keys')" class="tab-btn" id="tab-keys">API Keys</button>
+    <button onclick="showTab('approvals')" class="tab-btn" id="tab-approvals">Approvals</button>
+    <button onclick="showTab('entries')" class="tab-btn" id="tab-entries">KV Entries</button>
+    <button onclick="showTab('session')" class="tab-btn" id="tab-session">Session</button>
+  </nav>
+
+  <main>
+    <div id="tab-keys-content" class="tab-content">
+      <div hx-get="/admin/partials/api-keys.html"
+           hx-trigger="load"
+           hx-swap="innerHTML"></div>
+    </div>
+
+    <div id="tab-approvals-content" class="tab-content hidden">
+      <div hx-get="/admin/partials/approvals.html"
+           hx-trigger="load"
+           hx-swap="innerHTML"></div>
+    </div>
+
+    <div id="tab-entries-content" class="tab-content hidden">
+      <div hx-get="/admin/partials/kv-entries.html"
+           hx-trigger="load"
+           hx-swap="innerHTML"></div>
+    </div>
+
+    <div id="tab-session-content" class="tab-content hidden">
+      <div hx-get="/admin/partials/session.html"
+           hx-trigger="load"
+           hx-swap="innerHTML"></div>
+    </div>
+  </main>
+
+  <script>
+    // Read session token from cookie and attach to all HTMX requests
+    function getCookie(name) {
+      const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+      return v ? v.pop() : null;
+    }
+
+    document.addEventListener('htmx:configRequest', function(e) {
+      const token = getCookie('session_token');
+      if (token) e.detail.headers['Authorization'] = 'Bearer ' + token;
+    });
+
+    function showTab(name) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+      document.getElementById('tab-' + name + '-content').classList.remove('hidden');
+      document.getElementById('tab-' + name).classList.add('active');
+    }
+
+    showTab('keys');
+  </script>
+</body>
+</html>

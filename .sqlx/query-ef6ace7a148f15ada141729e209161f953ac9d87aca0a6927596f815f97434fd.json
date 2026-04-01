@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE api_keys SET status = 'active' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ef6ace7a148f15ada141729e209161f953ac9d87aca0a6927596f815f97434fd"
+}

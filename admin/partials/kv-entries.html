@@ -1,0 +1,44 @@
+<section>
+  <h2>KV Entries</h2>
+
+  <form hx-get="/api/admin/kv"
+        hx-target="#entries-list"
+        hx-swap="innerHTML"
+        hx-trigger="submit, load"
+        hx-push-url="false">
+    <input name="prefix" placeholder="Filter by prefix (optional)">
+    <button type="submit">Search</button>
+  </form>
+
+  <div id="entries-list">Loading...</div>
+</section>
+
+<script>
+  document.addEventListener('htmx:afterRequest', function(e) {
+    if (e.detail.pathInfo?.requestPath?.startsWith('/api/admin/kv')) {
+      renderEntries(e.detail.xhr.response);
+    }
+  });
+
+  function renderEntries(json) {
+    const entries = JSON.parse(json);
+    const el = document.getElementById('entries-list');
+    if (!entries.length) { el.innerHTML = '<p>No entries found.</p>'; return; }
+    el.innerHTML = `<table>
+      <thead><tr><th>Key</th><th>TTL (h)</th><th>Sliding</th><th>Open</th><th>Expires</th><th>Created</th></tr></thead>
+      <tbody>${entries.map(e => `
+        <tr>
+          <td><code>${esc(e.key)}</code></td>
+          <td>${e.ttl_hours ?? '—'}</td>
+          <td>${e.ttl_sliding ? '✓' : '—'}</td>
+          <td>${e.open_access ? '✓' : '—'}</td>
+          <td>${e.expires_at ? esc(e.expires_at) : '—'}</td>
+          <td>${esc(e.created_at)}</td>
+        </tr>`).join('')}
+      </tbody></table>`;
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+</script>

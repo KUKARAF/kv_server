@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT open_access FROM kv_entries\n                 WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))",
+  "describe": {
+    "columns": [
+      {
+        "name": "open_access",
+        "ordinal": 0,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "43933cf348a95c1d94f6ecd39cb1897bda9d405de3ce5e0432c713d9bd89e0e1"
+}

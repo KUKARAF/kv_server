@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT api_key_id FROM approval_requests\n         WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
+  "describe": {
+    "columns": [
+      {
+        "name": "api_key_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "03b279ed1c6c574b70f7e2be420b402d8ea98be759959a46707e18b546f11bd3"
+}

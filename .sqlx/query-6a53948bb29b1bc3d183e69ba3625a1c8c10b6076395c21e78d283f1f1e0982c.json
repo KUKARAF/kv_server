@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT key_pattern, ops FROM api_key_scopes WHERE api_key_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "key_pattern",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "ops",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "6a53948bb29b1bc3d183e69ba3625a1c8c10b6076395c21e78d283f1f1e0982c"
+}

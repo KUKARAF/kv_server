@@ -1,0 +1,15 @@
+services:
+  kv:
+    image: ghcr.io/kukaraf/kv_manager:latest
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - db-data:/app/data
+    environment:
+      DATABASE_URL: /app/data/kv.db
+      PORT: "3000"
+
+volumes:
+  db-data:

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE approval_requests SET status = 'expired'\n         WHERE status = 'pending' AND expires_at <= datetime('now')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "625b3e350794025f9f52fba5c56bcec3af92d26334fc829cbab5fdfb4d3a140e"
+}

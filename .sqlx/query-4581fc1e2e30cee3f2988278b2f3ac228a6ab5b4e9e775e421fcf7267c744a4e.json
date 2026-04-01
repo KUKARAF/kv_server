@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT emoji_sequence FROM approval_requests\n                         WHERE api_key_id = ? AND status = 'pending'\n                           AND expires_at > datetime('now')\n                         ORDER BY requested_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "emoji_sequence",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4581fc1e2e30cee3f2988278b2f3ac228a6ab5b4e9e775e421fcf7267c744a4e"
+}

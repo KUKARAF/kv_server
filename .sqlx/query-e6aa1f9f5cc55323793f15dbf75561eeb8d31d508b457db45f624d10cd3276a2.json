@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM kv_entries WHERE key = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e6aa1f9f5cc55323793f15dbf75561eeb8d31d508b457db45f624d10cd3276a2"
+}
