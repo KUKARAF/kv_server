@@ -6,9 +6,8 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./data:/app/data
+      - ./data:/app/data:z
     environment:
       DATABASE_URL: sqlite:///app/data/kv.db
       PORT: "3000"
-      SQLX_OFFLINE: "true"
       ENV: DEVELOPMENT

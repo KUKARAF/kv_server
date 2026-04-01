@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
         .nest("/auth", auth::router())
         .nest("/api/admin", admin::router())
         .route("/admin/", get(serve_dashboard))
-        .route("/admin/{*path}", get(serve_admin_static))
+        .route("/admin/*path", get(serve_admin_static))
         .route("/", get(serve_index))
         .layer(axum_middleware::from_fn_with_state(
             Arc::clone(&state),
