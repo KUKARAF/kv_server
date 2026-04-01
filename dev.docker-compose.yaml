@@ -7,7 +7,6 @@ services:
       - "3000:3000"
     volumes:
       - ./data:/app/data
-      - .:/workspace
     environment:
       DATABASE_URL: sqlite:///app/data/kv.db
       PORT: "3000"
