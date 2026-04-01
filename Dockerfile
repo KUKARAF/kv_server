@@ -1,4 +1,4 @@
-FROM rust:1.82-alpine AS builder
+FROM rust:1.85-alpine AS builder
 RUN apk add --no-cache musl-dev sqlite-dev
 WORKDIR /build
 COPY . .
@@ -19,7 +19,7 @@ EXPOSE 3000
 CMD ["./kv_manager"]
 
 # ── dev image (cargo-watch hot-reload) ───────────────────────────────────────
-FROM rust:1.82-alpine AS dev
+FROM rust:1.85-alpine AS dev
 RUN apk add --no-cache musl-dev sqlite-dev
 RUN cargo install cargo-watch
 WORKDIR /workspace
