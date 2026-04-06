@@ -49,10 +49,11 @@ fn sign(payload: &str, key: &str) -> String {
     URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
 }
 
-fn encode_state_cookie(state: &str, pkce_verifier: &str, signing_key: &str) -> String {
+fn encode_state_cookie(state: &str, pkce_verifier: &str, nonce: &str, signing_key: &str) -> String {
     let payload = serde_json::json!({
         "state": state,
         "pkce_verifier": pkce_verifier,
+        "nonce": nonce,
     })
     .to_string();
     let sig = sign(&payload, signing_key);
@@ -63,7 +64,7 @@ fn encode_state_cookie(state: &str, pkce_verifier: &str, signing_key: &str) -> S
 fn decode_state_cookie(
     cookie_value: &str,
     signing_key: &str,
-) -> Option<(String, String)> {
+) -> Option<(String, String, String)> {
     let (encoded, sig) = cookie_value.split_once('.')?;
     let payload = String::from_utf8(URL_SAFE_NO_PAD.decode(encoded).ok()?).ok()?;
     let expected_sig = sign(&payload, signing_key);
@@ -73,7 +74,8 @@ fn decode_state_cookie(
     let v: serde_json::Value = serde_json::from_str(&payload).ok()?;
     let state = v["state"].as_str()?.to_string();
     let pkce_verifier = v["pkce_verifier"].as_str()?.to_string();
-    Some((state, pkce_verifier))
+    let nonce = v["nonce"].as_str()?.to_string();
+    Some((state, pkce_verifier, nonce))
 }
 
 pub async fn login(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
@@ -89,7 +91,7 @@ pub async fn login(State(state): State<Arc<AppState>>) -> Result<Response, AppEr
     let csrf_state = URL_SAFE_NO_PAD.encode(nonce_bytes);
     let csrf_state_for_closure = csrf_state.clone();
 
-    let (auth_url, _csrf_token, _nonce) = oidc_client
+    let (auth_url, _csrf_token, nonce) = oidc_client
         .authorize_url(
             CoreAuthenticationFlow::AuthorizationCode,
             move || CsrfToken::new(csrf_state_for_closure.clone()),
@@ -103,6 +105,7 @@ pub async fn login(State(state): State<Arc<AppState>>) -> Result<Response, AppEr
     let cookie_value = encode_state_cookie(
         &csrf_state,
         pkce_verifier.secret(),
+        nonce.secret(),
         &state.config.session_signing_key,
     );
 
@@ -140,7 +143,7 @@ pub async fn callback(
         .map(|c| c.value().to_string())
         .ok_or(AppError::Unauthorized)?;
 
-    let (expected_state, pkce_verifier_secret) =
+    let (expected_state, pkce_verifier_secret, nonce_secret) =
         decode_state_cookie(&cookie_value, &state.config.session_signing_key)
             .ok_or(AppError::Unauthorized)?;
 
@@ -149,6 +152,7 @@ pub async fn callback(
     }
 
     let pkce_verifier = PkceCodeVerifier::new(pkce_verifier_secret);
+    let nonce = Nonce::new(nonce_secret);
 
     // Exchange code for tokens
     let token_response = oidc_client
@@ -163,7 +167,7 @@ pub async fn callback(
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("no id_token in response")))?;
 
     let claims = id_token
-        .claims(&oidc_client.id_token_verifier(), &Nonce::new("".to_string()))
+        .claims(&oidc_client.id_token_verifier(), &nonce)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("id_token verification failed: {e}")))?;
 
     let oidc_subject = claims.subject().to_string();
