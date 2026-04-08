@@ -3,6 +3,7 @@ use crate::{
     auth::middleware::AdminAuth,
     error::AppError,
     keys::generate::{generate_api_key, generate_emoji_sequence},
+    kv::model::compute_expires_at,
     state::AppState,
 };
 use axum::{
@@ -259,6 +260,101 @@ pub async fn list_kv_entries(
         }
     };
     Ok(Json(rows))
+}
+
+// ── Admin KV write / import ─────────────────────────────────────────────────
+
+pub async fn admin_write_kv(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+    Json(body): Json<AdminKvWriteRequest>,
+) -> Result<StatusCode, AppError> {
+    let expires_at = compute_expires_at(body.ttl_hours);
+    let ttl_sliding = body.ttl_sliding as i64;
+    let open_access = body.open_access as i64;
+
+    sqlx::query!(
+        "INSERT INTO kv_entries (key, value, ttl_hours, ttl_sliding, expires_at, open_access)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+             value       = excluded.value,
+             ttl_hours   = excluded.ttl_hours,
+             ttl_sliding = excluded.ttl_sliding,
+             expires_at  = excluded.expires_at,
+             open_access = excluded.open_access",
+        body.key,
+        body.value,
+        body.ttl_hours,
+        ttl_sliding,
+        expires_at,
+        open_access
+    )
+    .execute(&state.pool)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn admin_import_kv(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+    Json(body): Json<AdminKvImportRequest>,
+) -> Result<Json<AdminKvImportResponse>, AppError> {
+    let prefix = body.prefix.as_deref().unwrap_or("");
+    let ttl_sliding = body.ttl_sliding as i64;
+    let open_access = body.open_access as i64;
+
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+
+    for line in body.content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            skipped += 1;
+            continue;
+        }
+        let Some((raw_key, raw_value)) = trimmed.split_once('=') else {
+            skipped += 1;
+            continue;
+        };
+        let key = format!("{}{}", prefix, raw_key.trim());
+        let value = unquote(raw_value.trim());
+        let expires_at = compute_expires_at(body.ttl_hours);
+
+        sqlx::query!(
+            "INSERT INTO kv_entries (key, value, ttl_hours, ttl_sliding, expires_at, open_access)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+             value       = excluded.value,
+             ttl_hours   = excluded.ttl_hours,
+             ttl_sliding = excluded.ttl_sliding,
+             expires_at  = excluded.expires_at,
+             open_access = excluded.open_access",
+            key,
+            value,
+            body.ttl_hours,
+            ttl_sliding,
+            expires_at,
+            open_access
+        )
+        .execute(&state.pool)
+        .await?;
+
+        imported += 1;
+    }
+
+    Ok(Json(AdminKvImportResponse { imported, skipped }))
+}
+
+/// Strip surrounding single or double quotes from a .env value.
+fn unquote(s: &str) -> String {
+    if (s.starts_with('"') && s.ends_with('"'))
+        || (s.starts_with('\'') && s.ends_with('\''))
+    {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 // ── Session ─────────────────────────────────────────────────────────────────

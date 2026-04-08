@@ -4,6 +4,26 @@ use std::sync::Arc;
 
 pub struct AdminAuth(pub SessionClaims);
 
+fn extract_token(parts: &Parts) -> Option<String> {
+    // 1. Authorization: Bearer <token>
+    if let Some(token) = parts
+        .headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+    {
+        return Some(token.to_string());
+    }
+
+    // 2. HttpOnly session cookie
+    let cookie_header = parts.headers.get("Cookie")?.to_str().ok()?;
+    cookie_header
+        .split(';')
+        .map(|s| s.trim())
+        .find_map(|pair| pair.strip_prefix("session_token="))
+        .map(|v| v.to_string())
+}
+
 #[async_trait]
 impl FromRequestParts<Arc<AppState>> for AdminAuth {
     type Rejection = AppError;
@@ -20,14 +40,8 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
             }));
         }
 
-        let token = parts
-            .headers
-            .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .ok_or(AppError::Unauthorized)?;
-
-        let claims = validate_session(&state.pool, token).await?;
+        let token = extract_token(parts).ok_or(AppError::Unauthorized)?;
+        let claims = validate_session(&state.pool, &token).await?;
         Ok(AdminAuth(claims))
     }
 }

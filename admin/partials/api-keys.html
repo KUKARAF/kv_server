@@ -1,10 +1,7 @@
 <section>
   <h2>API Keys</h2>
 
-  <form hx-post="/api/admin/keys"
-        hx-target="#keys-list"
-        hx-swap="outerHTML"
-        hx-on::after-request="this.reset()">
+  <form id="create-key-form" onsubmit="return createKey(event)">
     <fieldset>
       <legend>Create key</legend>
       <label>Label <input name="label" required></label>
@@ -21,8 +18,8 @@
         <summary>Scope rules</summary>
         <div id="scope-rules">
           <div class="scope-row">
-            <input name="scopes[0][key_pattern]" placeholder="payments-*" required>
-            <input name="scopes[0][ops]" placeholder="read,write" required>
+            <input name="key_pattern" placeholder="payments-*">
+            <input name="ops" placeholder="read,write">
           </div>
         </div>
         <button type="button" onclick="addScope()">+ Add scope</button>
@@ -31,6 +28,12 @@
       <button type="submit">Create</button>
     </fieldset>
   </form>
+
+  <div id="key-reveal" class="key-reveal hidden">
+    <strong>New key (shown once):</strong>
+    <code id="key-reveal-value"></code>
+    <button type="button" onclick="this.closest('.key-reveal').classList.add('hidden')">Dismiss</button>
+  </div>
 
   <div id="keys-list"
        hx-get="/api/admin/keys"
@@ -41,19 +44,54 @@
 </section>
 
 <script>
-  let scopeIdx = 1;
   function addScope() {
     const div = document.createElement('div');
     div.className = 'scope-row';
     div.innerHTML = `
-      <input name="scopes[${scopeIdx}][key_pattern]" placeholder="key-*" required>
-      <input name="scopes[${scopeIdx}][ops]" placeholder="read,write" required>
+      <input name="key_pattern" placeholder="key-*">
+      <input name="ops" placeholder="read,write">
+      <button type="button" onclick="this.closest('.scope-row').remove()">✕</button>
     `;
     document.getElementById('scope-rules').appendChild(div);
-    scopeIdx++;
   }
 
-  // Render keys list when HTMX loads it
+  async function createKey(e) {
+    e.preventDefault();
+    const form = e.target;
+    const scopes = Array.from(form.querySelectorAll('#scope-rules .scope-row'))
+      .map(row => ({
+        key_pattern: row.querySelector('[name=key_pattern]').value.trim(),
+        ops: row.querySelector('[name=ops]').value.trim(),
+      }))
+      .filter(s => s.key_pattern && s.ops);
+
+    const body = {
+      label: form.label.value.trim(),
+      key_type: form.key_type.value,
+      expires_at: form.expires_at.value || null,
+      scopes,
+    };
+
+    const resp = await fetch('/api/admin/keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      alert('Error creating key: ' + resp.status);
+      return false;
+    }
+
+    const data = await resp.json();
+    document.getElementById('key-reveal-value').textContent = data.key;
+    document.getElementById('key-reveal').classList.remove('hidden');
+
+    form.reset();
+    htmx.trigger(document.getElementById('keys-list'), 'load');
+    return false;
+  }
+
   document.addEventListener('htmx:afterRequest', function(e) {
     if (e.detail.pathInfo?.requestPath === '/api/admin/keys') {
       renderKeys(e.detail.xhr.response);
@@ -75,13 +113,14 @@
           <td>${k.expires_at ? esc(k.expires_at) : '—'}</td>
           <td>${k.last_used_at ? esc(k.last_used_at) : '—'}</td>
           <td>
-            <button hx-delete="/api/admin/keys/${k.id}"
+            <button hx-delete="/api/admin/keys/${esc(k.id)}"
                     hx-target="#keys-list"
                     hx-swap="outerHTML"
                     hx-confirm="Revoke this key?">Revoke</button>
           </td>
         </tr>`).join('')}
       </tbody></table>`;
+    htmx.process(el);
   }
 
   function esc(s) {

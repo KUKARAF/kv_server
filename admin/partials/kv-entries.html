@@ -1,6 +1,40 @@
 <section>
   <h2>KV Entries</h2>
 
+  <details>
+    <summary>Add entry</summary>
+    <form id="add-entry-form" onsubmit="return addEntry(event)">
+      <fieldset>
+        <legend>Single entry</legend>
+        <label>Key <input name="key" required placeholder="my-key"></label>
+        <label>Value <textarea name="value" required rows="3" placeholder="my-value"></textarea></label>
+        <label>TTL (hours, optional) <input name="ttl_hours" type="number" step="0.1" min="0" placeholder="—"></label>
+        <label><input name="ttl_sliding" type="checkbox"> Sliding TTL</label>
+        <label><input name="open_access" type="checkbox"> Open access (no key required)</label>
+        <button type="submit">Save</button>
+      </fieldset>
+    </form>
+  </details>
+
+  <details>
+    <summary>Import from .env</summary>
+    <form id="import-env-form" onsubmit="return importEnv(event)">
+      <fieldset>
+        <legend>Import .env</legend>
+        <label>File <input name="file" type="file" accept=".env,text/plain"></label>
+        <label>or paste content
+          <textarea name="content" rows="6" placeholder="KEY=value&#10;ANOTHER=value"></textarea>
+        </label>
+        <label>Key prefix (optional) <input name="prefix" placeholder="myapp/"></label>
+        <label>TTL (hours, optional) <input name="ttl_hours" type="number" step="0.1" min="0" placeholder="—"></label>
+        <label><input name="ttl_sliding" type="checkbox"> Sliding TTL</label>
+        <label><input name="open_access" type="checkbox"> Open access</label>
+        <button type="submit">Import</button>
+      </fieldset>
+    </form>
+    <div id="import-result"></div>
+  </details>
+
   <form hx-get="/api/admin/kv"
         hx-target="#entries-list"
         hx-swap="innerHTML"
@@ -14,6 +48,65 @@
 </section>
 
 <script>
+  async function addEntry(e) {
+    e.preventDefault();
+    const form = e.target;
+    const ttlRaw = form.ttl_hours.value.trim();
+    const body = {
+      key: form.key.value.trim(),
+      value: form.value.value,
+      ttl_hours: ttlRaw ? parseFloat(ttlRaw) : null,
+      ttl_sliding: form.ttl_sliding.checked,
+      open_access: form.open_access.checked,
+    };
+    const resp = await fetch('/api/admin/kv', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) { alert('Error: ' + resp.status); return false; }
+    form.reset();
+    htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
+    return false;
+  }
+
+  async function importEnv(e) {
+    e.preventDefault();
+    const form = e.target;
+    let content = form.content.value;
+
+    // If a file is selected, read it first
+    const file = form.file.files[0];
+    if (file) {
+      content = await file.text();
+    }
+
+    if (!content.trim()) { alert('Provide a file or paste content.'); return false; }
+
+    const ttlRaw = form.ttl_hours.value.trim();
+    const body = {
+      content,
+      prefix: form.prefix.value || null,
+      ttl_hours: ttlRaw ? parseFloat(ttlRaw) : null,
+      ttl_sliding: form.ttl_sliding.checked,
+      open_access: form.open_access.checked,
+    };
+
+    const resp = await fetch('/api/admin/kv/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) { alert('Error: ' + resp.status); return false; }
+
+    const data = await resp.json();
+    document.getElementById('import-result').textContent =
+      `Imported ${data.imported} entries (${data.skipped} skipped).`;
+    form.reset();
+    htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
+    return false;
+  }
+
   document.addEventListener('htmx:afterRequest', function(e) {
     if (e.detail.pathInfo?.requestPath?.startsWith('/api/admin/kv')) {
       renderEntries(e.detail.xhr.response);

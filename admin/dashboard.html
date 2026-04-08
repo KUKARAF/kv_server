@@ -43,17 +43,6 @@
   </main>
 
   <script>
-    // Read session token from cookie and attach to all HTMX requests
-    function getCookie(name) {
-      const v = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
-      return v ? v.pop() : null;
-    }
-
-    document.addEventListener('htmx:configRequest', function(e) {
-      const token = getCookie('session_token');
-      if (token) e.detail.headers['Authorization'] = 'Bearer ' + token;
-    });
-
     function showTab(name) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
       document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));

@@ -57,6 +57,34 @@ pub struct ApprovalRow {
     pub expires_at: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AdminKvWriteRequest {
+    pub key: String,
+    pub value: String,
+    pub ttl_hours: Option<f64>,
+    #[serde(default)]
+    pub ttl_sliding: bool,
+    #[serde(default)]
+    pub open_access: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminKvImportRequest {
+    pub content: String,          // raw .env file text
+    pub prefix: Option<String>,   // optional key prefix, e.g. "myapp/"
+    pub ttl_hours: Option<f64>,
+    #[serde(default)]
+    pub ttl_sliding: bool,
+    #[serde(default)]
+    pub open_access: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdminKvImportResponse {
+    pub imported: usize,
+    pub skipped: usize,  // blank/comment lines
+}
+
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SessionRow {
     pub id: String,
