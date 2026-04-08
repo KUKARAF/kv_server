@@ -38,7 +38,7 @@
   <div id="keys-list"
        hx-get="/api/admin/keys"
        hx-trigger="load"
-       hx-swap="outerHTML">
+       hx-swap="none">
     Loading...
   </div>
 </section>
@@ -114,9 +114,9 @@
           <td>${k.last_used_at ? esc(k.last_used_at) : '—'}</td>
           <td>
             <button hx-delete="/api/admin/keys/${esc(k.id)}"
-                    hx-target="#keys-list"
-                    hx-swap="outerHTML"
-                    hx-confirm="Revoke this key?">Revoke</button>
+                    hx-swap="none"
+                    hx-confirm="Revoke this key?"
+                    hx-on::after-request="htmx.trigger(document.getElementById('keys-list'), 'load')">Revoke</button>
           </td>
         </tr>`).join('')}
       </tbody></table>`;
