@@ -36,6 +36,24 @@
   <div id="toast-container"></div>
 
   <script>
+    // ── Auth guard ──────────────────────────────────────────────────────────
+    function handleUnauthorized() {
+      window.location.href = '/auth/login';
+    }
+
+    // Intercept all fetch() calls — redirect on 401
+    const _fetch = window.fetch;
+    window.fetch = async (...args) => {
+      const resp = await _fetch(...args);
+      if (resp.status === 401) { handleUnauthorized(); }
+      return resp;
+    };
+
+    // Intercept HTMX requests — redirect on 401
+    document.addEventListener('htmx:responseError', e => {
+      if (e.detail.xhr.status === 401) handleUnauthorized();
+    });
+
     // ── Tabs ────────────────────────────────────────────────────────────────
     function showTab(name) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
