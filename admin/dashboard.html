@@ -14,43 +14,121 @@
     <button onclick="showTab('approvals')" class="tab-btn" id="tab-approvals">Approvals</button>
     <button onclick="showTab('entries')" class="tab-btn" id="tab-entries">KV Entries</button>
     <button onclick="showTab('session')" class="tab-btn" id="tab-session">Session</button>
+    <button onclick="copySession()" class="tab-btn" title="Copy session token">📋</button>
   </nav>
 
   <main>
     <div id="tab-keys-content" class="tab-content">
-      <div hx-get="/admin/partials/api-keys.html"
-           hx-trigger="load"
-           hx-swap="innerHTML"></div>
+      <div hx-get="/admin/partials/api-keys.html" hx-trigger="load" hx-swap="innerHTML"></div>
     </div>
-
     <div id="tab-approvals-content" class="tab-content hidden">
-      <div hx-get="/admin/partials/approvals.html"
-           hx-trigger="load"
-           hx-swap="innerHTML"></div>
+      <div hx-get="/admin/partials/approvals.html" hx-trigger="load" hx-swap="innerHTML"></div>
     </div>
-
     <div id="tab-entries-content" class="tab-content hidden">
-      <div hx-get="/admin/partials/kv-entries.html"
-           hx-trigger="load"
-           hx-swap="innerHTML"></div>
+      <div hx-get="/admin/partials/kv-entries.html" hx-trigger="load" hx-swap="innerHTML"></div>
     </div>
-
     <div id="tab-session-content" class="tab-content hidden">
-      <div hx-get="/admin/partials/session.html"
-           hx-trigger="load"
-           hx-swap="innerHTML"></div>
+      <div hx-get="/admin/partials/session.html" hx-trigger="load" hx-swap="innerHTML"></div>
     </div>
   </main>
 
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
   <script>
+    // ── Tabs ────────────────────────────────────────────────────────────────
     function showTab(name) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
       document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
       document.getElementById('tab-' + name + '-content').classList.remove('hidden');
       document.getElementById('tab-' + name).classList.add('active');
     }
-
     showTab('keys');
+
+    // ── Toast system ────────────────────────────────────────────────────────
+    const activeToasts = new Map(); // id → element
+
+    function showToast(msg, { id = null, persistent = false, type = 'info' } = {}) {
+      // Reuse existing toast with same id
+      if (id && activeToasts.has(id)) return activeToasts.get(id);
+
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.innerHTML = `<span>${msg}</span>${persistent ? `<button onclick="dismissToast('${id || ''}', this)">✕</button>` : ''}`;
+      document.getElementById('toast-container').appendChild(el);
+
+      // Animate in
+      requestAnimationFrame(() => el.classList.add('toast-show'));
+
+      if (id) activeToasts.set(id, el);
+
+      if (!persistent) {
+        setTimeout(() => removeToast(el, id), 3000);
+      }
+      return el;
+    }
+
+    function removeToast(el, id = null) {
+      el.classList.remove('toast-show');
+      el.addEventListener('transitionend', () => el.remove(), { once: true });
+      if (id) activeToasts.delete(id);
+    }
+
+    function dismissToast(id, btn) {
+      if (id && activeToasts.has(id)) {
+        removeToast(activeToasts.get(id), id);
+      } else {
+        removeToast(btn.closest('.toast'));
+      }
+    }
+
+    // ── Copy session token ──────────────────────────────────────────────────
+    async function copySession() {
+      const resp = await fetch('/api/admin/session/token');
+      if (!resp.ok) { showToast('Failed to get token', { type: 'error' }); return; }
+      const token = await resp.json();
+      await navigator.clipboard.writeText(token);
+      showToast('Session token copied', { type: 'success' });
+    }
+
+    // ── Approval poller ─────────────────────────────────────────────────────
+    let knownApprovals = new Set();
+
+    async function pollApprovals() {
+      let data;
+      try {
+        const resp = await fetch('/api/admin/approvals');
+        if (!resp.ok) return;
+        data = await resp.json();
+      } catch { return; }
+
+      const currentIds = new Set(data.map(a => a.id));
+
+      // Show toast for newly appeared approvals
+      for (const a of data) {
+        if (!knownApprovals.has(a.id)) {
+          showToast(
+            `🔐 Approval needed: <strong>${a.api_key_label}</strong> — ${a.emoji_sequence}`,
+            { id: 'approval-' + a.id, persistent: true, type: 'warning' }
+          );
+        }
+      }
+
+      // Dismiss toasts for approvals that are gone
+      for (const id of knownApprovals) {
+        if (!currentIds.has(id) && activeToasts.has('approval-' + id)) {
+          removeToast(activeToasts.get('approval-' + id), 'approval-' + id);
+        }
+      }
+
+      knownApprovals = currentIds;
+
+      // Pulse the Approvals tab button if any pending
+      document.getElementById('tab-approvals').classList.toggle('tab-pulse', data.length > 0);
+    }
+
+    pollApprovals();
+    setInterval(pollApprovals, 30000);
   </script>
 </body>
 </html>

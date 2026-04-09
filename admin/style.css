@@ -148,6 +148,42 @@ code { font-family: monospace; font-size: 12px; background: #1a1a1a; padding: 1p
 .approval-card .info small { color: #666; }
 .approval-card .actions { display: flex; gap: 0.5rem; }
 
+/* Toasts */
+#toast-container {
+  position: fixed;
+  bottom: 1.25rem;
+  right: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  z-index: 999;
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.65rem 1rem;
+  border-radius: 6px;
+  font-size: 13px;
+  max-width: 360px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s, transform 0.2s;
+  border: 1px solid transparent;
+}
+.toast-show { opacity: 1; transform: translateY(0); }
+.toast span { flex: 1; }
+.toast button { background: none; border: none; color: inherit; cursor: pointer; opacity: 0.6; font-size: 14px; padding: 0; }
+.toast button:hover { opacity: 1; }
+.toast-info    { background: #1e293b; border-color: #334155; color: #e0e0e0; }
+.toast-success { background: #14532d; border-color: #16a34a; color: #86efac; }
+.toast-warning { background: #713f12; border-color: #d97706; color: #fde68a; }
+.toast-error   { background: #450a0a; border-color: #dc2626; color: #fca5a5; }
+
+/* Approvals tab pulse */
+@keyframes tab-pulse { 0%,100% { background: #333; color: #fff; } 50% { background: #713f12; color: #fde68a; } }
+.tab-pulse { animation: tab-pulse 2s ease-in-out infinite; }
+
 /* dl */
 dl { display: grid; grid-template-columns: 120px 1fr; gap: 0.4rem 1rem; }
 dt { color: #666; font-size: 12px; align-self: center; }

@@ -18,6 +18,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/approvals/:id/approve", post(handlers::approve_request))
         .route("/approvals/:id/reject", post(handlers::reject_request))
         .route("/session", get(handlers::get_session))
+        .route("/session/token", get(handlers::get_session_token))
         .route("/kv", get(handlers::list_kv_entries).put(handlers::admin_write_kv))
         .route("/kv/scopes", get(handlers::list_scopes))
         .route("/kv/import", post(handlers::admin_import_kv))

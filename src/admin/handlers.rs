@@ -11,6 +11,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use axum_extra::extract::cookie::CookieJar;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -435,4 +436,17 @@ pub async fn get_session(
     .ok_or(AppError::NotFound)?;
 
     Ok(Json(row))
+}
+
+/// Returns the raw session token from the cookie so the browser can copy it.
+/// Safe because the caller must already possess the cookie to pass AdminAuth.
+pub async fn get_session_token(
+    jar: CookieJar,
+    _auth: AdminAuth,
+) -> Result<Json<String>, AppError> {
+    let token = jar
+        .get("session_token")
+        .map(|c| c.value().to_string())
+        .ok_or(AppError::Unauthorized)?;
+    Ok(Json(token))
 }
