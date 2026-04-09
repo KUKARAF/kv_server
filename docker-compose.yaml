@@ -10,6 +10,11 @@ services:
     environment:
       DATABASE_URL: /app/data/kv.db
       PORT: "3000"
+    logging:
+      driver: loki
+      options:
+        loki-url: "http://192.168.1.66:3100/loki/api/v1/push"
+        loki-external-labels: "job=kv_manager,env=prod"
 
 volumes:
   db-data:
