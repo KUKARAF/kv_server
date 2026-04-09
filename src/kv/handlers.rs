@@ -115,7 +115,7 @@ pub async fn list_entries(
             let pattern = format!("{}%", prefix);
             sqlx::query_as!(
                 KvMetaResponse,
-                r#"SELECT key, ttl_hours, ttl_sliding as "ttl_sliding: bool",
+                r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
                         expires_at, open_access as "open_access: bool", created_at
                  FROM kv_entries
                  WHERE key LIKE ?
@@ -129,7 +129,7 @@ pub async fn list_entries(
         None => {
             sqlx::query_as!(
                 KvMetaResponse,
-                r#"SELECT key, ttl_hours, ttl_sliding as "ttl_sliding: bool",
+                r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
                         expires_at, open_access as "open_access: bool", created_at
                  FROM kv_entries
                  WHERE expires_at IS NULL OR expires_at > datetime('now')

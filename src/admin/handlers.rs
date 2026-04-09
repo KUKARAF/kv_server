@@ -102,7 +102,26 @@ pub async fn revoke_key(
     Path(key_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let result = sqlx::query!(
-        "UPDATE api_keys SET status = 'revoked' WHERE id = ?",
+        "UPDATE api_keys SET status = 'revoked' WHERE id = ? AND status = 'active'",
+        key_id
+    )
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn delete_key(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+    Path(key_id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let result = sqlx::query!(
+        "DELETE FROM api_keys WHERE id = ? AND status IN ('revoked', 'used')",
         key_id
     )
     .execute(&state.pool)
@@ -235,7 +254,7 @@ pub async fn list_kv_entries(
             let pattern = format!("{}%", prefix);
             sqlx::query_as!(
                 crate::kv::model::KvMetaResponse,
-                r#"SELECT key, ttl_hours, ttl_sliding as "ttl_sliding: bool",
+                r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
                         expires_at, open_access as "open_access: bool", created_at
                  FROM kv_entries
                  WHERE key LIKE ?
@@ -249,7 +268,7 @@ pub async fn list_kv_entries(
         None => {
             sqlx::query_as!(
                 crate::kv::model::KvMetaResponse,
-                r#"SELECT key, ttl_hours, ttl_sliding as "ttl_sliding: bool",
+                r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
                         expires_at, open_access as "open_access: bool", created_at
                  FROM kv_entries
                  WHERE expires_at IS NULL OR expires_at > datetime('now')
@@ -262,7 +281,25 @@ pub async fn list_kv_entries(
     Ok(Json(rows))
 }
 
-// ── Admin KV write / import ─────────────────────────────────────────────────
+pub async fn list_scopes(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+) -> Result<Json<Vec<String>>, AppError> {
+    let scopes = sqlx::query_scalar!(
+        "SELECT DISTINCT scope FROM kv_entries
+         WHERE scope IS NOT NULL AND scope != ''
+           AND (expires_at IS NULL OR expires_at > datetime('now'))
+         ORDER BY scope"
+    )
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .flatten()
+    .collect();
+    Ok(Json(scopes))
+}
+
+// ── Admin KV write / import / patch ─────────────────────────────────────────
 
 pub async fn admin_write_kv(
     State(state): State<Arc<AppState>>,
@@ -274,16 +311,18 @@ pub async fn admin_write_kv(
     let open_access = body.open_access as i64;
 
     sqlx::query!(
-        "INSERT INTO kv_entries (key, value, ttl_hours, ttl_sliding, expires_at, open_access)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO kv_entries (key, value, scope, ttl_hours, ttl_sliding, expires_at, open_access)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(key) DO UPDATE SET
              value       = excluded.value,
+             scope       = excluded.scope,
              ttl_hours   = excluded.ttl_hours,
              ttl_sliding = excluded.ttl_sliding,
              expires_at  = excluded.expires_at,
              open_access = excluded.open_access",
         body.key,
         body.value,
+        body.scope,
         body.ttl_hours,
         ttl_sliding,
         expires_at,
@@ -292,6 +331,26 @@ pub async fn admin_write_kv(
     .execute(&state.pool)
     .await?;
 
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn admin_patch_kv(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+    Path(key): Path<String>,
+    Json(body): Json<AdminKvPatchRequest>,
+) -> Result<StatusCode, AppError> {
+    let result = sqlx::query!(
+        "UPDATE kv_entries SET scope = ? WHERE key = ?",
+        body.scope,
+        key
+    )
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -322,16 +381,18 @@ pub async fn admin_import_kv(
         let expires_at = compute_expires_at(body.ttl_hours);
 
         sqlx::query!(
-            "INSERT INTO kv_entries (key, value, ttl_hours, ttl_sliding, expires_at, open_access)
-         VALUES (?, ?, ?, ?, ?, ?)
+            "INSERT INTO kv_entries (key, value, scope, ttl_hours, ttl_sliding, expires_at, open_access)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(key) DO UPDATE SET
              value       = excluded.value,
+             scope       = excluded.scope,
              ttl_hours   = excluded.ttl_hours,
              ttl_sliding = excluded.ttl_sliding,
              expires_at  = excluded.expires_at,
              open_access = excluded.open_access",
             key,
             value,
+            body.scope,
             body.ttl_hours,
             ttl_sliding,
             expires_at,

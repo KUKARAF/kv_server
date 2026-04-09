@@ -1,53 +1,61 @@
 <section>
   <h2>KV Entries</h2>
 
-  <details>
-    <summary>Add entry</summary>
-    <form id="add-entry-form" onsubmit="return addEntry(event)">
-      <fieldset>
-        <legend>Single entry</legend>
-        <label>Key <input name="key" required placeholder="my-key"></label>
-        <label>Value <textarea name="value" required rows="3" placeholder="my-value"></textarea></label>
-        <label>TTL (hours, optional) <input name="ttl_hours" type="number" step="0.1" min="0" placeholder="—"></label>
-        <label><input name="ttl_sliding" type="checkbox"> Sliding TTL</label>
-        <label><input name="open_access" type="checkbox"> Open access (no key required)</label>
-        <button type="submit">Save</button>
-      </fieldset>
-    </form>
-  </details>
+  <datalist id="scopes-list"></datalist>
 
-  <details>
-    <summary>Import from .env</summary>
-    <form id="import-env-form" onsubmit="return importEnv(event)">
-      <fieldset>
-        <legend>Import .env</legend>
-        <label>File <input name="file" type="file" accept=".env,text/plain"></label>
-        <label>or paste content
-          <textarea name="content" rows="6" placeholder="KEY=value&#10;ANOTHER=value"></textarea>
-        </label>
-        <label>Key prefix (optional) <input name="prefix" placeholder="myapp/"></label>
-        <label>TTL (hours, optional) <input name="ttl_hours" type="number" step="0.1" min="0" placeholder="—"></label>
-        <label><input name="ttl_sliding" type="checkbox"> Sliding TTL</label>
-        <label><input name="open_access" type="checkbox"> Open access</label>
-        <button type="submit">Import</button>
-      </fieldset>
-    </form>
-    <div id="import-result"></div>
-  </details>
-
-  <form hx-get="/api/admin/kv"
-        hx-target="#entries-list"
-        hx-swap="innerHTML"
-        hx-trigger="submit, load"
-        hx-push-url="false">
-    <input name="prefix" placeholder="Filter by prefix (optional)">
-    <button type="submit">Search</button>
+  <form id="add-entry-form" onsubmit="return addEntry(event)" class="panel">
+    <h3>Add / update entry</h3>
+    <div class="form-row-2">
+      <label>Key <input name="key" required placeholder="DATABASE_URL"></label>
+      <label>Scope <input name="scope" list="scopes-list" placeholder="osmosis/deployment"></label>
+    </div>
+    <label>Value <textarea name="value" required rows="2" placeholder="the value…"></textarea></label>
+    <div class="form-inline">
+      <label>TTL (h) <input name="ttl_hours" type="number" step="0.1" min="0" placeholder="—" class="input-sm"></label>
+      <label class="label-check"><input name="ttl_sliding" type="checkbox"> Sliding</label>
+      <label class="label-check"><input name="open_access" type="checkbox"> Open access</label>
+      <button type="submit">Save</button>
+    </div>
   </form>
 
-  <div id="entries-list">Loading...</div>
+  <form id="import-env-form" onsubmit="return importEnv(event)" class="panel">
+    <h3>Import .env</h3>
+    <div class="form-row-2">
+      <label>File <input name="file" type="file" accept=".env,text/plain"></label>
+      <label>Scope <input name="scope" list="scopes-list" placeholder="osmosis/deployment"></label>
+    </div>
+    <label>or paste <textarea name="content" rows="3" placeholder="KEY=value&#10;ANOTHER=value"></textarea></label>
+    <div class="form-inline">
+      <label>Key prefix <input name="prefix" placeholder="myapp/" class="input-sm"></label>
+      <label>TTL (h) <input name="ttl_hours" type="number" step="0.1" min="0" placeholder="—" class="input-sm"></label>
+      <label class="label-check"><input name="open_access" type="checkbox"> Open access</label>
+      <button type="submit">Import</button>
+    </div>
+    <div id="import-result" class="result-msg"></div>
+  </form>
+
+  <div class="filter-bar">
+    <form hx-get="/api/admin/kv" hx-target="#entries-list" hx-swap="none"
+          hx-trigger="submit, load" class="form-inline">
+      <input name="prefix" placeholder="Filter by prefix">
+      <button type="submit">Search</button>
+    </form>
+  </div>
+
+  <div id="entries-list">Loading…</div>
 </section>
 
 <script>
+  // Load scopes datalist
+  async function loadScopes() {
+    const resp = await fetch('/api/admin/kv/scopes');
+    if (!resp.ok) return;
+    const scopes = await resp.json();
+    const dl = document.getElementById('scopes-list');
+    dl.innerHTML = scopes.map(s => `<option value="${esc(s)}">`).join('');
+  }
+  loadScopes();
+
   async function addEntry(e) {
     e.preventDefault();
     const form = e.target;
@@ -55,6 +63,7 @@
     const body = {
       key: form.key.value.trim(),
       value: form.value.value,
+      scope: form.scope.value.trim() || null,
       ttl_hours: ttlRaw ? parseFloat(ttlRaw) : null,
       ttl_sliding: form.ttl_sliding.checked,
       open_access: form.open_access.checked,
@@ -66,6 +75,7 @@
     });
     if (!resp.ok) { alert('Error: ' + resp.status); return false; }
     form.reset();
+    loadScopes();
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
     return false;
   }
@@ -74,42 +84,46 @@
     e.preventDefault();
     const form = e.target;
     let content = form.content.value;
-
-    // If a file is selected, read it first
     const file = form.file.files[0];
-    if (file) {
-      content = await file.text();
-    }
-
+    if (file) content = await file.text();
     if (!content.trim()) { alert('Provide a file or paste content.'); return false; }
 
     const ttlRaw = form.ttl_hours.value.trim();
     const body = {
       content,
       prefix: form.prefix.value || null,
+      scope: form.scope.value.trim() || null,
       ttl_hours: ttlRaw ? parseFloat(ttlRaw) : null,
-      ttl_sliding: form.ttl_sliding.checked,
+      ttl_sliding: false,
       open_access: form.open_access.checked,
     };
-
     const resp = await fetch('/api/admin/kv/import', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
     if (!resp.ok) { alert('Error: ' + resp.status); return false; }
-
     const data = await resp.json();
     document.getElementById('import-result').textContent =
       `Imported ${data.imported} entries (${data.skipped} skipped).`;
     form.reset();
+    loadScopes();
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
     return false;
   }
 
+  async function saveScope(key, value) {
+    await fetch('/api/admin/kv/' + encodeURIComponent(key), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: value || null }),
+    });
+    loadScopes();
+  }
+
   document.addEventListener('htmx:afterRequest', function(e) {
     if (e.detail.pathInfo?.requestPath?.startsWith('/api/admin/kv')) {
-      renderEntries(e.detail.xhr.response);
+      try { renderEntries(e.detail.xhr.response); } catch {}
     }
   });
 
@@ -118,10 +132,11 @@
     const el = document.getElementById('entries-list');
     if (!entries.length) { el.innerHTML = '<p>No entries found.</p>'; return; }
     el.innerHTML = `<table>
-      <thead><tr><th>Key</th><th>TTL (h)</th><th>Sliding</th><th>Open</th><th>Expires</th><th>Created</th></tr></thead>
+      <thead><tr><th>Key</th><th>Scope</th><th>TTL (h)</th><th>Sliding</th><th>Open</th><th>Expires</th><th>Created</th></tr></thead>
       <tbody>${entries.map(e => `
         <tr>
           <td><code>${esc(e.key)}</code></td>
+          <td><span class="scope-cell" data-key="${esc(e.key)}" onclick="editScope(this)">${e.scope ? `<span class="badge badge-scope">${esc(e.scope)}</span>` : '<span class="scope-empty">+ scope</span>'}</span></td>
           <td>${e.ttl_hours ?? '—'}</td>
           <td>${e.ttl_sliding ? '✓' : '—'}</td>
           <td>${e.open_access ? '✓' : '—'}</td>
@@ -129,6 +144,22 @@
           <td>${esc(e.created_at)}</td>
         </tr>`).join('')}
       </tbody></table>`;
+  }
+
+  function editScope(cell) {
+    const key = cell.dataset.key;
+    const current = cell.querySelector('.badge-scope')?.textContent ?? '';
+    cell.innerHTML = `<input class="scope-input" list="scopes-list" value="${esc(current)}" placeholder="scope…">`;
+    const input = cell.querySelector('input');
+    input.focus();
+    input.select();
+    const commit = async () => {
+      const val = input.value.trim();
+      await saveScope(key, val);
+      htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } if (e.key === 'Escape') { input.removeEventListener('blur', commit); htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit'); } });
   }
 
   function esc(s) {

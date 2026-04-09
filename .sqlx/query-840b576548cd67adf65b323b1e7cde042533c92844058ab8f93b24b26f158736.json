@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE kv_entries SET scope = ? WHERE key = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "840b576548cd67adf65b323b1e7cde042533c92844058ab8f93b24b26f158736"
+}

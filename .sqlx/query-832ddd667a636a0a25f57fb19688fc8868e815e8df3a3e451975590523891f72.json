@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT DISTINCT scope FROM kv_entries\n         WHERE scope IS NOT NULL AND scope != ''\n           AND (expires_at IS NULL OR expires_at > datetime('now'))\n         ORDER BY scope",
+  "describe": {
+    "columns": [
+      {
+        "name": "scope",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "832ddd667a636a0a25f57fb19688fc8868e815e8df3a3e451975590523891f72"
+}

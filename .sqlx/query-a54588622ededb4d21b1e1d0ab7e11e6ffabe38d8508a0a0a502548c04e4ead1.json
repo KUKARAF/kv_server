@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM api_keys WHERE id = ? AND status IN ('revoked', 'used')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "a54588622ededb4d21b1e1d0ab7e11e6ffabe38d8508a0a0a502548c04e4ead1"
+}

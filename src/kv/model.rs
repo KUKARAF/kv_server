@@ -32,6 +32,7 @@ pub struct KvResponse {
 #[derive(Debug, Serialize)]
 pub struct KvMetaResponse {
     pub key: String,
+    pub scope: Option<String>,
     pub ttl_hours: Option<f64>,
     pub ttl_sliding: bool,
     pub expires_at: Option<String>,

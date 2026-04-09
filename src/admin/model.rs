@@ -61,6 +61,7 @@ pub struct ApprovalRow {
 pub struct AdminKvWriteRequest {
     pub key: String,
     pub value: String,
+    pub scope: Option<String>,
     pub ttl_hours: Option<f64>,
     #[serde(default)]
     pub ttl_sliding: bool,
@@ -72,11 +73,17 @@ pub struct AdminKvWriteRequest {
 pub struct AdminKvImportRequest {
     pub content: String,          // raw .env file text
     pub prefix: Option<String>,   // optional key prefix, e.g. "myapp/"
+    pub scope: Option<String>,
     pub ttl_hours: Option<f64>,
     #[serde(default)]
     pub ttl_sliding: bool,
     #[serde(default)]
     pub open_access: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminKvPatchRequest {
+    pub scope: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

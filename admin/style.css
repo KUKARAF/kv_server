@@ -63,6 +63,7 @@ button.btn-reject:hover { background: #b91c1c; }
 fieldset { border: 1px solid #2a2a2a; padding: 1rem; border-radius: 6px; margin-bottom: 1.5rem; }
 legend { padding: 0 0.5rem; color: #aaa; font-size: 12px; text-transform: uppercase; }
 label { display: block; margin-bottom: 0.6rem; color: #aaa; font-size: 12px; }
+label textarea, textarea,
 label input, label select, input, select {
   display: block;
   width: 100%;
@@ -73,11 +74,47 @@ label input, label select, input, select {
   border-radius: 4px;
   color: #e0e0e0;
   font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
 }
-details { margin-top: 0.8rem; }
-summary { cursor: pointer; color: #888; font-size: 12px; }
-.scope-row { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
+/* Panels */
+.panel { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.25rem; }
+.panel h3 { font-size: 12px; text-transform: uppercase; color: #666; margin-bottom: 1rem; letter-spacing: 0.05em; }
+
+/* Form layout helpers */
+.form-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 0.6rem; }
+.form-inline { display: flex; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin-top: 0.6rem; }
+.form-inline label { margin-bottom: 0; }
+.label-check { display: flex; align-items: center; gap: 0.35rem; color: #aaa; font-size: 12px; }
+.label-check input { display: inline; width: auto; margin-top: 0; }
+.label-sm { font-size: 11px; text-transform: uppercase; color: #666; letter-spacing: 0.05em; margin-bottom: 0.4rem; }
+.input-sm { width: 90px !important; }
+.filter-bar { margin-bottom: 0.75rem; }
+.result-msg { font-size: 12px; color: #86efac; margin-top: 0.5rem; min-height: 1em; }
+
+/* Scope rules */
+.scope-row { display: flex; gap: 0.5rem; margin-bottom: 0.4rem; }
 .scope-row input { width: auto; flex: 1; }
+#scope-rules-wrap { margin: 0.75rem 0; }
+
+/* Scope cell inline edit */
+.scope-cell { cursor: pointer; }
+.scope-empty { color: #444; font-size: 11px; }
+.scope-empty:hover { color: #888; }
+.scope-input { width: 160px !important; padding: 2px 6px !important; font-size: 12px; }
+.badge-scope { background: #1e3a5f; color: #93c5fd; }
+
+/* Key reveal */
+.key-reveal { display: flex; align-items: center; gap: 1rem; padding: 0.75rem 1rem; background: #14532d; border: 1px solid #16a34a; border-radius: 6px; margin-bottom: 1rem; flex-wrap: wrap; }
+.key-value { font-size: 13px; flex: 1; word-break: break-all; }
+
+/* Button variants */
+.btn-secondary { background: #2a2a2a; color: #aaa; border: 1px solid #333; padding: 0.35rem 0.75rem; border-radius: 4px; font-size: 12px; cursor: pointer; }
+.btn-secondary:hover { background: #333; color: #e0e0e0; }
+.btn-icon { background: none; border: none; color: #555; cursor: pointer; padding: 0.2rem 0.4rem; font-size: 13px; }
+.btn-icon:hover { color: #dc2626; }
+.btn-danger { background: #450a0a; color: #fca5a5; border: none; padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 12px; cursor: pointer; }
+.btn-danger:hover { background: #7f1d1d; }
 
 /* Tables */
 table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
