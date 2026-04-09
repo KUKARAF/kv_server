@@ -25,8 +25,10 @@ impl Op {
     }
 
     fn from_request(parts: &Parts) -> Self {
-        let is_list = parts.method == Method::GET
-            && (parts.uri.path() == "/kv" || parts.uri.path() == "/kv/");
+        // axum's nest("/kv", ...) strips the prefix, so the path arriving here
+        // is the remainder: "/" or "" for the list endpoint, "/foo" for a key.
+        let path = parts.uri.path().trim_start_matches('/');
+        let is_list = parts.method == Method::GET && path.is_empty();
         if is_list {
             return Op::List;
         }
@@ -55,12 +57,11 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
     ) -> Result<Self, Self::Rejection> {
         let op = Op::from_request(parts);
 
-        // KV key from path e.g. /kv/my-key
+        // axum nest strips "/kv" so the path is e.g. "/my-key"; strip the slash.
         let kv_key = parts
             .uri
             .path()
-            .trim_start_matches("/kv/")
-            .trim_start_matches("/kv")
+            .trim_start_matches('/')
             .to_string();
 
         let raw_key = parts
