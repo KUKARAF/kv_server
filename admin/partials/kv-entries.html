@@ -14,9 +14,24 @@
       <label>TTL (h) <input name="ttl_hours" type="number" step="0.1" min="0" placeholder="—" class="input-sm"></label>
       <label class="label-check"><input name="ttl_sliding" type="checkbox"> Sliding</label>
       <label class="label-check"><input name="open_access" type="checkbox"> Open access</label>
+      <label class="label-check"><input name="one_time" type="checkbox" onchange="toggleOneTime(this)"> One-time</label>
       <button type="submit">Save</button>
     </div>
   </form>
+
+  <!-- One-time share reveal -->
+  <div id="share-reveal" class="share-reveal hidden">
+    <div class="share-reveal-header">
+      <span>🔐 One-time share link generated</span>
+      <button type="button" class="btn-icon" onclick="document.getElementById('share-reveal').classList.add('hidden')">✕</button>
+    </div>
+    <p class="share-reveal-warn">This link can only be used <strong>once</strong>. The value will be gone after retrieval.</p>
+    <div class="share-reveal-url">
+      <code id="share-url"></code>
+      <button type="button" class="btn-secondary" onclick="copyShareUrl()">Copy</button>
+      <a id="share-open" href="#" target="_blank" class="btn">Open</a>
+    </div>
+  </div>
 
   <form id="import-env-form" onsubmit="return importEnv(event)" class="panel">
     <h3>Import .env</h3>
@@ -46,7 +61,19 @@
 </section>
 
 <script>
-  // Load scopes datalist
+  function toggleOneTime(cb) {
+    const form = cb.closest('form');
+    if (cb.checked) {
+      form.querySelector('[name=open_access]').checked = false;
+      form.querySelector('[name=open_access]').disabled = true;
+      form.querySelector('[name=ttl_sliding]').checked = false;
+      form.querySelector('[name=ttl_sliding]').disabled = true;
+    } else {
+      form.querySelector('[name=open_access]').disabled = false;
+      form.querySelector('[name=ttl_sliding]').disabled = false;
+    }
+  }
+
   async function loadScopes() {
     const resp = await fetch('/api/admin/kv/scopes');
     if (!resp.ok) return;
@@ -59,25 +86,57 @@
   async function addEntry(e) {
     e.preventDefault();
     const form = e.target;
+    const key = form.key.value.trim();
     const ttlRaw = form.ttl_hours.value.trim();
+    const oneTime = form.one_time.checked;
+
     const body = {
-      key: form.key.value.trim(),
+      key,
       value: form.value.value,
       scope: form.scope.value.trim() || null,
       ttl_hours: ttlRaw ? parseFloat(ttlRaw) : null,
       ttl_sliding: form.ttl_sliding.checked,
       open_access: form.open_access.checked,
     };
+
     const resp = await fetch('/api/admin/kv', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (!resp.ok) { alert('Error: ' + resp.status); return false; }
+    if (!resp.ok) { alert('Error saving entry: ' + resp.status); return false; }
+
+    if (oneTime) {
+      // Create a one-time API key scoped to this exact key
+      const keyResp = await fetch('/api/admin/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: 'one-time:' + key,
+          key_type: 'one_time',
+          expires_at: null,
+          scopes: [{ key_pattern: key, ops: 'read' }],
+        }),
+      });
+      if (!keyResp.ok) { alert('Entry saved but failed to create share key: ' + keyResp.status); }
+      else {
+        const { key: token } = await keyResp.json();
+        const shareUrl = location.origin + '/share?key=' + encodeURIComponent(key) + '&token=' + encodeURIComponent(token);
+        document.getElementById('share-url').textContent = shareUrl;
+        document.getElementById('share-open').href = shareUrl;
+        document.getElementById('share-reveal').classList.remove('hidden');
+      }
+    }
+
     form.reset();
+    toggleOneTime({ checked: false, closest: () => form }); // re-enable disabled fields
     loadScopes();
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
     return false;
+  }
+
+  function copyShareUrl() {
+    navigator.clipboard.writeText(document.getElementById('share-url').textContent);
   }
 
   async function importEnv(e) {
@@ -112,6 +171,13 @@
     return false;
   }
 
+  async function deleteEntry(key) {
+    if (!confirm(`Delete "${key}"?`)) return;
+    const resp = await fetch('/api/admin/kv/' + encodeURIComponent(key), { method: 'DELETE' });
+    if (!resp.ok) { alert('Error deleting: ' + resp.status); return; }
+    htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
+  }
+
   async function saveScope(key, value) {
     await fetch('/api/admin/kv/' + encodeURIComponent(key), {
       method: 'PATCH',
@@ -132,7 +198,7 @@
     const el = document.getElementById('entries-list');
     if (!entries.length) { el.innerHTML = '<p>No entries found.</p>'; return; }
     el.innerHTML = `<table>
-      <thead><tr><th>Key</th><th>Scope</th><th>TTL (h)</th><th>Sliding</th><th>Open</th><th>Expires</th><th>Created</th></tr></thead>
+      <thead><tr><th>Key</th><th>Scope</th><th>TTL (h)</th><th>Sliding</th><th>Open</th><th>Expires</th><th>Created</th><th></th></tr></thead>
       <tbody>${entries.map(e => `
         <tr>
           <td><code>${esc(e.key)}</code></td>
@@ -142,6 +208,7 @@
           <td>${e.open_access ? '✓' : '—'}</td>
           <td>${e.expires_at ? esc(e.expires_at) : '—'}</td>
           <td>${esc(e.created_at)}</td>
+          <td><button class="btn-icon" onclick="deleteEntry('${esc(e.key)}')" title="Delete">🗑️</button></td>
         </tr>`).join('')}
       </tbody></table>`;
   }
@@ -159,7 +226,10 @@
       htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
     };
     input.addEventListener('blur', commit);
-    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } if (e.key === 'Escape') { input.removeEventListener('blur', commit); htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit'); } });
+    input.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
+      if (ev.key === 'Escape') { input.removeEventListener('blur', commit); htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit'); }
+    });
   }
 
   function esc(s) {

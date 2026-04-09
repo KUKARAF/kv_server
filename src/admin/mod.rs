@@ -22,5 +22,5 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/kv", get(handlers::list_kv_entries).put(handlers::admin_write_kv))
         .route("/kv/scopes", get(handlers::list_scopes))
         .route("/kv/import", post(handlers::admin_import_kv))
-        .route("/kv/:key", patch(handlers::admin_patch_kv))
+        .route("/kv/:key", patch(handlers::admin_patch_kv).delete(handlers::admin_delete_kv))
 }

@@ -184,6 +184,24 @@ code { font-family: monospace; font-size: 12px; background: #1a1a1a; padding: 1p
 @keyframes tab-pulse { 0%,100% { background: #333; color: #fff; } 50% { background: #713f12; color: #fde68a; } }
 .tab-pulse { animation: tab-pulse 2s ease-in-out infinite; }
 
+/* Share reveal (inline in admin) */
+.share-reveal { background: #1a1a1a; border: 1px solid #d97706; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1.25rem; }
+.share-reveal-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; color: #fde68a; margin-bottom: 0.5rem; }
+.share-reveal-warn { font-size: 12px; color: #aaa; margin-bottom: 0.75rem; }
+.share-reveal-url { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.share-reveal-url code { flex: 1; font-size: 11px; word-break: break-all; background: #111; padding: 0.4rem 0.6rem; border-radius: 4px; }
+
+/* Share page */
+.share-box { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 2.5rem; max-width: 480px; width: 100%; text-align: center; }
+.share-icon { font-size: 3rem; margin-bottom: 0.75rem; }
+.share-box h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
+.share-key-label { font-family: monospace; font-size: 13px; color: #888; margin-bottom: 1rem; }
+.share-warn { color: #aaa; font-size: 14px; margin-bottom: 1.5rem; line-height: 1.6; }
+.share-result-label { display: block; text-align: left; font-size: 12px; color: #666; margin-top: 1.5rem; margin-bottom: 0.4rem; text-transform: uppercase; }
+#result textarea { text-align: left; margin-bottom: 0.75rem; }
+.share-copy-confirm { color: #86efac; font-size: 12px; margin-top: 0.25rem; }
+.share-error { color: #fca5a5; font-size: 13px; margin-top: 1rem; }
+
 /* dl */
 dl { display: grid; grid-template-columns: 120px 1fr; gap: 0.4rem 1rem; }
 dt { color: #666; font-size: 12px; align-self: center; }

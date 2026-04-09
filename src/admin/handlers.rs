@@ -335,6 +335,21 @@ pub async fn admin_write_kv(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn admin_delete_kv(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+    Path(key): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let result = sqlx::query!("DELETE FROM kv_entries WHERE key = ?", key)
+        .execute(&state.pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn admin_patch_kv(
     State(state): State<Arc<AppState>>,
     _auth: AdminAuth,

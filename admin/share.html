@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Secure value — kv.osmosis.page</title>
+  <link rel="stylesheet" href="/admin/style.css">
+</head>
+<body class="login-page">
+  <div class="share-box">
+    <div class="share-icon">🔐</div>
+    <h1>Secure value</h1>
+    <p id="key-label" class="share-key-label"></p>
+    <p class="share-warn">This value can only be retrieved <strong>once</strong>.<br>Make sure you're ready to save it before continuing.</p>
+    <button id="retrieve-btn" class="btn" onclick="retrieve()">Retrieve now</button>
+    <div id="result" class="hidden">
+      <label class="share-result-label">Value</label>
+      <textarea id="result-value" readonly rows="5" onclick="this.select()"></textarea>
+      <button class="btn" onclick="copyValue()">Copy to clipboard</button>
+      <p id="copy-confirm" class="hidden share-copy-confirm">Copied!</p>
+    </div>
+    <p id="error-msg" class="hidden share-error"></p>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const key   = params.get('key');
+    const token = params.get('token');
+
+    if (key) {
+      document.getElementById('key-label').textContent = key;
+    }
+
+    if (!key || !token) {
+      document.getElementById('retrieve-btn').disabled = true;
+      showError('Invalid or expired share link.');
+    }
+
+    async function retrieve() {
+      const btn = document.getElementById('retrieve-btn');
+      btn.disabled = true;
+      btn.textContent = 'Retrieving…';
+
+      try {
+        const resp = await fetch('/kv/' + encodeURIComponent(key), {
+          headers: { 'X-Api-Key': token },
+        });
+
+        if (resp.ok) {
+          const data = await resp.json();
+          document.getElementById('result-value').value = data.value;
+          document.getElementById('result').classList.remove('hidden');
+          btn.classList.add('hidden');
+        } else {
+          btn.classList.add('hidden');
+          showError(
+            resp.status === 401 || resp.status === 403
+              ? 'This value has already been retrieved or the link has expired.'
+              : 'Failed to retrieve the value (error ' + resp.status + ').'
+          );
+        }
+      } catch {
+        btn.disabled = false;
+        btn.textContent = 'Retrieve now';
+        showError('Network error — please try again.');
+      }
+    }
+
+    async function copyValue() {
+      const val = document.getElementById('result-value').value;
+      await navigator.clipboard.writeText(val);
+      const c = document.getElementById('copy-confirm');
+      c.classList.remove('hidden');
+      setTimeout(() => c.classList.add('hidden'), 2000);
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('error-msg');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>
