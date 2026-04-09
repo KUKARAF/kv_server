@@ -19,13 +19,17 @@
 
     <div id="scope-rules-wrap">
       <p class="label-sm">Scope rules</p>
-      <div id="scope-rules">
-        <div class="scope-row">
-          <input name="key_pattern" list="key-scopes-list" placeholder="osmosis/deployment">
-          <input name="ops" placeholder="read,write">
-          <button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button>
-        </div>
-      </div>
+      <table class="scope-table">
+        <thead><tr><th>Key pattern</th><th>R</th><th>W</th><th></th></tr></thead>
+        <tbody id="scope-rules">
+          <tr class="scope-row">
+            <td><input name="key_pattern" list="key-scopes-list" placeholder="osmosis/deployment"></td>
+            <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
+            <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
+            <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
+          </tr>
+        </tbody>
+      </table>
       <button type="button" class="btn-secondary" onclick="addScope()">+ Add scope rule</button>
     </div>
 
@@ -54,24 +58,28 @@
   loadKeyScopes();
 
   function addScope() {
-    const div = document.createElement('div');
-    div.className = 'scope-row';
-    div.innerHTML = `
-      <input name="key_pattern" list="key-scopes-list" placeholder="osmosis/deployment">
-      <input name="ops" placeholder="read,write">
-      <button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button>
+    const tr = document.createElement('tr');
+    tr.className = 'scope-row';
+    tr.innerHTML = `
+      <td><input name="key_pattern" list="key-scopes-list" placeholder="osmosis/deployment"></td>
+      <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
+      <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
+      <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
     `;
-    document.getElementById('scope-rules').appendChild(div);
+    document.getElementById('scope-rules').appendChild(tr);
   }
 
   async function createKey(e) {
     e.preventDefault();
     const form = e.target;
     const scopes = Array.from(form.querySelectorAll('#scope-rules .scope-row'))
-      .map(row => ({
-        key_pattern: row.querySelector('[name=key_pattern]').value.trim(),
-        ops: row.querySelector('[name=ops]').value.trim(),
-      }))
+      .map(row => {
+        const pattern = row.querySelector('[name=key_pattern]').value.trim();
+        const r = row.querySelector('[name=ops_read]').checked;
+        const w = row.querySelector('[name=ops_write]').checked;
+        const ops = [r && 'read', w && 'write'].filter(Boolean).join(',');
+        return { key_pattern: pattern, ops };
+      })
       .filter(s => s.key_pattern && s.ops);
 
     const body = {

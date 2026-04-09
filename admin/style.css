@@ -93,9 +93,13 @@ label input, label select, input, select {
 .result-msg { font-size: 12px; color: #86efac; margin-top: 0.5rem; min-height: 1em; }
 
 /* Scope rules */
-.scope-row { display: flex; gap: 0.5rem; margin-bottom: 0.4rem; }
-.scope-row input { width: auto; flex: 1; }
 #scope-rules-wrap { margin: 0.75rem 0; }
+.scope-table { width: auto; margin-top: 0.4rem; margin-bottom: 0.5rem; }
+.scope-table th { font-size: 11px; text-transform: uppercase; color: #666; padding: 0.2rem 0.5rem; }
+.scope-table td { padding: 0.25rem 0.5rem; border-bottom: none; }
+.scope-table td:first-child input { width: 220px; }
+.ops-cell { text-align: center; vertical-align: middle; }
+.ops-cell input { display: inline; width: auto; margin: 0; }
 
 /* Scope cell inline edit */
 .scope-cell { cursor: pointer; }
