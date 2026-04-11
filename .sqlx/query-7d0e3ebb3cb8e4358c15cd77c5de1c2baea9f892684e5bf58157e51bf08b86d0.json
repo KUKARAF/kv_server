@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE approval_requests SET status = 'rejected'\n         WHERE id = ? AND status = 'pending'\n           AND api_key_id IN (SELECT id FROM api_keys WHERE owner_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "7d0e3ebb3cb8e4358c15cd77c5de1c2baea9f892684e5bf58157e51bf08b86d0"
+}

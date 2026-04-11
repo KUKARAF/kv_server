@@ -19,12 +19,14 @@ use uuid::Uuid;
 
 pub async fn list_keys(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
 ) -> Result<Json<Vec<ApiKeyWithScopes>>, AppError> {
+    let owner = &auth.0.oidc_subject;
     let keys = sqlx::query_as!(
         ApiKeyRow,
         r#"SELECT id, label, type as "key_type", status, expires_at, created_at, last_used_at
-           FROM api_keys ORDER BY created_at DESC"#
+           FROM api_keys WHERE owner_id = ? ORDER BY created_at DESC"#,
+        owner
     )
     .fetch_all(&state.pool)
     .await?;
@@ -46,7 +48,7 @@ pub async fn list_keys(
 
 pub async fn create_key(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Json(body): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
     let valid_types = ["standard", "one_time", "approval_required"];
@@ -57,6 +59,7 @@ pub async fn create_key(
         )));
     }
 
+    let owner = &auth.0.oidc_subject;
     let (plaintext, key_hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();
 
@@ -68,27 +71,18 @@ pub async fn create_key(
     };
 
     sqlx::query!(
-        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
-        id,
-        key_hash,
-        body.label,
-        body.key_type,
-        status,
-        body.expires_at
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        id, key_hash, body.label, body.key_type, status, body.expires_at, owner
     )
     .execute(&state.pool)
     .await?;
 
-    // Insert scope rules
     for scope in &body.scopes {
         let scope_id = Uuid::new_v4().to_string();
         sqlx::query!(
             "INSERT INTO api_key_scopes (id, api_key_id, key_pattern, ops) VALUES (?, ?, ?, ?)",
-            scope_id,
-            id,
-            scope.key_pattern,
-            scope.ops
+            scope_id, id, scope.key_pattern, scope.ops
         )
         .execute(&state.pool)
         .await?;
@@ -99,12 +93,13 @@ pub async fn create_key(
 
 pub async fn revoke_key(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(key_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
-        "UPDATE api_keys SET status = 'revoked' WHERE id = ? AND status = 'active'",
-        key_id
+        "UPDATE api_keys SET status = 'revoked' WHERE id = ? AND owner_id = ? AND status = 'active'",
+        key_id, owner
     )
     .execute(&state.pool)
     .await?;
@@ -118,12 +113,13 @@ pub async fn revoke_key(
 
 pub async fn delete_key(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(key_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
-        "DELETE FROM api_keys WHERE id = ? AND status IN ('revoked', 'used')",
-        key_id
+        "DELETE FROM api_keys WHERE id = ? AND owner_id = ? AND status IN ('revoked', 'used')",
+        key_id, owner
     )
     .execute(&state.pool)
     .await?;
@@ -139,8 +135,9 @@ pub async fn delete_key(
 
 pub async fn list_approvals(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
 ) -> Result<Json<Vec<ApprovalRow>>, AppError> {
+    let owner = &auth.0.oidc_subject;
     let rows = sqlx::query_as!(
         ApprovalRow,
         r#"SELECT ar.id, ar.api_key_id,
@@ -150,7 +147,9 @@ pub async fn list_approvals(
            FROM approval_requests ar
            JOIN api_keys ak ON ak.id = ar.api_key_id
            WHERE ar.status = 'pending' AND ar.expires_at > datetime('now')
-           ORDER BY ar.requested_at DESC"#
+             AND ak.owner_id = ?
+           ORDER BY ar.requested_at DESC"#,
+        owner
     )
     .fetch_all(&state.pool)
     .await?;
@@ -160,17 +159,26 @@ pub async fn list_approvals(
 
 pub async fn approve_request(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(request_id): Path<String>,
+    Json(body): Json<ApproveRequest>,
 ) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
     let row = sqlx::query!(
-        "SELECT api_key_id FROM approval_requests
-         WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
-        request_id
+        "SELECT ar.api_key_id, ar.emoji_sequence
+         FROM approval_requests ar
+         JOIN api_keys ak ON ak.id = ar.api_key_id
+         WHERE ar.id = ? AND ar.status = 'pending' AND ar.expires_at > datetime('now')
+           AND ak.owner_id = ?",
+        request_id, owner
     )
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    if body.confirm != row.emoji_sequence {
+        return Err(AppError::Forbidden("emoji sequence does not match".to_string()));
+    }
 
     let mut tx = state.pool.begin().await?;
 
@@ -194,13 +202,15 @@ pub async fn approve_request(
 
 pub async fn reject_request(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(request_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "UPDATE approval_requests SET status = 'rejected'
-         WHERE id = ? AND status = 'pending'",
-        request_id
+         WHERE id = ? AND status = 'pending'
+           AND api_key_id IN (SELECT id FROM api_keys WHERE owner_id = ?)",
+        request_id, owner
     )
     .execute(&state.pool)
     .await?;
@@ -233,9 +243,7 @@ pub async fn request_approval(
     sqlx::query!(
         "INSERT INTO approval_requests (id, api_key_id, emoji_sequence, expires_at)
          VALUES (?, ?, ?, datetime('now', '+10 minutes'))",
-        id,
-        key.id,
-        emoji
+        id, key.id, emoji
     )
     .execute(&state.pool)
     .await?;
@@ -243,13 +251,14 @@ pub async fn request_approval(
     Ok((StatusCode::CREATED, Json(RequestApprovalResponse { confirm: emoji })))
 }
 
-// ── KV (admin view — metadata only, no values) ──────────────────────────────
+// ── KV (admin view) ──────────────────────────────────────────────────────────
 
 pub async fn list_kv_entries(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Query(q): Query<crate::kv::handlers::ListQuery>,
 ) -> Result<Json<Vec<crate::kv::model::KvMetaResponse>>, AppError> {
+    let owner = &auth.0.oidc_subject;
     let rows = match q.prefix {
         Some(prefix) => {
             let pattern = format!("{}%", prefix);
@@ -258,10 +267,10 @@ pub async fn list_kv_entries(
                 r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
                         expires_at, open_access as "open_access: bool", created_at
                  FROM kv_entries
-                 WHERE key LIKE ?
+                 WHERE key LIKE ? AND owner_id = ?
                    AND (expires_at IS NULL OR expires_at > datetime('now'))
                  ORDER BY key"#,
-                pattern
+                pattern, owner
             )
             .fetch_all(&state.pool)
             .await?
@@ -272,8 +281,10 @@ pub async fn list_kv_entries(
                 r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
                         expires_at, open_access as "open_access: bool", created_at
                  FROM kv_entries
-                 WHERE expires_at IS NULL OR expires_at > datetime('now')
-                 ORDER BY key"#
+                 WHERE owner_id = ?
+                   AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 ORDER BY key"#,
+                owner
             )
             .fetch_all(&state.pool)
             .await?
@@ -284,13 +295,15 @@ pub async fn list_kv_entries(
 
 pub async fn list_scopes(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
 ) -> Result<Json<Vec<String>>, AppError> {
+    let owner = &auth.0.oidc_subject;
     let scopes = sqlx::query_scalar!(
         "SELECT DISTINCT scope FROM kv_entries
-         WHERE scope IS NOT NULL AND scope != ''
+         WHERE owner_id = ? AND scope IS NOT NULL AND scope != ''
            AND (expires_at IS NULL OR expires_at > datetime('now'))
-         ORDER BY scope"
+         ORDER BY scope",
+        owner
     )
     .fetch_all(&state.pool)
     .await?
@@ -300,34 +313,29 @@ pub async fn list_scopes(
     Ok(Json(scopes))
 }
 
-// ── Admin KV write / import / patch ─────────────────────────────────────────
+// ── Admin KV write / import / patch / delete ─────────────────────────────────
 
 pub async fn admin_write_kv(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Json(body): Json<AdminKvWriteRequest>,
 ) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
     let expires_at = compute_expires_at(body.ttl_hours);
     let ttl_sliding = body.ttl_sliding as i64;
     let open_access = body.open_access as i64;
 
     sqlx::query!(
-        "INSERT INTO kv_entries (key, value, scope, ttl_hours, ttl_sliding, expires_at, open_access)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET
+        "INSERT INTO kv_entries (key, owner_id, value, scope, ttl_hours, ttl_sliding, expires_at, open_access)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(key, owner_id) DO UPDATE SET
              value       = excluded.value,
              scope       = excluded.scope,
              ttl_hours   = excluded.ttl_hours,
              ttl_sliding = excluded.ttl_sliding,
              expires_at  = excluded.expires_at,
              open_access = excluded.open_access",
-        body.key,
-        body.value,
-        body.scope,
-        body.ttl_hours,
-        ttl_sliding,
-        expires_at,
-        open_access
+        body.key, owner, body.value, body.scope, body.ttl_hours, ttl_sliding, expires_at, open_access
     )
     .execute(&state.pool)
     .await?;
@@ -337,12 +345,16 @@ pub async fn admin_write_kv(
 
 pub async fn admin_delete_kv(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(key): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let result = sqlx::query!("DELETE FROM kv_entries WHERE key = ?", key)
-        .execute(&state.pool)
-        .await?;
+    let owner = &auth.0.oidc_subject;
+    let result = sqlx::query!(
+        "DELETE FROM kv_entries WHERE key = ? AND owner_id = ?",
+        key, owner
+    )
+    .execute(&state.pool)
+    .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound);
@@ -352,14 +364,14 @@ pub async fn admin_delete_kv(
 
 pub async fn admin_patch_kv(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(key): Path<String>,
     Json(body): Json<AdminKvPatchRequest>,
 ) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
-        "UPDATE kv_entries SET scope = ? WHERE key = ?",
-        body.scope,
-        key
+        "UPDATE kv_entries SET scope = ? WHERE key = ? AND owner_id = ?",
+        body.scope, key, owner
     )
     .execute(&state.pool)
     .await?;
@@ -372,9 +384,10 @@ pub async fn admin_patch_kv(
 
 pub async fn admin_import_kv(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Json(body): Json<AdminKvImportRequest>,
 ) -> Result<Json<AdminKvImportResponse>, AppError> {
+    let owner = &auth.0.oidc_subject;
     let prefix = body.prefix.as_deref().unwrap_or("");
     let ttl_sliding = body.ttl_sliding as i64;
     let open_access = body.open_access as i64;
@@ -397,22 +410,16 @@ pub async fn admin_import_kv(
         let expires_at = compute_expires_at(body.ttl_hours);
 
         sqlx::query!(
-            "INSERT INTO kv_entries (key, value, scope, ttl_hours, ttl_sliding, expires_at, open_access)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET
-             value       = excluded.value,
-             scope       = excluded.scope,
-             ttl_hours   = excluded.ttl_hours,
-             ttl_sliding = excluded.ttl_sliding,
-             expires_at  = excluded.expires_at,
-             open_access = excluded.open_access",
-            key,
-            value,
-            body.scope,
-            body.ttl_hours,
-            ttl_sliding,
-            expires_at,
-            open_access
+            "INSERT INTO kv_entries (key, owner_id, value, scope, ttl_hours, ttl_sliding, expires_at, open_access)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(key, owner_id) DO UPDATE SET
+                 value       = excluded.value,
+                 scope       = excluded.scope,
+                 ttl_hours   = excluded.ttl_hours,
+                 ttl_sliding = excluded.ttl_sliding,
+                 expires_at  = excluded.expires_at,
+                 open_access = excluded.open_access",
+            key, owner, value, body.scope, body.ttl_hours, ttl_sliding, expires_at, open_access
         )
         .execute(&state.pool)
         .await?;

@@ -26,7 +26,7 @@ pub enum AppError {
 
     // 403 with emoji sequence for approval_required keys
     #[error("pending approval")]
-    PendingApproval(String),
+    PendingApproval { confirm: String, approver: Option<String> },
 
     #[error("internal error")]
     Internal(#[from] anyhow::Error),
@@ -40,10 +40,10 @@ impl From<sqlx::Error> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        if let AppError::PendingApproval(emoji) = &self {
+        if let AppError::PendingApproval { confirm, approver } = &self {
             return (
                 StatusCode::FORBIDDEN,
-                Json(json!({ "error": "pending approval", "confirm": emoji })),
+                Json(json!({ "error": "pending approval", "confirm": confirm, "approver": approver })),
             )
                 .into_response();
         }
@@ -54,7 +54,7 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded".to_string()),
-            AppError::PendingApproval(_) => unreachable!(),
+            AppError::PendingApproval { .. } => unreachable!(),
             AppError::Internal(e) => {
                 tracing::error!("internal error: {e:#}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string())

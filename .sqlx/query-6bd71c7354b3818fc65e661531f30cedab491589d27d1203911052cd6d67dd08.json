@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, label, type as \"key_type\", status, expires_at, created_at, last_used_at\n           FROM api_keys ORDER BY created_at DESC",
+  "query": "SELECT id, label, type as \"key_type\", status, expires_at, created_at, last_used_at\n           FROM api_keys WHERE owner_id = ? ORDER BY created_at DESC",
   "describe": {
     "columns": [
       {
@@ -40,7 +40,7 @@
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
@@ -52,5 +52,5 @@
       true
     ]
   },
-  "hash": "d240c12abb7b81aa332d3cc00ebc01d43823785238814037770592d314cf948c"
+  "hash": "6bd71c7354b3818fc65e661531f30cedab491589d27d1203911052cd6d67dd08"
 }

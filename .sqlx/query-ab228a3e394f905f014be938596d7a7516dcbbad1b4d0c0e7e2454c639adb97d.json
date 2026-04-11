@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE kv_entries SET expires_at = ? WHERE key = ? AND owner_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "ab228a3e394f905f014be938596d7a7516dcbbad1b4d0c0e7e2454c639adb97d"
+}

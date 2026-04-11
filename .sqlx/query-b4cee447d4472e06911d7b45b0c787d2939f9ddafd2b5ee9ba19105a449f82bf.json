@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO kv_entries (key, owner_id, value, ttl_hours, ttl_sliding, expires_at, open_access)\n         VALUES (?, ?, ?, ?, ?, ?, ?)\n         ON CONFLICT(key, owner_id) DO UPDATE SET\n             value       = excluded.value,\n             ttl_hours   = excluded.ttl_hours,\n             ttl_sliding = excluded.ttl_sliding,\n             expires_at  = excluded.expires_at,\n             open_access = excluded.open_access",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "b4cee447d4472e06911d7b45b0c787d2939f9ddafd2b5ee9ba19105a449f82bf"
+}

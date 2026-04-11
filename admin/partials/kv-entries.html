@@ -151,7 +151,6 @@
         document.getElementById('share-reveal').classList.remove('hidden');
       }
     } else if (approvalRequired) {
-      // Create an approval_required API key scoped to this exact key
       const keyResp = await fetch('/api/admin/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -164,22 +163,14 @@
       });
       if (!keyResp.ok) { alert('Entry saved but failed to create approval key: ' + keyResp.status); }
       else {
-        const { id: keyId, key: token } = await keyResp.json();
-        // Trigger the approval request to generate the emoji
-        const arResp = await fetch('/api/admin/keys/' + keyId + '/request-approval', { method: 'POST' });
-        if (!arResp.ok) { alert('Entry saved but failed to start approval request: ' + arResp.status); }
-        else {
-          const { confirm: emoji } = await arResp.json();
-          const shareUrl = location.origin + '/share?key=' + encodeURIComponent(key) + '&token=' + encodeURIComponent(token);
-          document.getElementById('share-reveal-title').textContent = '🔑 Approval-required share link generated';
-          document.getElementById('share-reveal-warn').style.display = 'none';
-          const emojiEl = document.getElementById('share-reveal-emoji');
-          emojiEl.textContent = emoji;
-          emojiEl.style.display = '';
-          document.getElementById('share-url').textContent = shareUrl;
-          document.getElementById('share-open').href = shareUrl;
-          document.getElementById('share-reveal').classList.remove('hidden');
-        }
+        const { key: token } = await keyResp.json();
+        const shareUrl = location.origin + '/share?key=' + encodeURIComponent(key) + '&token=' + encodeURIComponent(token);
+        document.getElementById('share-reveal-title').textContent = '🔑 Approval-required share link';
+        document.getElementById('share-reveal-warn').style.display = 'none';
+        document.getElementById('share-reveal-emoji').style.display = 'none';
+        document.getElementById('share-url').textContent = shareUrl;
+        document.getElementById('share-open').href = shareUrl;
+        document.getElementById('share-reveal').classList.remove('hidden');
       }
     }
 

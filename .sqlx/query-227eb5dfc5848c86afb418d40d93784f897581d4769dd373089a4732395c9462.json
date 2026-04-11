@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT key, scope, ttl_hours, ttl_sliding as \"ttl_sliding: bool\",\n                        expires_at, open_access as \"open_access: bool\", created_at\n                 FROM kv_entries\n                 WHERE expires_at IS NULL OR expires_at > datetime('now')\n                 ORDER BY key",
+  "query": "SELECT key, scope, ttl_hours, ttl_sliding as \"ttl_sliding: bool\",\n                        expires_at, open_access as \"open_access: bool\", created_at\n                 FROM kv_entries\n                 WHERE owner_id = ?\n                   AND (expires_at IS NULL OR expires_at > datetime('now'))\n                 ORDER BY key",
   "describe": {
     "columns": [
       {
@@ -40,7 +40,7 @@
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
@@ -52,5 +52,5 @@
       false
     ]
   },
-  "hash": "66512941304df1027b3bca6a9439aba4ba8dc67eb4ccf7c44716a08a661ccf89"
+  "hash": "227eb5dfc5848c86afb418d40d93784f897581d4769dd373089a4732395c9462"
 }

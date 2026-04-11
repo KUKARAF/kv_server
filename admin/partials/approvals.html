@@ -1,6 +1,6 @@
 <section>
   <h2>Pending Approvals</h2>
-  <p>Compare the emoji shown here with what the requester sees. If they match, approve.</p>
+  <p>The requester will tell you 3 emojis. Type their names below to find and select them, then confirm.</p>
 
   <div id="approvals-list"
        hx-get="/api/admin/approvals"
@@ -23,14 +23,36 @@
     </div>
     <p class="share-reveal-warn">Valid for <strong>180 days</strong>. Scan once — navigating away loses the code.</p>
     <div style="display:flex;justify-content:center;padding:1rem;">
-      <canvas id="phone-qr-canvas"></canvas>
+      <div id="phone-qr-canvas"></div>
     </div>
   </div>
 </section>
 
-<template id="approvals-tmpl"></template>
-
 <script>
+  // Emoji pool (matches backend generate.rs, deduplicated)
+  const EMOJI_DATA = [
+    {e:"🦊",n:"fox"},        {e:"🐬",n:"dolphin"},    {e:"🎸",n:"guitar"},
+    {e:"🌊",n:"wave ocean"}, {e:"🔥",n:"fire flame"}, {e:"⚡",n:"lightning bolt electric"},
+    {e:"🌈",n:"rainbow"},    {e:"🎯",n:"target dart"},{e:"🦋",n:"butterfly"},
+    {e:"🌙",n:"moon"},       {e:"⭐",n:"star"},        {e:"🎪",n:"circus tent"},
+    {e:"🦁",n:"lion"},       {e:"🐉",n:"dragon"},      {e:"🌺",n:"hibiscus flower"},
+    {e:"🎨",n:"art palette"},{e:"🔮",n:"crystal ball"},{e:"🎭",n:"theater masks"},
+    {e:"🦄",n:"unicorn"},    {e:"🌸",n:"blossom flower"},{e:"🎵",n:"music note"},
+    {e:"🏔",n:"mountain"},   {e:"🌿",n:"herb leaf"},   {e:"🦅",n:"eagle bird"},
+    {e:"🐧",n:"penguin"},    {e:"🦀",n:"crab"},         {e:"🌴",n:"palm tree"},
+    {e:"🎃",n:"pumpkin"},    {e:"🦩",n:"flamingo"},    {e:"🐙",n:"octopus"},
+    {e:"🌋",n:"volcano"},    {e:"🎠",n:"carousel horse"},{e:"🦜",n:"parrot"},
+    {e:"🐳",n:"whale"},      {e:"🌵",n:"cactus"},      {e:"🎡",n:"ferris wheel"},
+    {e:"🦢",n:"swan"},       {e:"🐝",n:"bee"},          {e:"🌻",n:"sunflower"},
+    {e:"🎺",n:"trumpet"},    {e:"🦚",n:"peacock"},     {e:"🐞",n:"ladybug beetle"},
+    {e:"🌾",n:"wheat grain"},{e:"🎻",n:"violin"},      {e:"🦝",n:"raccoon"},
+    {e:"🍄",n:"mushroom"},   {e:"🎲",n:"dice game"},   {e:"🦠",n:"microbe virus"},
+    {e:"🌍",n:"earth globe"},{e:"🏜",n:"desert"},      {e:"🎳",n:"bowling"},
+    {e:"🦌",n:"deer"},       {e:"🌠",n:"shooting star"},{e:"🏝",n:"island beach"},
+    {e:"🦏",n:"rhinoceros"}, {e:"🌌",n:"galaxy space"},{e:"🏕",n:"camping tent"},
+    {e:"🦓",n:"zebra"},      {e:"🌅",n:"sunrise sunset"},
+  ];
+
   document.addEventListener('htmx:afterRequest', function(e) {
     if (e.detail.pathInfo?.requestPath === '/api/admin/approvals') {
       renderApprovals(e.detail.xhr.response);
@@ -42,23 +64,129 @@
     const el = document.getElementById('approvals-list');
     if (!items.length) { el.innerHTML = '<p>No pending approvals.</p>'; return; }
     el.innerHTML = items.map(a => `
-      <div class="approval-card">
-        <div class="emoji">${a.emoji_sequence}</div>
+      <div class="approval-card" id="card-${a.id}">
         <div class="info">
           <strong>${esc(a.api_key_label)}</strong>
           <small>requested ${esc(a.requested_at)} · expires ${esc(a.expires_at)}</small>
         </div>
-        <div class="actions">
-          <button class="btn-approve"
-                  hx-post="/api/admin/approvals/${a.id}/approve"
-                  hx-target="#approvals-list"
-                  hx-swap="innerHTML">Approve</button>
-          <button class="btn-reject"
-                  hx-post="/api/admin/approvals/${a.id}/reject"
-                  hx-target="#approvals-list"
-                  hx-swap="innerHTML">Reject</button>
+        <div class="approval-actions-col">
+          <div class="emoji-picker" id="picker-${a.id}" data-id="${a.id}" data-expected="${esc(a.emoji_sequence)}">
+            <div class="emoji-pinned" id="pinned-${a.id}"></div>
+            <input class="emoji-search" type="text" placeholder="Search emoji…"
+                   oninput="searchEmoji(this, '${a.id}')"
+                   onfocus="searchEmoji(this, '${a.id}')">
+            <div class="emoji-results hidden" id="results-${a.id}"></div>
+            <div class="approval-btns">
+              <button class="btn-approve" id="confirm-${a.id}" disabled
+                      onclick="confirmApprove('${a.id}', '${esc(a.emoji_sequence)}')">Confirm</button>
+              <button class="btn-reject" onclick="rejectApproval('${a.id}')">Reject</button>
+            </div>
+          </div>
         </div>
       </div>`).join('');
+  }
+
+  function searchEmoji(input, id) {
+    const q = input.value.trim().toLowerCase();
+    const results = document.getElementById('results-' + id);
+    const pinned = getPinned(id);
+
+    const filtered = q
+      ? EMOJI_DATA.filter(d => d.n.includes(q))
+      : EMOJI_DATA;
+
+    if (!filtered.length) {
+      results.innerHTML = '<span style="color:#666;font-size:12px;padding:4px;">No match</span>';
+    } else {
+      results.innerHTML = filtered.map(d =>
+        `<button class="emoji-opt" title="${esc(d.n)}" onclick="pinEmoji('${d.e}','${id}')">${d.e}</button>`
+      ).join('');
+    }
+    results.classList.remove('hidden');
+  }
+
+  function pinEmoji(emoji, id) {
+    const expected = document.getElementById('picker-' + id).dataset.expected;
+    const expectedArr = [...expected]; // split into individual emoji codepoints
+    const pinned = getPinned(id);
+
+    if (pinned.length >= 3) return; // always 3
+    pinned.push(emoji);
+    savePinned(id, pinned);
+
+    // clear search
+    const input = document.getElementById('picker-' + id).querySelector('.emoji-search');
+    input.value = '';
+    document.getElementById('results-' + id).classList.add('hidden');
+    input.focus();
+
+    renderPinned(id, pinned);
+    updateConfirmBtn(id, pinned, expectedArr);
+  }
+
+  function renderPinned(id, pinned) {
+    const el = document.getElementById('pinned-' + id);
+    el.innerHTML = pinned.map((e, i) =>
+      `<span class="pinned-chip">${e}<button onclick="unpinEmoji(${i},'${id}')" title="Remove">×</button></span>`
+    ).join('');
+    // show placeholder slots
+    for (let i = pinned.length; i < 3; i++) {
+      el.innerHTML += `<span class="pinned-slot">${i + 1}</span>`;
+    }
+  }
+
+  function unpinEmoji(idx, id) {
+    const pinned = getPinned(id);
+    pinned.splice(idx, 1);
+    savePinned(id, pinned);
+    const expected = [...document.getElementById('picker-' + id).dataset.expected];
+    renderPinned(id, pinned);
+    updateConfirmBtn(id, pinned, expected);
+  }
+
+  function updateConfirmBtn(id, pinned, expectedArr) {
+    const btn = document.getElementById('confirm-' + id);
+    btn.disabled = pinned.join('') !== expectedArr.join('');
+  }
+
+  function getPinned(id) {
+    return window['_pinned_' + id] || [];
+  }
+  function savePinned(id, arr) {
+    window['_pinned_' + id] = arr;
+  }
+
+  async function confirmApprove(id, expected) {
+    const pinned = getPinned(id);
+    if (pinned.join('') !== [...expected].join('')) return;
+
+    const resp = await fetch('/api/admin/approvals/' + id + '/approve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: pinned.join('') }),
+    });
+
+    const card = document.getElementById('card-' + id);
+    if (resp.ok) {
+      card.style.opacity = '0.5';
+      card.innerHTML = '<div style="padding:0.5rem;color:#86efac;">✓ Approved</div>';
+      setTimeout(() => card.remove(), 1500);
+    } else {
+      const body = await resp.json().catch(() => null);
+      const msg = body?.error || 'Failed to approve';
+      card.querySelector('.btn-approve').insertAdjacentHTML('afterend',
+        `<span style="color:#fca5a5;font-size:12px;margin-left:0.5rem;">${esc(msg)}</span>`);
+    }
+  }
+
+  async function rejectApproval(id) {
+    const resp = await fetch('/api/admin/approvals/' + id + '/reject', { method: 'POST' });
+    const card = document.getElementById('card-' + id);
+    if (resp.ok) {
+      card.style.opacity = '0.5';
+      card.innerHTML = '<div style="padding:0.5rem;color:#fca5a5;">✗ Rejected</div>';
+      setTimeout(() => card.remove(), 1500);
+    }
   }
 
   async function addPhone() {
@@ -66,14 +194,9 @@
     if (!resp.ok) { alert('Failed to generate token: ' + resp.status); return; }
     const token = await resp.json();
 
-    const canvas = document.getElementById('phone-qr-canvas');
-    // Clear previous QR if any
-    const parent = canvas.parentElement;
-    const fresh = document.createElement('canvas');
-    fresh.id = 'phone-qr-canvas';
-    parent.replaceChild(fresh, canvas);
-
-    new QRCode(fresh, { text: token, width: 256, height: 256, correctLevel: QRCode.CorrectLevel.M });
+    const container = document.getElementById('phone-qr-canvas');
+    container.innerHTML = '';
+    new QRCode(container, { text: token, width: 256, height: 256, correctLevel: QRCode.CorrectLevel.M });
     document.getElementById('phone-qr-reveal').classList.remove('hidden');
   }
 

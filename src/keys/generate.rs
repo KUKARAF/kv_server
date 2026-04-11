@@ -37,7 +37,7 @@ const EMOJI_POOL: &[&str] = &[
 
 pub fn generate_emoji_sequence() -> String {
     let mut rng = rand::thread_rng();
-    let count = 3 + (rand::random::<u8>() % 2) as usize; // 3 or 4
+    let count = 3;
     let indices = rand::seq::index::sample(&mut rng, EMOJI_POOL.len(), count);
     indices.iter().map(|i| EMOJI_POOL[i]).collect::<Vec<_>>().join("")
 }

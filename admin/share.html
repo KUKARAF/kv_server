@@ -8,17 +8,37 @@
 </head>
 <body class="login-page">
   <div class="share-box">
-    <div class="share-icon">🔐</div>
-    <h1>Secure value</h1>
+    <div class="share-icon" id="share-icon">🔐</div>
+    <h1 id="share-title">Secure value</h1>
     <p id="key-label" class="share-key-label"></p>
-    <p class="share-warn">This value can only be retrieved <strong>once</strong>.<br>Make sure you're ready to save it before continuing.</p>
-    <button id="retrieve-btn" class="btn" onclick="retrieve()">Retrieve now</button>
-    <div id="result" class="hidden">
+
+    <!-- step 1: request access -->
+    <div id="step-request">
+      <p class="share-warn">This value requires approval from the key owner before you can retrieve it.</p>
+      <button class="btn" onclick="requestAccess()">Request access</button>
+    </div>
+
+    <!-- step 2: show emojis, wait for approval -->
+    <div id="step-pending" class="hidden">
+      <p class="share-warn" id="pending-approver"></p>
+      <div class="share-pending-emoji" id="pending-emoji"></div>
+      <p class="share-warn" style="font-size:12px;margin-top:0.5rem;">
+        Tell the key owner these emojis — they'll enter them to approve your request.
+      </p>
+      <p class="share-pending-status">⏳ Waiting for approval…</p>
+      <button class="btn-secondary" style="margin-top:1rem;font-size:13px;" onclick="requestAccess()">
+        Regenerate emojis
+      </button>
+    </div>
+
+    <!-- step 3: approved, show value -->
+    <div id="step-result" class="hidden">
       <label class="share-result-label">Value</label>
       <textarea id="result-value" readonly rows="5" onclick="this.select()"></textarea>
       <button class="btn" onclick="copyValue()">Copy to clipboard</button>
       <p id="copy-confirm" class="hidden share-copy-confirm">Copied!</p>
     </div>
+
     <p id="error-msg" class="hidden share-error"></p>
   </div>
   <script>
@@ -26,48 +46,78 @@
     const key   = params.get('key');
     const token = params.get('token');
 
-    if (key) {
-      document.getElementById('key-label').textContent = key;
-    }
+    let pollTimer = null;
+
+    if (key) document.getElementById('key-label').textContent = key;
 
     if (!key || !token) {
-      document.getElementById('retrieve-btn').disabled = true;
+      document.getElementById('step-request').classList.add('hidden');
       showError('Invalid or expired share link.');
     }
 
-    async function retrieve() {
-      const btn = document.getElementById('retrieve-btn');
-      btn.disabled = true;
-      btn.textContent = 'Retrieving…';
-
+    async function requestAccess() {
+      clearError();
       try {
-        const resp = await fetch('/kv/' + encodeURIComponent(key), {
+        const resp = await fetch('/kv/request-access', {
+          method: 'POST',
           headers: { 'X-Api-Key': token },
         });
 
         if (resp.ok) {
           const data = await resp.json();
-          document.getElementById('result-value').value = data.value;
-          document.getElementById('result').classList.remove('hidden');
-          btn.classList.add('hidden');
+          showPending(data.confirm, data.approver);
         } else {
-          btn.classList.add('hidden');
-          showError(
-            resp.status === 401 || resp.status === 403
-              ? 'This value has already been retrieved or the link has expired.'
-              : 'Failed to retrieve the value (error ' + resp.status + ').'
-          );
+          const body = await resp.json().catch(() => null);
+          showError(body?.error || 'Failed to request access (error ' + resp.status + ').');
         }
       } catch {
-        btn.disabled = false;
-        btn.textContent = 'Retrieve now';
         showError('Network error — please try again.');
       }
     }
 
+    function showPending(emojis, approver) {
+      document.getElementById('share-icon').textContent = '⏳';
+      document.getElementById('share-title').textContent = 'Awaiting approval';
+      document.getElementById('pending-emoji').textContent = emojis;
+      const approverEl = document.getElementById('pending-approver');
+      approverEl.innerHTML = approver
+        ? '<strong>' + esc(approver) + '</strong> needs to approve your request.'
+        : 'The key owner needs to approve your request.';
+      document.getElementById('step-request').classList.add('hidden');
+      document.getElementById('step-pending').classList.remove('hidden');
+      startPolling();
+    }
+
+    function startPolling() {
+      stopPolling();
+      pollTimer = setInterval(async () => {
+        try {
+          const resp = await fetch('/kv/' + encodeURIComponent(key), {
+            headers: { 'X-Api-Key': token },
+          });
+          if (resp.ok) {
+            stopPolling();
+            const value = await resp.text();
+            document.getElementById('result-value').value = value;
+            document.getElementById('step-pending').classList.add('hidden');
+            document.getElementById('step-result').classList.remove('hidden');
+            document.getElementById('share-icon').textContent = '✅';
+            document.getElementById('share-title').textContent = 'Approved!';
+          } else if (resp.status === 401) {
+            stopPolling();
+            showError('This link has expired.');
+          }
+          // 403 pending_approval = still waiting, keep polling
+        } catch { /* network blip */ }
+      }, 5000);
+    }
+
+    function stopPolling() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
     async function copyValue() {
-      const val = document.getElementById('result-value').value;
-      await navigator.clipboard.writeText(val);
+      await navigator.clipboard.writeText(document.getElementById('result-value').value);
       const c = document.getElementById('copy-confirm');
       c.classList.remove('hidden');
       setTimeout(() => c.classList.add('hidden'), 2000);
@@ -77,6 +127,14 @@
       const el = document.getElementById('error-msg');
       el.textContent = msg;
       el.classList.remove('hidden');
+    }
+
+    function clearError() {
+      document.getElementById('error-msg').classList.add('hidden');
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
   </script>
 </body>

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ar.api_key_id, ar.emoji_sequence\n         FROM approval_requests ar\n         JOIN api_keys ak ON ak.id = ar.api_key_id\n         WHERE ar.id = ? AND ar.status = 'pending' AND ar.expires_at > datetime('now')\n           AND ak.owner_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "api_key_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "emoji_sequence",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "845c0cfcf7bdbe156548aac6ea101fb27b66375a7a873ab4d81c0ecdf9060cf8"
+}

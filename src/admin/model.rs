@@ -97,6 +97,11 @@ pub struct RequestApprovalResponse {
     pub confirm: String, // emoji sequence — shown to user for verification
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ApproveRequest {
+    pub confirm: String, // emoji sequence submitted by admin — must match stored sequence
+}
+
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SessionRow {
     pub id: String,

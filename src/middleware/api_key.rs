@@ -43,7 +43,8 @@ impl Op {
 
 #[allow(dead_code)]
 pub struct ApiKeyAuth {
-    pub api_key_id: Option<String>, // None for open-access reads
+    pub owner_id: Option<String>,  // None only for open-access reads
+    pub api_key_id: Option<String>,
     pub op: Op,
 }
 
@@ -64,11 +65,14 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
         {
-            if validate_session(&state.pool, token).await.is_ok() {
-                return Ok(ApiKeyAuth { api_key_id: None, op });
+            match validate_session(&state.pool, token).await {
+                Ok(claims) => return Ok(ApiKeyAuth {
+                    owner_id: Some(claims.oidc_subject),
+                    api_key_id: None,
+                    op,
+                }),
+                Err(_) => return Err(AppError::Unauthorized),
             }
-            // Bearer token present but invalid — reject immediately.
-            return Err(AppError::Unauthorized);
         }
 
         // axum nest strips "/kv" so the path is e.g. "/my-key"; strip the slash.
@@ -88,7 +92,8 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         if raw_key.is_none() && op == Op::Read && !kv_key.is_empty() {
             let open = sqlx::query_scalar!(
                 "SELECT open_access FROM kv_entries
-                 WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))",
+                 WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 LIMIT 1",
                 kv_key
             )
             .fetch_optional(&state.pool)
@@ -96,7 +101,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             .unwrap_or(0);
 
             if open != 0 {
-                return Ok(ApiKeyAuth { api_key_id: None, op });
+                return Ok(ApiKeyAuth { owner_id: None, api_key_id: None, op });
             }
         }
 
@@ -104,7 +109,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         let key_hash = crate::keys::generate::hash_key(&raw_key);
 
         let api_key = sqlx::query!(
-            "SELECT id, type as key_type, status, expires_at
+            "SELECT id, type as key_type, status, expires_at, owner_id
              FROM api_keys
              WHERE key_hash = ?",
             key_hash
@@ -160,9 +165,22 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     .fetch_optional(&state.pool)
                     .await?;
 
-                    return Err(AppError::PendingApproval(
-                        emoji.unwrap_or_else(|| "pending approval".to_string()),
-                    ));
+                    let approver = sqlx::query_scalar!(
+                        "SELECT email FROM session_tokens
+                         WHERE expires_at > datetime('now')
+                           AND oidc_subject = ?
+                         ORDER BY created_at DESC LIMIT 1",
+                        api_key.owner_id
+                    )
+                    .fetch_optional(&state.pool)
+                    .await
+                    .ok()
+                    .flatten();
+
+                    return Err(AppError::PendingApproval {
+                        confirm: emoji.unwrap_or_else(|| "pending approval".to_string()),
+                        approver,
+                    });
                 }
             }
             _ => {
@@ -201,6 +219,10 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             });
         }
 
-        Ok(ApiKeyAuth { api_key_id: Some(api_key.id), op })
+        Ok(ApiKeyAuth {
+            owner_id: Some(api_key.owner_id),
+            api_key_id: Some(api_key.id),
+            op,
+        })
     }
 }

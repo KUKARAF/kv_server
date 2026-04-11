@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT value, ttl_hours, ttl_sliding, expires_at\n         FROM kv_entries\n         WHERE key = ?\n           AND (expires_at IS NULL OR expires_at > datetime('now'))",
+  "query": "SELECT value, ttl_hours, ttl_sliding, expires_at\n             FROM kv_entries\n             WHERE key = ? AND owner_id = ?\n               AND (expires_at IS NULL OR expires_at > datetime('now'))",
   "describe": {
     "columns": [
       {
@@ -25,7 +25,7 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       false,
@@ -34,5 +34,5 @@
       true
     ]
   },
-  "hash": "5b5f03bed4fccbeca3fb65243f03887849ff3eeaf2e6ea4a2633e4ca946dc8b4"
+  "hash": "73d4ef6846a331222dee1fcaa2a0dbbbf0511969884064330ae66be5668ad571"
 }

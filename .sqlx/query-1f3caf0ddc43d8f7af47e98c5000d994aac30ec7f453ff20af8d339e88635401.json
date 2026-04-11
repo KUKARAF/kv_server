@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT ar.id, ar.api_key_id,\n                  ak.label as \"api_key_label\",\n                  ar.emoji_sequence, ar.status,\n                  ar.requested_at, ar.expires_at\n           FROM approval_requests ar\n           JOIN api_keys ak ON ak.id = ar.api_key_id\n           WHERE ar.status = 'pending' AND ar.expires_at > datetime('now')\n           ORDER BY ar.requested_at DESC",
+  "query": "SELECT ar.id, ar.api_key_id,\n                  ak.label as \"api_key_label\",\n                  ar.emoji_sequence, ar.status,\n                  ar.requested_at, ar.expires_at\n           FROM approval_requests ar\n           JOIN api_keys ak ON ak.id = ar.api_key_id\n           WHERE ar.status = 'pending' AND ar.expires_at > datetime('now')\n             AND ak.owner_id = ?\n           ORDER BY ar.requested_at DESC",
   "describe": {
     "columns": [
       {
@@ -40,7 +40,7 @@
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
@@ -52,5 +52,5 @@
       false
     ]
   },
-  "hash": "b9504afa0cb36ba75a77eeb0f35d904313937a47f3fd656d6c3b6b8aaa2e1980"
+  "hash": "1f3caf0ddc43d8f7af47e98c5000d994aac30ec7f453ff20af8d339e88635401"
 }
