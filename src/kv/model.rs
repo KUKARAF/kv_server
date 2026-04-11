@@ -24,12 +24,6 @@ pub struct KvUpsertRequest {
 }
 
 #[derive(Debug, Serialize)]
-pub struct KvResponse {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(Debug, Serialize)]
 pub struct KvMetaResponse {
     pub key: String,
     pub scope: Option<String>,

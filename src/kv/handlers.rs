@@ -1,6 +1,6 @@
 use crate::{
     error::AppError,
-    kv::model::{compute_expires_at, KvMetaResponse, KvResponse, KvUpsertRequest},
+    kv::model::{compute_expires_at, KvMetaResponse, KvUpsertRequest},
     middleware::api_key::ApiKeyAuth,
     state::AppState,
 };
@@ -21,9 +21,9 @@ pub async fn get_entry(
     State(state): State<Arc<AppState>>,
     _auth: ApiKeyAuth, // open-access bypass handled inside the extractor
     Path(key): Path<String>,
-) -> Result<Json<KvResponse>, AppError> {
+) -> Result<String, AppError> {
     let row = sqlx::query!(
-        "SELECT key, value, ttl_hours, ttl_sliding, expires_at
+        "SELECT value, ttl_hours, ttl_sliding, expires_at
          FROM kv_entries
          WHERE key = ?
            AND (expires_at IS NULL OR expires_at > datetime('now'))",
@@ -48,10 +48,7 @@ pub async fn get_entry(
         }
     }
 
-    Ok(Json(KvResponse {
-        key: row.key,
-        value: row.value,
-    }))
+    Ok(row.value)
 }
 
 pub async fn upsert_entry(
