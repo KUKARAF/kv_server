@@ -1,4 +1,4 @@
-use crate::{error::AppError, keys::scope::{check_scope, ScopeRule}, state::AppState};
+use crate::{auth::session::validate_session, error::AppError, keys::scope::{check_scope, ScopeRule}, state::AppState};
 use axum::{
     async_trait,
     extract::FromRequestParts,
@@ -56,6 +56,20 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
         let op = Op::from_request(parts);
+
+        // Session token (Authorization: Bearer) grants full access, same as admin.
+        if let Some(token) = parts
+            .headers
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+        {
+            if validate_session(&state.pool, token).await.is_ok() {
+                return Ok(ApiKeyAuth { api_key_id: None, op });
+            }
+            // Bearer token present but invalid — reject immediately.
+            return Err(AppError::Unauthorized);
+        }
 
         // axum nest strips "/kv" so the path is e.g. "/my-key"; strip the slash.
         let kv_key = parts
