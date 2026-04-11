@@ -176,7 +176,9 @@ pub async fn approve_request(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    if body.confirm != row.emoji_sequence {
+    let matches = bcrypt::verify(&body.confirm, &row.emoji_sequence)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {e}")))?;
+    if !matches {
         return Err(AppError::Forbidden("emoji sequence does not match".to_string()));
     }
 

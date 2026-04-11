@@ -51,6 +51,8 @@ pub struct ApprovalRow {
     pub id: String,
     pub api_key_id: String,
     pub api_key_label: String,
+    #[serde(skip)] // stored as bcrypt hash — never exposed to admin
+    #[allow(dead_code)]
     pub emoji_sequence: String,
     pub status: String,
     pub requested_at: String,

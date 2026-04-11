@@ -55,12 +55,14 @@ pub async fn request_access(
     .await?;
 
     let emoji = generate_emoji_sequence();
+    let emoji_hash = bcrypt::hash(&emoji, 6)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {e}")))?;
     let id = Uuid::new_v4().to_string();
 
     sqlx::query!(
         "INSERT INTO approval_requests (id, api_key_id, emoji_sequence, expires_at)
          VALUES (?, ?, ?, datetime('now', '+10 minutes'))",
-        id, api_key.id, emoji
+        id, api_key.id, emoji_hash
     )
     .execute(&state.pool)
     .await?;

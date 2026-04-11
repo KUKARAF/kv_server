@@ -127,7 +127,7 @@
       for (const a of data) {
         if (!knownApprovals.has(a.id)) {
           showToast(
-            `🔐 Approval needed: <strong>${a.api_key_label}</strong> — ${a.emoji_sequence}`,
+            `🔐 Approval needed: <strong>${a.api_key_label}</strong>`,
             { id: 'approval-' + a.id, persistent: true, type: 'warning' }
           );
         }
