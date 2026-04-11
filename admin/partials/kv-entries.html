@@ -15,17 +15,19 @@
       <label class="label-check"><input name="ttl_sliding" type="checkbox"> Sliding</label>
       <label class="label-check"><input name="open_access" type="checkbox"> Open access</label>
       <label class="label-check"><input name="one_time" type="checkbox" onchange="toggleOneTime(this)"> One-time</label>
+      <label class="label-check"><input name="approval_required" type="checkbox" onchange="toggleApprovalRequired(this)"> Approval required</label>
       <button type="submit">Save</button>
     </div>
   </form>
 
-  <!-- One-time share reveal -->
+  <!-- Share reveal (one-time and approval-required) -->
   <div id="share-reveal" class="share-reveal hidden">
     <div class="share-reveal-header">
-      <span>🔐 One-time share link generated</span>
+      <span id="share-reveal-title">🔐 One-time share link generated</span>
       <button type="button" class="btn-icon" onclick="document.getElementById('share-reveal').classList.add('hidden')">✕</button>
     </div>
-    <p class="share-reveal-warn">This link can only be used <strong>once</strong>. The value will be gone after retrieval.</p>
+    <p id="share-reveal-warn" class="share-reveal-warn">This link can only be used <strong>once</strong>. The value will be gone after retrieval.</p>
+    <div id="share-reveal-emoji" style="font-size:2.5rem;margin-bottom:.5rem;display:none;"></div>
     <div class="share-reveal-url">
       <code id="share-url"></code>
       <button type="button" class="btn-secondary" onclick="copyShareUrl()">Copy</button>
@@ -68,8 +70,27 @@
       form.querySelector('[name=open_access]').disabled = true;
       form.querySelector('[name=ttl_sliding]').checked = false;
       form.querySelector('[name=ttl_sliding]').disabled = true;
+      form.querySelector('[name=approval_required]').checked = false;
+      form.querySelector('[name=approval_required]').disabled = true;
     } else {
       form.querySelector('[name=open_access]').disabled = false;
+      form.querySelector('[name=ttl_sliding]').disabled = false;
+      form.querySelector('[name=approval_required]').disabled = false;
+    }
+  }
+
+  function toggleApprovalRequired(cb) {
+    const form = cb.closest('form');
+    if (cb.checked) {
+      form.querySelector('[name=open_access]').checked = false;
+      form.querySelector('[name=open_access]').disabled = true;
+      form.querySelector('[name=one_time]').checked = false;
+      form.querySelector('[name=one_time]').disabled = true;
+      form.querySelector('[name=ttl_sliding]').checked = false;
+      form.querySelector('[name=ttl_sliding]').disabled = true;
+    } else {
+      form.querySelector('[name=open_access]').disabled = false;
+      form.querySelector('[name=one_time]').disabled = false;
       form.querySelector('[name=ttl_sliding]').disabled = false;
     }
   }
@@ -89,6 +110,7 @@
     const key = form.key.value.trim();
     const ttlRaw = form.ttl_hours.value.trim();
     const oneTime = form.one_time.checked;
+    const approvalRequired = form.approval_required.checked;
 
     const body = {
       key,
@@ -107,7 +129,6 @@
     if (!resp.ok) { alert('Error saving entry: ' + resp.status); return false; }
 
     if (oneTime) {
-      // Create a one-time API key scoped to this exact key
       const keyResp = await fetch('/api/admin/keys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -122,14 +143,51 @@
       else {
         const { key: token } = await keyResp.json();
         const shareUrl = location.origin + '/share?key=' + encodeURIComponent(key) + '&token=' + encodeURIComponent(token);
+        document.getElementById('share-reveal-title').textContent = '🔐 One-time share link generated';
+        document.getElementById('share-reveal-warn').style.display = '';
+        document.getElementById('share-reveal-emoji').style.display = 'none';
         document.getElementById('share-url').textContent = shareUrl;
         document.getElementById('share-open').href = shareUrl;
         document.getElementById('share-reveal').classList.remove('hidden');
       }
+    } else if (approvalRequired) {
+      // Create an approval_required API key scoped to this exact key
+      const keyResp = await fetch('/api/admin/keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          label: 'approval:' + key,
+          key_type: 'approval_required',
+          expires_at: null,
+          scopes: [{ key_pattern: key, ops: 'read' }],
+        }),
+      });
+      if (!keyResp.ok) { alert('Entry saved but failed to create approval key: ' + keyResp.status); }
+      else {
+        const { id: keyId, key: token } = await keyResp.json();
+        // Trigger the approval request to generate the emoji
+        const arResp = await fetch('/api/admin/keys/' + keyId + '/request-approval', { method: 'POST' });
+        if (!arResp.ok) { alert('Entry saved but failed to start approval request: ' + arResp.status); }
+        else {
+          const { confirm: emoji } = await arResp.json();
+          const shareUrl = location.origin + '/share?key=' + encodeURIComponent(key) + '&token=' + encodeURIComponent(token);
+          document.getElementById('share-reveal-title').textContent = '🔑 Approval-required share link generated';
+          document.getElementById('share-reveal-warn').style.display = 'none';
+          const emojiEl = document.getElementById('share-reveal-emoji');
+          emojiEl.textContent = emoji;
+          emojiEl.style.display = '';
+          document.getElementById('share-url').textContent = shareUrl;
+          document.getElementById('share-open').href = shareUrl;
+          document.getElementById('share-reveal').classList.remove('hidden');
+        }
+      }
     }
 
     form.reset();
-    toggleOneTime({ checked: false, closest: () => form }); // re-enable disabled fields
+    // Re-enable any fields that were disabled by checkbox toggles
+    ['open_access', 'ttl_sliding', 'one_time', 'approval_required'].forEach(n => {
+      form.querySelector('[name=' + n + ']').disabled = false;
+    });
     loadScopes();
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
     return false;

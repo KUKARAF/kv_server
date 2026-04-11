@@ -1,6 +1,6 @@
 use crate::{
     admin::model::*,
-    auth::middleware::AdminAuth,
+    auth::{middleware::AdminAuth, session},
     error::AppError,
     keys::generate::{generate_api_key, generate_emoji_sequence},
     kv::model::compute_expires_at,
@@ -213,11 +213,11 @@ pub async fn reject_request(
 }
 
 /// Called by a client holding an approval_required key to trigger the approval flow.
-/// Generates an emoji sequence, creates an approval_request, returns 403 with the emoji.
+/// Generates an emoji sequence, creates an approval_request, returns the emoji for display.
 pub async fn request_approval(
     State(state): State<Arc<AppState>>,
     Path(key_id): Path<String>,
-) -> Result<StatusCode, AppError> {
+) -> Result<(StatusCode, Json<RequestApprovalResponse>), AppError> {
     // Verify key exists and is pending_approval
     let key = sqlx::query!(
         "SELECT id FROM api_keys WHERE id = ? AND status = 'pending_approval' AND type = 'approval_required'",
@@ -240,7 +240,7 @@ pub async fn request_approval(
     .execute(&state.pool)
     .await?;
 
-    Ok(StatusCode::CREATED)
+    Ok((StatusCode::CREATED, Json(RequestApprovalResponse { confirm: emoji })))
 }
 
 // ── KV (admin view — metadata only, no values) ──────────────────────────────
@@ -463,5 +463,20 @@ pub async fn get_session_token(
         .get("session_token")
         .map(|c| c.value().to_string())
         .ok_or(AppError::Unauthorized)?;
+    Ok(Json(token))
+}
+
+/// Issues a long-lived device token (180 days) for the authenticated admin.
+/// The token is returned once in plaintext — store it immediately.
+pub async fn create_device_token(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+) -> Result<Json<String>, AppError> {
+    let token = session::create_device_token(
+        &state.pool,
+        &auth.0.oidc_subject,
+        &auth.0.email,
+    )
+    .await?;
     Ok(Json(token))
 }

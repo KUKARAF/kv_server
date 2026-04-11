@@ -10,6 +10,24 @@
   </div>
 </section>
 
+<section style="margin-top:2rem;">
+  <h2>Auth Phone</h2>
+  <p>Generate a QR code to authorise the KV Approver app on a new device.</p>
+
+  <button type="button" class="btn-secondary" onclick="addPhone()">Add phone</button>
+
+  <div id="phone-qr-reveal" class="share-reveal hidden" style="margin-top:1rem;">
+    <div class="share-reveal-header">
+      <span>📱 Scan with KV Approver app</span>
+      <button type="button" class="btn-icon" onclick="closePhoneQr()">✕</button>
+    </div>
+    <p class="share-reveal-warn">Valid for <strong>180 days</strong>. Scan once — navigating away loses the code.</p>
+    <div style="display:flex;justify-content:center;padding:1rem;">
+      <canvas id="phone-qr-canvas"></canvas>
+    </div>
+  </div>
+</section>
+
 <template id="approvals-tmpl"></template>
 
 <script>
@@ -41,6 +59,26 @@
                   hx-swap="innerHTML">Reject</button>
         </div>
       </div>`).join('');
+  }
+
+  async function addPhone() {
+    const resp = await fetch('/api/admin/session/device-token', { method: 'POST' });
+    if (!resp.ok) { alert('Failed to generate token: ' + resp.status); return; }
+    const token = await resp.json();
+
+    const canvas = document.getElementById('phone-qr-canvas');
+    // Clear previous QR if any
+    const parent = canvas.parentElement;
+    const fresh = document.createElement('canvas');
+    fresh.id = 'phone-qr-canvas';
+    parent.replaceChild(fresh, canvas);
+
+    new QRCode(fresh, { text: token, width: 256, height: 256, correctLevel: QRCode.CorrectLevel.M });
+    document.getElementById('phone-qr-reveal').classList.remove('hidden');
+  }
+
+  function closePhoneQr() {
+    document.getElementById('phone-qr-reveal').classList.add('hidden');
   }
 
   function esc(s) {

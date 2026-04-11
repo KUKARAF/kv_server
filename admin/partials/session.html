@@ -7,6 +7,24 @@
        hx-swap="innerHTML">
     Loading...
   </div>
+
+  <div style="margin-top:1rem;">
+    <button type="button" class="btn-secondary" onclick="generateDeviceToken()">
+      Generate device token (180 days)
+    </button>
+  </div>
+
+  <div id="device-token-reveal" class="share-reveal hidden" style="margin-top:1rem;">
+    <div class="share-reveal-header">
+      <span>📱 Device token generated — copy it now</span>
+      <button type="button" class="btn-icon" onclick="document.getElementById('device-token-reveal').classList.add('hidden')">✕</button>
+    </div>
+    <p class="share-reveal-warn">This token is shown <strong>once</strong>. Store it in the Android app immediately.</p>
+    <div class="share-reveal-url">
+      <code id="device-token-value" style="word-break:break-all;"></code>
+      <button type="button" class="btn-secondary" onclick="copyDeviceToken()">Copy</button>
+    </div>
+  </div>
 </section>
 
 <script>
@@ -27,6 +45,18 @@
         <dt>Expires</dt><dd>${esc(s.expires_at)}</dd>
         <dt>Created</dt><dd>${esc(s.created_at)}</dd>
       </dl>`;
+  }
+
+  async function generateDeviceToken() {
+    const resp = await fetch('/api/admin/session/device-token', { method: 'POST' });
+    if (!resp.ok) { alert('Failed to generate device token: ' + resp.status); return; }
+    const token = await resp.json();
+    document.getElementById('device-token-value').textContent = token;
+    document.getElementById('device-token-reveal').classList.remove('hidden');
+  }
+
+  function copyDeviceToken() {
+    navigator.clipboard.writeText(document.getElementById('device-token-value').textContent);
   }
 
   function esc(s) {

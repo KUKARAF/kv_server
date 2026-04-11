@@ -92,6 +92,11 @@ pub struct AdminKvImportResponse {
     pub skipped: usize,  // blank/comment lines
 }
 
+#[derive(Debug, Serialize)]
+pub struct RequestApprovalResponse {
+    pub confirm: String, // emoji sequence — shown to user for verification
+}
+
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SessionRow {
     pub id: String,

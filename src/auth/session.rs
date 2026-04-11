@@ -9,6 +9,29 @@ pub struct SessionClaims {
     pub email: String,
 }
 
+/// Creates a long-lived device token (180 days), stores it hashed, returns the plaintext once.
+pub async fn create_device_token(
+    pool: &SqlitePool,
+    oidc_subject: &str,
+    email: &str,
+) -> Result<String, AppError> {
+    let (plaintext, token_hash) = generate_session_token();
+    let id = Uuid::new_v4().to_string();
+
+    sqlx::query!(
+        "INSERT INTO session_tokens (id, token_hash, oidc_subject, email, expires_at)
+         VALUES (?, ?, ?, ?, datetime('now', '+180 days'))",
+        id,
+        token_hash,
+        oidc_subject,
+        email
+    )
+    .execute(pool)
+    .await?;
+
+    Ok(plaintext)
+}
+
 /// Creates a new session token, stores it hashed, returns the plaintext once.
 pub async fn create_session(
     pool: &SqlitePool,
