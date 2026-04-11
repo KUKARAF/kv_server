@@ -13,7 +13,7 @@
     <p id="key-label" class="share-key-label"></p>
 
     <!-- step 1: request access -->
-    <div id="step-request">
+    <div id="step-request" class="hidden">
       <p class="share-warn">This value requires approval from the key owner before you can retrieve it.</p>
       <button class="btn" onclick="requestAccess()">Request access</button>
     </div>
@@ -51,8 +51,44 @@
     if (key) document.getElementById('key-label').textContent = key;
 
     if (!key || !token) {
-      document.getElementById('step-request').classList.add('hidden');
       showError('Invalid or expired share link.');
+    } else {
+      // Try fetching the value immediately — works for one_time and already-approved keys.
+      // Only fall back to the approval flow if the server says pending approval.
+      tryFetch();
+    }
+
+    async function tryFetch() {
+      try {
+        const resp = await fetch('/kv/' + encodeURIComponent(key), {
+          headers: { 'X-Api-Key': token },
+        });
+        if (resp.ok) {
+          const value = await resp.text();
+          document.getElementById('result-value').value = value;
+          document.getElementById('step-request').classList.add('hidden');
+          document.getElementById('step-result').classList.remove('hidden');
+          document.getElementById('share-icon').textContent = '✅';
+          document.getElementById('share-title').textContent = 'Here\'s your value';
+        } else if (resp.status === 403) {
+          const body = await resp.json().catch(() => null);
+          if (body?.error === 'pending approval') {
+            // approval_required key still waiting — reveal the request flow
+            document.getElementById('step-request').classList.remove('hidden');
+          } else {
+            document.getElementById('step-request').classList.add('hidden');
+            showError(body?.error || 'Access denied.');
+          }
+        } else if (resp.status === 401) {
+          document.getElementById('step-request').classList.add('hidden');
+          showError('This link has expired or is invalid.');
+        } else {
+          document.getElementById('step-request').classList.add('hidden');
+          showError('Failed to retrieve value (error ' + resp.status + ').');
+        }
+      } catch {
+        showError('Network error — please refresh and try again.');
+      }
     }
 
     async function requestAccess() {
