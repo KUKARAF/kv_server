@@ -15,6 +15,9 @@ pub struct Config {
 
     pub session_signing_key: String,
 
+    pub webauthn_rp_id: String,
+    pub webauthn_rp_origin: String,
+
     pub daily_rate_limit: u32,
     pub ttl_cleanup_interval_secs: u64,
 }
@@ -41,6 +44,11 @@ impl Config {
                 .unwrap_or_default(),
             oidc_redirect_uri: env::var("OIDC_REDIRECT_URI")
                 .unwrap_or_default(),
+
+            webauthn_rp_id: env::var("WEBAUTHN_RP_ID")
+                .unwrap_or_else(|_| "localhost".to_string()),
+            webauthn_rp_origin: env::var("WEBAUTHN_RP_ORIGIN")
+                .unwrap_or_else(|_| "http://localhost:3000".to_string()),
 
             session_signing_key: env::var("SESSION_SIGNING_KEY").unwrap_or_else(|_| {
                 use rand::RngCore;

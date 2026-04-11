@@ -62,6 +62,7 @@ pub struct ApprovalRow {
 #[derive(Debug, Deserialize)]
 pub struct AdminKvWriteRequest {
     pub key: String,
+    #[serde(default)]
     pub value: String,
     pub scope: Option<String>,
     pub ttl_hours: Option<f64>,
@@ -69,6 +70,13 @@ pub struct AdminKvWriteRequest {
     pub ttl_sliding: bool,
     #[serde(default)]
     pub open_access: bool,
+    // Zero Trust fields — all required together when creating a ZT entry.
+    pub zt_ciphertext: Option<String>,
+    pub zt_wrapped_dek: Option<String>,
+    pub zt_nonce: Option<String>,
+    pub zt_aad: Option<String>,
+    pub zt_credential_id: Option<String>,
+    pub zt_prf_salt: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

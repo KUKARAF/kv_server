@@ -8,6 +8,7 @@ mod kv;
 mod middleware;
 mod state;
 mod tasks;
+mod webauthn;
 
 use anyhow::Result;
 use axum::{
@@ -74,6 +75,7 @@ async fn main() -> Result<()> {
         .route("/version", get(version))
         .nest("/kv", kv::router())
         .nest("/auth", auth::router())
+        .nest("/webauthn", webauthn::router())
         .nest("/api/admin", admin::router())
         .route("/admin/", get(serve_dashboard))
         .route("/admin/*path", get(serve_admin_static))

@@ -40,8 +40,12 @@ thiserror = "1"
 anyhow = "1"
 
 include_dir = "0.7"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 time = "0.3"
+
+webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
+url = "2"
+jsonwebtoken = "9"
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -153,6 +153,13 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     return Err(AppError::Forbidden("one-time key already used".to_string()));
                 }
             }
+            "zero_trust" => {
+                // zero_trust keys must be active; the actual secret access
+                // requires a WebAuthn ceremony and a short-lived ZT JWT.
+                if api_key.status != "active" {
+                    return Err(AppError::Unauthorized);
+                }
+            }
             "approval_required" => {
                 if api_key.status != "active" {
                     let emoji = sqlx::query_scalar!(

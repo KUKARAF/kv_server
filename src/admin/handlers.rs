@@ -51,7 +51,7 @@ pub async fn create_key(
     auth: AdminAuth,
     Json(body): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
-    let valid_types = ["standard", "one_time", "approval_required"];
+    let valid_types = ["standard", "one_time", "approval_required", "zero_trust"];
     if !valid_types.contains(&body.key_type.as_str()) {
         return Err(AppError::Forbidden(format!(
             "invalid key type: {}",
@@ -323,21 +323,56 @@ pub async fn admin_write_kv(
     Json(body): Json<AdminKvWriteRequest>,
 ) -> Result<StatusCode, AppError> {
     let owner = &auth.0.oidc_subject;
+
+    // Validate ZT fields: either all required ZT fields present, or none.
+    let is_zt = body.zt_ciphertext.is_some()
+        || body.zt_wrapped_dek.is_some()
+        || body.zt_nonce.is_some()
+        || body.zt_aad.is_some()
+        || body.zt_prf_salt.is_some()
+        || body.zt_credential_id.is_some();
+
+    if is_zt {
+        let required = [
+            ("zt_ciphertext", &body.zt_ciphertext),
+            ("zt_wrapped_dek", &body.zt_wrapped_dek),
+            ("zt_nonce", &body.zt_nonce),
+            ("zt_aad", &body.zt_aad),
+            ("zt_prf_salt", &body.zt_prf_salt),
+            ("zt_credential_id", &body.zt_credential_id),
+        ];
+        for (name, field) in &required {
+            if field.is_none() {
+                return Err(AppError::Forbidden(format!("missing zero trust field: {name}")));
+            }
+        }
+    }
+
     let expires_at = compute_expires_at(body.ttl_hours);
     let ttl_sliding = body.ttl_sliding as i64;
     let open_access = body.open_access as i64;
 
     sqlx::query!(
-        "INSERT INTO kv_entries (key, owner_id, value, scope, ttl_hours, ttl_sliding, expires_at, open_access)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO kv_entries
+             (key, owner_id, value, scope, ttl_hours, ttl_sliding, expires_at, open_access,
+              zt_ciphertext, zt_wrapped_dek, zt_nonce, zt_aad, zt_prf_salt, zt_credential_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(key, owner_id) DO UPDATE SET
-             value       = excluded.value,
-             scope       = excluded.scope,
-             ttl_hours   = excluded.ttl_hours,
-             ttl_sliding = excluded.ttl_sliding,
-             expires_at  = excluded.expires_at,
-             open_access = excluded.open_access",
-        body.key, owner, body.value, body.scope, body.ttl_hours, ttl_sliding, expires_at, open_access
+             value          = excluded.value,
+             scope          = excluded.scope,
+             ttl_hours      = excluded.ttl_hours,
+             ttl_sliding    = excluded.ttl_sliding,
+             expires_at     = excluded.expires_at,
+             open_access    = excluded.open_access,
+             zt_ciphertext  = excluded.zt_ciphertext,
+             zt_wrapped_dek = excluded.zt_wrapped_dek,
+             zt_nonce       = excluded.zt_nonce,
+             zt_aad         = excluded.zt_aad,
+             zt_prf_salt    = excluded.zt_prf_salt,
+             zt_credential_id = excluded.zt_credential_id",
+        body.key, owner, body.value, body.scope, body.ttl_hours, ttl_sliding, expires_at, open_access,
+        body.zt_ciphertext, body.zt_wrapped_dek, body.zt_nonce, body.zt_aad,
+        body.zt_prf_salt, body.zt_credential_id
     )
     .execute(&state.pool)
     .await?;

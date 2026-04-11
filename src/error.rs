@@ -28,6 +28,10 @@ pub enum AppError {
     #[error("pending approval")]
     PendingApproval { confirm: String, approver: Option<String> },
 
+    // 403 for zero_trust entries — client must complete WebAuthn ceremony
+    #[error("zero trust required")]
+    ZeroTrustRequired,
+
     #[error("internal error")]
     Internal(#[from] anyhow::Error),
 }
@@ -48,13 +52,21 @@ impl IntoResponse for AppError {
                 .into_response();
         }
 
+        if matches!(self, AppError::ZeroTrustRequired) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "zero_trust_required" })),
+            )
+                .into_response();
+        }
+
         let (status, message) = match &self {
             AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded".to_string()),
-            AppError::PendingApproval { .. } => unreachable!(),
+            AppError::PendingApproval { .. } | AppError::ZeroTrustRequired => unreachable!(),
             AppError::Internal(e) => {
                 tracing::error!("internal error: {e:#}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string())

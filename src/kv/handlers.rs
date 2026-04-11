@@ -10,6 +10,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     Json,
 };
+use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -80,9 +81,9 @@ pub async fn get_entry(
     auth: ApiKeyAuth,
     Path(key): Path<String>,
 ) -> Result<String, AppError> {
-    let (value, ttl_hours, ttl_sliding, expires_at) = if let Some(ref oid) = auth.owner_id {
+    let (value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext) = if let Some(ref oid) = auth.owner_id {
         let row = sqlx::query!(
-            "SELECT value, ttl_hours, ttl_sliding, expires_at
+            "SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext
              FROM kv_entries
              WHERE key = ? AND owner_id = ?
                AND (expires_at IS NULL OR expires_at > datetime('now'))",
@@ -91,11 +92,11 @@ pub async fn get_entry(
         .fetch_optional(&state.pool)
         .await?
         .ok_or(AppError::NotFound)?;
-        (row.value, row.ttl_hours, row.ttl_sliding, row.expires_at)
+        (row.value, row.ttl_hours, row.ttl_sliding, row.expires_at, row.zt_ciphertext)
     } else {
         // Open-access path — no owner filter
         let row = sqlx::query!(
-            "SELECT value, ttl_hours, ttl_sliding, expires_at
+            "SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext
              FROM kv_entries
              WHERE key = ? AND open_access = 1
                AND (expires_at IS NULL OR expires_at > datetime('now'))
@@ -105,8 +106,13 @@ pub async fn get_entry(
         .fetch_optional(&state.pool)
         .await?
         .ok_or(AppError::NotFound)?;
-        (row.value, row.ttl_hours, row.ttl_sliding, row.expires_at)
+        (row.value, row.ttl_hours, row.ttl_sliding, row.expires_at, row.zt_ciphertext)
     };
+
+    // Zero Trust entries: plaintext never stored — client must use the WebAuthn flow.
+    if zt_ciphertext.is_some() {
+        return Err(AppError::ZeroTrustRequired);
+    }
 
     // Update sliding TTL if applicable (only for authenticated reads)
     if ttl_sliding != 0 {
@@ -121,7 +127,7 @@ pub async fn get_entry(
         }
     }
 
-    let _ = expires_at; // consumed above
+    let _ = expires_at;
     Ok(value)
 }
 
@@ -132,20 +138,55 @@ pub async fn upsert_entry(
     Json(body): Json<KvUpsertRequest>,
 ) -> Result<StatusCode, AppError> {
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
+
+    // Validate ZT fields: either all required ZT fields present, or none.
+    let is_zt = body.zt_ciphertext.is_some()
+        || body.zt_wrapped_dek.is_some()
+        || body.zt_nonce.is_some()
+        || body.zt_aad.is_some()
+        || body.zt_prf_salt.is_some()
+        || body.zt_credential_id.is_some();
+
+    if is_zt {
+        let required = [
+            ("zt_ciphertext", &body.zt_ciphertext),
+            ("zt_wrapped_dek", &body.zt_wrapped_dek),
+            ("zt_nonce", &body.zt_nonce),
+            ("zt_aad", &body.zt_aad),
+            ("zt_prf_salt", &body.zt_prf_salt),
+            ("zt_credential_id", &body.zt_credential_id),
+        ];
+        for (name, field) in &required {
+            if field.is_none() {
+                return Err(AppError::Forbidden(format!("missing zero trust field: {name}")));
+            }
+        }
+    }
+
     let expires_at = compute_expires_at(body.ttl_hours);
     let ttl_sliding = body.ttl_sliding as i64;
     let open_access = body.open_access as i64;
 
     sqlx::query!(
-        "INSERT INTO kv_entries (key, owner_id, value, ttl_hours, ttl_sliding, expires_at, open_access)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO kv_entries
+             (key, owner_id, value, ttl_hours, ttl_sliding, expires_at, open_access,
+              zt_ciphertext, zt_wrapped_dek, zt_nonce, zt_aad, zt_prf_salt, zt_credential_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(key, owner_id) DO UPDATE SET
-             value       = excluded.value,
-             ttl_hours   = excluded.ttl_hours,
-             ttl_sliding = excluded.ttl_sliding,
-             expires_at  = excluded.expires_at,
-             open_access = excluded.open_access",
-        key, owner_id, body.value, body.ttl_hours, ttl_sliding, expires_at, open_access
+             value          = excluded.value,
+             ttl_hours      = excluded.ttl_hours,
+             ttl_sliding    = excluded.ttl_sliding,
+             expires_at     = excluded.expires_at,
+             open_access    = excluded.open_access,
+             zt_ciphertext  = excluded.zt_ciphertext,
+             zt_wrapped_dek = excluded.zt_wrapped_dek,
+             zt_nonce       = excluded.zt_nonce,
+             zt_aad         = excluded.zt_aad,
+             zt_prf_salt    = excluded.zt_prf_salt,
+             zt_credential_id = excluded.zt_credential_id",
+        key, owner_id, body.value, body.ttl_hours, ttl_sliding, expires_at, open_access,
+        body.zt_ciphertext, body.zt_wrapped_dek, body.zt_nonce, body.zt_aad,
+        body.zt_prf_salt, body.zt_credential_id
     )
     .execute(&state.pool)
     .await?;
@@ -215,3 +256,98 @@ pub async fn list_entries(
 
     Ok(Json(rows))
 }
+
+// ── Zero Trust payload retrieval ─────────────────────────────────────────────
+
+/// Claims embedded in the short-lived ZT JWT issued after a successful WebAuthn assertion.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ZtClaims {
+    pub sub: String,     // owner_id
+    pub kv_key: String,  // the KV key this token is scoped to
+    pub jti: String,     // unique token ID (for single-use enforcement)
+    pub exp: usize,      // Unix timestamp expiry
+}
+
+#[derive(Serialize)]
+pub struct ZtPayloadResponse {
+    pub zt_ciphertext: String,
+    pub zt_wrapped_dek: String,
+    pub zt_nonce: String,
+    pub zt_aad: String,
+    pub zt_prf_salt: String,
+}
+
+/// Returns the encrypted ZT payload to a browser that has completed a WebAuthn ceremony.
+/// Protected by a short-lived single-use JWT scoped to this specific key.
+pub async fn get_zt_payload(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<ZtPayloadResponse>, AppError> {
+    // Extract and validate ZT JWT from Authorization: Bearer <token>
+    let raw_token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .ok_or(AppError::Unauthorized)?;
+
+    let signing_key = state.config.session_signing_key.as_bytes();
+    let token_data = decode::<ZtClaims>(
+        raw_token,
+        &DecodingKey::from_secret(signing_key),
+        &Validation::default(),
+    )
+    .map_err(|_| AppError::Unauthorized)?;
+
+    let claims = token_data.claims;
+
+    // Enforce: token must be scoped to exactly this key
+    if claims.kv_key != key {
+        return Err(AppError::Forbidden("token scoped to a different key".to_string()));
+    }
+
+    // Enforce single-use: reject if jti already consumed
+    let already_used: bool = sqlx::query_scalar!(
+        "SELECT COUNT(*) > 0 FROM zt_used_tokens WHERE jti = ?",
+        claims.jti
+    )
+    .fetch_one(&state.pool)
+    .await? != 0;
+
+    if already_used {
+        return Err(AppError::Forbidden("token already used".to_string()));
+    }
+
+    // Mark token as consumed (store jti with expiry timestamp for cleanup)
+    let exp_str = chrono::DateTime::from_timestamp(claims.exp as i64, 0)
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| "1970-01-01 00:00:00".to_string());
+    sqlx::query!(
+        "INSERT OR IGNORE INTO zt_used_tokens (jti, expires_at) VALUES (?, ?)",
+        claims.jti, exp_str
+    )
+    .execute(&state.pool)
+    .await?;
+
+    // Fetch ZT payload — owner scoped, entry must exist and not be expired
+    let row = sqlx::query!(
+        "SELECT zt_ciphertext, zt_wrapped_dek, zt_nonce, zt_aad, zt_prf_salt
+         FROM kv_entries
+         WHERE key = ? AND owner_id = ?
+           AND zt_ciphertext IS NOT NULL
+           AND (expires_at IS NULL OR expires_at > datetime('now'))",
+        key, claims.sub
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(Json(ZtPayloadResponse {
+        zt_ciphertext: row.zt_ciphertext.unwrap_or_default(),
+        zt_wrapped_dek: row.zt_wrapped_dek.unwrap_or_default(),
+        zt_nonce: row.zt_nonce.unwrap_or_default(),
+        zt_aad: row.zt_aad.unwrap_or_default(),
+        zt_prf_salt: row.zt_prf_salt.unwrap_or_default(),
+    }))
+}
+

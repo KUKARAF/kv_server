@@ -12,7 +12,7 @@
     <h1 id="share-title">Secure value</h1>
     <p id="key-label" class="share-key-label"></p>
 
-    <!-- step 1: request access -->
+    <!-- step 1: request access (approval_required flow) -->
     <div id="step-request" class="hidden">
       <p class="share-warn">This value requires approval from the key owner before you can retrieve it.</p>
       <button class="btn" onclick="requestAccess()">Request access</button>
@@ -31,7 +31,23 @@
       </button>
     </div>
 
-    <!-- step 3: approved, show value -->
+    <!-- step 3 (ZT): hardware key unlock -->
+    <div id="step-zt" class="hidden">
+      <p class="share-warn">
+        Decryption happens entirely in your browser. Your hardware key is required to read this secret.
+        The server never sees the plaintext.
+      </p>
+      <div id="zt-prf-warning" class="hidden">
+        <p class="share-error" style="font-size:13px;">
+          ⚠️ Your browser does not support the WebAuthn PRF extension required for Zero Trust secrets.
+          Please use a supported browser (Chrome 116+ or Firefox 119+) with a compatible hardware key.
+        </p>
+      </div>
+      <button class="btn" id="zt-unlock-btn" onclick="ztUnlock()">🔑 Unlock with hardware key</button>
+      <p id="zt-status" style="font-size:13px;margin-top:0.75rem;color:var(--muted)"></p>
+    </div>
+
+    <!-- step 4: approved / decrypted, show value -->
     <div id="step-result" class="hidden">
       <label class="share-result-label">Value</label>
       <textarea id="result-value" readonly rows="5" onclick="this.select()"></textarea>
@@ -53,8 +69,6 @@
     if (!key || !token) {
       showError('Invalid or expired share link.');
     } else {
-      // Try fetching the value immediately — works for one_time and already-approved keys.
-      // Only fall back to the approval flow if the server says pending approval.
       tryFetch();
     }
 
@@ -65,31 +79,28 @@
         });
         if (resp.ok) {
           const value = await resp.text();
-          document.getElementById('result-value').value = value;
-          document.getElementById('step-request').classList.add('hidden');
-          document.getElementById('step-result').classList.remove('hidden');
-          document.getElementById('share-icon').textContent = '✅';
-          document.getElementById('share-title').textContent = 'Here\'s your value';
+          showResult(value, 'Here\'s your value');
         } else if (resp.status === 403) {
           const body = await resp.json().catch(() => null);
           if (body?.error === 'pending approval') {
-            // approval_required key still waiting — reveal the request flow
             document.getElementById('step-request').classList.remove('hidden');
+          } else if (body?.error === 'zero_trust_required') {
+            showZtStep();
           } else {
             document.getElementById('step-request').classList.add('hidden');
             showError(body?.error || 'Access denied.');
           }
         } else if (resp.status === 401) {
-          document.getElementById('step-request').classList.add('hidden');
           showError('This link has expired or is invalid.');
         } else {
-          document.getElementById('step-request').classList.add('hidden');
           showError('Failed to retrieve value (error ' + resp.status + ').');
         }
       } catch {
         showError('Network error — please refresh and try again.');
       }
     }
+
+    // ── Approval flow ────────────────────────────────────────────────────────
 
     async function requestAccess() {
       clearError();
@@ -98,7 +109,6 @@
           method: 'POST',
           headers: { 'X-Api-Key': token },
         });
-
         if (resp.ok) {
           const data = await resp.json();
           showPending(data.confirm, data.approver);
@@ -134,22 +144,206 @@
           if (resp.ok) {
             stopPolling();
             const value = await resp.text();
-            document.getElementById('result-value').value = value;
             document.getElementById('step-pending').classList.add('hidden');
-            document.getElementById('step-result').classList.remove('hidden');
-            document.getElementById('share-icon').textContent = '✅';
-            document.getElementById('share-title').textContent = 'Approved!';
+            showResult(value, 'Approved!');
           } else if (resp.status === 401) {
             stopPolling();
             showError('This link has expired.');
           }
-          // 403 pending_approval = still waiting, keep polling
         } catch { /* network blip */ }
       }, 5000);
     }
 
     function stopPolling() {
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    // ── Zero Trust flow ──────────────────────────────────────────────────────
+
+    function showZtStep() {
+      document.getElementById('share-icon').textContent = '🔑';
+      document.getElementById('share-title').textContent = 'Hardware key required';
+      document.getElementById('step-request').classList.add('hidden');
+      document.getElementById('step-pending').classList.add('hidden');
+      document.getElementById('step-zt').classList.remove('hidden');
+
+      // Check PRF support before the user tries to click the button.
+      checkPrfSupport();
+    }
+
+    async function checkPrfSupport() {
+      // PRF extension is only available in a cross-origin isolated context
+      // (COOP/COEP headers) or when called from a WebAuthn ceremony.
+      // We can't detect it without trying; show a warning if the API is absent.
+      if (!window.PublicKeyCredential) {
+        document.getElementById('zt-prf-warning').classList.remove('hidden');
+        document.getElementById('zt-unlock-btn').disabled = true;
+        return;
+      }
+      // If PublicKeyCredentialCreationOptions supports PRF can be checked via
+      // PublicKeyCredential.getClientCapabilities() in newer browsers.
+      if (typeof PublicKeyCredential.getClientCapabilities === 'function') {
+        try {
+          const caps = await PublicKeyCredential.getClientCapabilities();
+          if (!caps?.['prf']) {
+            document.getElementById('zt-prf-warning').classList.remove('hidden');
+            document.getElementById('zt-unlock-btn').disabled = true;
+          }
+        } catch { /* older API, ignore */ }
+      }
+    }
+
+    async function ztUnlock() {
+      clearError();
+      const statusEl = document.getElementById('zt-status');
+      statusEl.textContent = '⏳ Contacting server…';
+
+      try {
+        // 1. Begin WebAuthn ceremony
+        const beginResp = await fetch('/webauthn/authenticate/begin', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Api-Key': token,
+          },
+          body: JSON.stringify({ key }),
+        });
+        if (!beginResp.ok) {
+          const err = await beginResp.json().catch(() => null);
+          throw new Error(err?.error || 'Failed to start authentication (error ' + beginResp.status + ').');
+        }
+        const { challenge_id, options } = await beginResp.json();
+
+        // 2. Decode challenge and allowCredentials from base64url
+        const publicKey = decodeWebAuthnOptions(options.publicKey);
+
+        statusEl.textContent = '🔑 Touch your hardware key when prompted…';
+
+        // 3. Browser WebAuthn assertion — PRF extension runs here
+        let assertion;
+        try {
+          assertion = await navigator.credentials.get({ publicKey });
+        } catch (e) {
+          if (e.name === 'NotAllowedError') {
+            statusEl.textContent = '';
+            showError('Hardware key interaction was cancelled or timed out.');
+            return;
+          }
+          throw e;
+        }
+
+        // Check if PRF output was returned (informational; browser does key derivation)
+        const prfResult = assertion.getClientExtensionResults?.()?.prf?.results?.first;
+        if (!prfResult) {
+          // PRF output not returned — browser may not support PRF or device doesn't.
+          // The decryption step below will still attempt and fail with a clear error.
+          console.warn('[ZT] PRF extension did not return a result. Decryption will fail.');
+        }
+
+        statusEl.textContent = '⏳ Verifying…';
+
+        // 4. Finish WebAuthn ceremony
+        const finishResp = await fetch('/webauthn/authenticate/finish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            challenge_id,
+            assertion: serializeAssertion(assertion),
+          }),
+        });
+        if (!finishResp.ok) {
+          const err = await finishResp.json().catch(() => null);
+          throw new Error(err?.error || 'WebAuthn verification failed (error ' + finishResp.status + ').');
+        }
+        const { zt_token } = await finishResp.json();
+
+        statusEl.textContent = '⏳ Fetching encrypted payload…';
+
+        // 5. Fetch ZT payload (ciphertext blobs)
+        const payloadResp = await fetch('/kv/' + encodeURIComponent(key) + '/zt-payload', {
+          headers: { 'Authorization': 'Bearer ' + zt_token },
+        });
+        if (!payloadResp.ok) {
+          const err = await payloadResp.json().catch(() => null);
+          throw new Error(err?.error || 'Failed to fetch payload (error ' + payloadResp.status + ').');
+        }
+        const payload = await payloadResp.json();
+
+        statusEl.textContent = '⏳ Decrypting…';
+
+        // 6. Client-side decryption using PRF-derived wrapping key
+        const plaintext = await ztDecrypt(assertion, payload);
+
+        statusEl.textContent = '';
+        document.getElementById('step-zt').classList.add('hidden');
+        showResult(plaintext, 'Decrypted successfully');
+        document.getElementById('share-icon').textContent = '✅';
+
+        // 7. Zero plaintext from memory on page hide/unload
+        window.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'hidden') {
+            const ta = document.getElementById('result-value');
+            if (ta) ta.value = '';
+          }
+        }, { once: true });
+
+      } catch (err) {
+        statusEl.textContent = '';
+        showError(err.message || 'Unexpected error during decryption.');
+      }
+    }
+
+    /**
+     * Client-side decryption:
+     * 1. Re-derive the wrapping key from PRF output (same salt as creation time).
+     * 2. Unwrap the DEK.
+     * 3. Decrypt the ciphertext with the DEK.
+     */
+    async function ztDecrypt(assertion, payload) {
+      const prfOutput = assertion.getClientExtensionResults?.()?.prf?.results?.first;
+      if (!prfOutput) {
+        throw new Error(
+          'PRF extension did not return key material. ' +
+          'Your browser or hardware key may not support the PRF extension.'
+        );
+      }
+
+      // Import PRF output as AES-KW key (wrapping key)
+      const wrappingKey = await crypto.subtle.importKey(
+        'raw', prfOutput, { name: 'AES-KW' }, false, ['unwrapKey']
+      );
+
+      // Unwrap the DEK
+      const wrappedDek = b64decode(payload.zt_wrapped_dek);
+      const dek = await crypto.subtle.unwrapKey(
+        'raw', wrappedDek, wrappingKey,
+        { name: 'AES-KW' },
+        { name: 'AES-GCM' },
+        false, ['decrypt']
+      );
+
+      // Decrypt the ciphertext
+      const ciphertext = b64decode(payload.zt_ciphertext);
+      const nonce = b64decode(payload.zt_nonce);
+      const aad = new TextEncoder().encode(payload.zt_aad);
+
+      const plaintextBytes = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv: nonce, additionalData: aad },
+        dek,
+        ciphertext
+      );
+
+      return new TextDecoder().decode(plaintextBytes);
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function showResult(value, title) {
+      document.getElementById('result-value').value = value;
+      document.getElementById('step-request').classList.add('hidden');
+      document.getElementById('step-result').classList.remove('hidden');
+      document.getElementById('share-icon').textContent = '✅';
+      document.getElementById('share-title').textContent = title;
     }
 
     async function copyValue() {
@@ -171,6 +365,60 @@
 
     function esc(s) {
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+
+    /** Decode a base64url string to ArrayBuffer */
+    function b64decode(b64) {
+      const padded = b64.replace(/-/g, '+').replace(/_/g, '/').padEnd(
+        b64.length + (4 - (b64.length % 4)) % 4, '='
+      );
+      const bin = atob(padded);
+      const buf = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+      return buf.buffer;
+    }
+
+    /** Encode ArrayBuffer to base64url */
+    function b64encode(buf) {
+      const bytes = new Uint8Array(buf);
+      let bin = '';
+      for (const b of bytes) bin += String.fromCharCode(b);
+      return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+    }
+
+    /**
+     * Decode WebAuthn options from the server: convert base64url challenge and
+     * allowCredentials id fields to ArrayBuffer as the browser API requires.
+     */
+    function decodeWebAuthnOptions(pk) {
+      const out = { ...pk };
+      if (pk.challenge) out.challenge = b64decode(pk.challenge);
+      if (pk.allowCredentials) {
+        out.allowCredentials = pk.allowCredentials.map(c => ({
+          ...c, id: b64decode(c.id),
+        }));
+      }
+      return out;
+    }
+
+    /**
+     * Serialize a PublicKeyCredential assertion to plain JSON for sending to /authenticate/finish.
+     * webauthn-rs expects the same structure the browser produces, with ArrayBuffers as base64url.
+     */
+    function serializeAssertion(cred) {
+      const resp = cred.response;
+      return {
+        id: cred.id,
+        rawId: b64encode(cred.rawId),
+        type: cred.type,
+        extensions: cred.getClientExtensionResults(),
+        response: {
+          authenticatorData: b64encode(resp.authenticatorData),
+          clientDataJSON: b64encode(resp.clientDataJSON),
+          signature: b64encode(resp.signature),
+          userHandle: resp.userHandle ? b64encode(resp.userHandle) : null,
+        },
+      };
     }
   </script>
 </body>

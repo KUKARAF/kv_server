@@ -1,7 +1,7 @@
 pub mod handlers;
 pub mod model;
 
-use crate::state::AppState;
+use crate::{state::AppState, webauthn};
 use axum::{
     routing::{delete, get, patch, post},
     Router,
@@ -24,4 +24,5 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/kv/scopes", get(handlers::list_scopes))
         .route("/kv/import", post(handlers::admin_import_kv))
         .route("/kv/:key", patch(handlers::admin_patch_kv).delete(handlers::admin_delete_kv))
+        .nest("/webauthn", webauthn::admin_router())
 }
