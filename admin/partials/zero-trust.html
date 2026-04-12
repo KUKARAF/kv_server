@@ -1,0 +1,141 @@
+<section>
+  <h2>Zero Trust</h2>
+
+  <div class="panel">
+    <h3>Registered Hardware Keys</h3>
+    <p style="font-size:13px;color:var(--muted);margin-bottom:1rem;">
+      Register your FIDO2 key (YubiKey, etc.) here before creating Zero Trust secrets.
+      Each secret is bound to the key that encrypted it — only that key can decrypt it.
+    </p>
+    <div id="zt-creds-list">Loading…</div>
+  </div>
+
+  <div class="panel">
+    <h3>Register a new key</h3>
+    <div class="form-inline">
+      <label>Label <input id="zt-reg-label" placeholder="YubiKey 5C NFC" class="input-sm"></label>
+      <button onclick="registerKey()">Register key</button>
+    </div>
+    <p id="zt-reg-status" style="font-size:13px;margin-top:.5rem;color:var(--muted)"></p>
+  </div>
+</section>
+
+<script>
+  async function loadCreds() {
+    const resp = await fetch('/api/admin/webauthn/credentials');
+    if (!resp.ok) { document.getElementById('zt-creds-list').textContent = 'Failed to load credentials.'; return; }
+    const creds = await resp.json();
+    const el = document.getElementById('zt-creds-list');
+    if (!creds.length) { el.innerHTML = '<p style="color:var(--muted);font-size:13px;">No keys registered yet.</p>'; return; }
+    el.innerHTML = `<table>
+      <thead><tr><th>Label</th><th>Credential ID</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+      <tbody>${creds.map(c => `
+        <tr>
+          <td>${esc(c.device_label)}</td>
+          <td><code style="font-size:11px">${esc(c.credential_id.slice(0, 20))}…</code></td>
+          <td>${esc(c.created_at)}</td>
+          <td>${c.last_used_at ? esc(c.last_used_at) : '—'}</td>
+          <td><button class="btn-danger" onclick="deleteCred('${esc(c.id)}', '${esc(c.device_label)}')">Remove</button></td>
+        </tr>`).join('')}
+      </tbody></table>`;
+  }
+  loadCreds();
+
+  async function registerKey() {
+    const label = document.getElementById('zt-reg-label').value.trim() || 'Hardware key';
+    const statusEl = document.getElementById('zt-reg-status');
+    statusEl.textContent = '⏳ Starting registration…';
+
+    try {
+      // 1. Begin registration
+      const beginResp = await fetch('/api/admin/webauthn/register/begin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_label: label }),
+      });
+      if (!beginResp.ok) {
+        const err = await beginResp.json().catch(() => null);
+        throw new Error(err?.error || 'Registration begin failed (' + beginResp.status + ')');
+      }
+      const { challenge_id, options } = await beginResp.json();
+
+      // 2. Run browser WebAuthn ceremony
+      statusEl.textContent = '🔑 Touch your hardware key when prompted…';
+      let cred;
+      try {
+        cred = await navigator.credentials.create({ publicKey: decodeCreateOptions(options.publicKey) });
+      } catch (e) {
+        if (e.name === 'NotAllowedError') { statusEl.textContent = ''; return; }
+        throw e;
+      }
+
+      // 3. Finish registration
+      statusEl.textContent = '⏳ Finalising…';
+      const finishResp = await fetch('/api/admin/webauthn/register/finish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challenge_id, label, credential: serializeCreation(cred) }),
+      });
+      if (!finishResp.ok) {
+        const err = await finishResp.json().catch(() => null);
+        throw new Error(err?.error || 'Registration finish failed (' + finishResp.status + ')');
+      }
+
+      statusEl.textContent = '✅ Key registered successfully!';
+      document.getElementById('zt-reg-label').value = '';
+      setTimeout(() => { statusEl.textContent = ''; }, 3000);
+      loadCreds();
+    } catch (err) {
+      statusEl.textContent = '❌ ' + (err.message || 'Registration failed.');
+    }
+  }
+
+  async function deleteCred(id, label) {
+    if (!confirm('Remove key "' + label + '"? Zero Trust secrets encrypted with this key will become unreadable.')) return;
+    const resp = await fetch('/api/admin/webauthn/credentials/' + encodeURIComponent(id), { method: 'DELETE' });
+    if (!resp.ok) { alert('Failed to remove key: ' + resp.status); return; }
+    loadCreds();
+  }
+
+  // ── WebAuthn helpers ──────────────────────────────────────────────────────
+
+  function b64d(s) {
+    const padded = s.replace(/-/g, '+').replace(/_/g, '/').padEnd(s.length + (4 - s.length % 4) % 4, '=');
+    const bin = atob(padded);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+  }
+
+  function b64e(buf) {
+    const bytes = new Uint8Array(buf instanceof ArrayBuffer ? buf : buf.buffer);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  }
+
+  function decodeCreateOptions(pk) {
+    const out = { ...pk };
+    if (pk.challenge) out.challenge = b64d(pk.challenge);
+    if (pk.user?.id) out.user = { ...pk.user, id: b64d(pk.user.id) };
+    if (pk.excludeCredentials) out.excludeCredentials = pk.excludeCredentials.map(c => ({ ...c, id: b64d(c.id) }));
+    return out;
+  }
+
+  function serializeCreation(cred) {
+    return {
+      id: cred.id,
+      rawId: b64e(cred.rawId),
+      type: cred.type,
+      response: {
+        attestationObject: b64e(cred.response.attestationObject),
+        clientDataJSON: b64e(cred.response.clientDataJSON),
+      },
+      extensions: cred.getClientExtensionResults(),
+    };
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+</script>

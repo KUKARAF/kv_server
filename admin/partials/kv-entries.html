@@ -138,7 +138,11 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prf_salt: prfSaltB64 }),
       });
-      if (!challResp.ok) { alert('Failed to get ZT challenge: ' + challResp.status); return false; }
+      if (!challResp.ok) {
+        const err = await challResp.json().catch(() => null);
+        alert('Failed to get ZT challenge: ' + (err?.error || challResp.status) + '\n\nHint: register a hardware key first in the Zero Trust tab.');
+        return false;
+      }
       const { options } = await challResp.json();
 
       // Run WebAuthn ceremony — PRF extension evaluates here in the browser
