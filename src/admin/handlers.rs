@@ -98,7 +98,7 @@ pub async fn revoke_key(
 ) -> Result<StatusCode, AppError> {
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
-        "UPDATE api_keys SET status = 'revoked' WHERE id = ? AND owner_id = ? AND status = 'active'",
+        "UPDATE api_keys SET status = 'revoked' WHERE id = ? AND owner_id = ? AND status IN ('active', 'pending_approval')",
         key_id, owner
     )
     .execute(&state.pool)
