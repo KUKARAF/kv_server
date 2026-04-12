@@ -172,24 +172,13 @@
     }
 
     async function checkPrfSupport() {
-      // PRF extension is only available in a cross-origin isolated context
-      // (COOP/COEP headers) or when called from a WebAuthn ceremony.
-      // We can't detect it without trying; show a warning if the API is absent.
+      // Only block if WebAuthn is completely absent.
+      // getClientCapabilities() is unreliable for PRF detection across browsers
+      // (e.g. Firefox 119+ supports PRF but doesn't report it via that API).
+      // If PRF is truly unsupported the ceremony will fail and we show an error then.
       if (!window.PublicKeyCredential) {
         document.getElementById('zt-prf-warning').classList.remove('hidden');
         document.getElementById('zt-unlock-btn').disabled = true;
-        return;
-      }
-      // If PublicKeyCredentialCreationOptions supports PRF can be checked via
-      // PublicKeyCredential.getClientCapabilities() in newer browsers.
-      if (typeof PublicKeyCredential.getClientCapabilities === 'function') {
-        try {
-          const caps = await PublicKeyCredential.getClientCapabilities();
-          if (!caps?.['prf']) {
-            document.getElementById('zt-prf-warning').classList.remove('hidden');
-            document.getElementById('zt-unlock-btn').disabled = true;
-          }
-        } catch { /* older API, ignore */ }
       }
     }
 
