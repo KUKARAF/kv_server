@@ -16,7 +16,8 @@ CREATE TABLE api_keys_new (
     created_at   TEXT NOT NULL DEFAULT (datetime('now')),
     last_used_at TEXT
 );
-INSERT INTO api_keys_new SELECT * FROM api_keys;
+INSERT INTO api_keys_new (id, key_hash, label, type, status, expires_at, owner_id, created_at, last_used_at)
+SELECT id, key_hash, label, type, status, expires_at, owner_id, created_at, last_used_at FROM api_keys;
 DROP TABLE api_keys;
 ALTER TABLE api_keys_new RENAME TO api_keys;
 CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash  ON api_keys(key_hash);
