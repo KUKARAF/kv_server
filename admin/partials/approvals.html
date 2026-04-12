@@ -87,12 +87,29 @@
   }
 
   function searchEmoji(input, id) {
-    const q = input.value.trim().toLowerCase();
+    const q = input.value.trim();
     const results = document.getElementById('results-' + id);
-    const pinned = getPinned(id);
 
-    const filtered = q
-      ? EMOJI_DATA.filter(d => d.n.includes(q))
+    // If input is entirely recognized emojis, auto-pin them (handles copy-paste)
+    const emojiSet = new Set(EMOJI_DATA.map(d => d.e));
+    const chars = [...q];
+    if (chars.length >= 1 && chars.length <= 3 && chars.every(c => emojiSet.has(c))) {
+      const pinned = getPinned(id);
+      for (const emoji of chars) {
+        if (pinned.length < 3) pinned.push(emoji);
+      }
+      savePinned(id, pinned);
+      input.value = '';
+      results.classList.add('hidden');
+      renderPinned(id, pinned);
+      updateConfirmBtn(id, pinned, [...document.getElementById('picker-' + id).dataset.expected]);
+      input.focus();
+      return;
+    }
+
+    const ql = q.toLowerCase();
+    const filtered = ql
+      ? EMOJI_DATA.filter(d => d.n.includes(ql))
       : EMOJI_DATA;
 
     if (!filtered.length) {
