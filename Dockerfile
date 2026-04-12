@@ -1,7 +1,7 @@
 FROM rust:alpine AS builder
 # openssl-dev is required by webauthn-rs; OPENSSL_STATIC links it into the binary
 # so the runtime image doesn't need OpenSSL shared libraries.
-RUN apk add --no-cache musl-dev sqlite-dev openssl-dev
+RUN apk add --no-cache musl-dev sqlite-dev openssl-dev openssl-libs-static
 WORKDIR /app
 COPY . .
 ARG VERSION=dev
