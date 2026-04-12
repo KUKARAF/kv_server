@@ -74,7 +74,7 @@
             <div class="emoji-pinned" id="pinned-${a.id}"></div>
             <input class="emoji-search" type="text" placeholder="Search emoji…"
                    oninput="searchEmoji(this, '${a.id}')"
-                   onfocus="searchEmoji(this, '${a.id}')">
+                   onfocus="searchEmoji(this, '${a.id}')" onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('confirm-${a.id}').click();}">
             <div class="emoji-results hidden" id="results-${a.id}"></div>
             <div class="approval-btns">
               <button class="btn-approve" id="confirm-${a.id}" disabled
