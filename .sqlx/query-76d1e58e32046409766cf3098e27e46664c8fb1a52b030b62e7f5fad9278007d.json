@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO zero_trust_credentials (id, owner_id, credential_id, public_key_cose, device_label)\n         VALUES (?, ?, ?, ?, ?)\n         ON CONFLICT(credential_id) DO UPDATE SET\n             public_key_cose = excluded.public_key_cose,\n             last_used_at    = datetime('now')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "76d1e58e32046409766cf3098e27e46664c8fb1a52b030b62e7f5fad9278007d"
+}

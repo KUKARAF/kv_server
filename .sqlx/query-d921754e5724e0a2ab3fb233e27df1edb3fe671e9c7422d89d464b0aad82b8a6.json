@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext\n             FROM kv_entries\n             WHERE key = ? AND owner_id = ?\n               AND (expires_at IS NULL OR expires_at > datetime('now'))",
+  "describe": {
+    "columns": [
+      {
+        "name": "value",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "ttl_hours",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "ttl_sliding",
+        "ordinal": 2,
+        "type_info": "Int64"
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "zt_ciphertext",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "d921754e5724e0a2ab3fb233e27df1edb3fe671e9c7422d89d464b0aad82b8a6"
+}

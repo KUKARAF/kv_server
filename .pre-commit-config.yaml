@@ -10,14 +10,14 @@ repos:
     hooks:
       - id: cargo-check
         name: cargo check
-        entry: bash -c 'SQLX_OFFLINE=true cargo check 2>&1'
+        entry: bash -c 'PKG_CONFIG_PATH="/nix/store/fgm3pz8486ksh3f94629lpb7xjr2wjp7-openssl-3.6.0-dev/lib/pkgconfig" SQLX_OFFLINE=true cargo check 2>&1'
         language: system
         pass_filenames: false
         always_run: true
 
       - id: cargo-clippy
         name: cargo clippy
-        entry: bash -c 'SQLX_OFFLINE=true cargo clippy -- -D warnings 2>&1'
+        entry: bash -c 'PKG_CONFIG_PATH="/nix/store/fgm3pz8486ksh3f94629lpb7xjr2wjp7-openssl-3.6.0-dev/lib/pkgconfig" SQLX_OFFLINE=true cargo clippy -- -D warnings 2>&1'
         language: system
         pass_filenames: false
         always_run: true

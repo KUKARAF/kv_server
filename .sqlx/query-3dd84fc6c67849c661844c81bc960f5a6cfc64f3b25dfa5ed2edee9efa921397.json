@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT credential_id FROM zero_trust_credentials WHERE owner_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "credential_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "3dd84fc6c67849c661844c81bc960f5a6cfc64f3b25dfa5ed2edee9efa921397"
+}

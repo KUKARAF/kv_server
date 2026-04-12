@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) > 0 FROM zt_used_tokens WHERE jti = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "COUNT(*) > 0",
+        "ordinal": 0,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "894168331637dc06962ef421e356fb12832199e0ec2c58f58d323c15a0363e71"
+}

@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, credential_id, device_label, created_at, last_used_at\n         FROM zero_trust_credentials\n         WHERE owner_id = ?\n         ORDER BY created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "credential_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_label",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_used_at",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "06aae57d3c202791873b862932619adac0af288f10c5c7f31cf9d1113c70e01e"
+}

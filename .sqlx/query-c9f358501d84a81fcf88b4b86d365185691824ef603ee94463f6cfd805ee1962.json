@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM zero_trust_credentials WHERE id = ? AND owner_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c9f358501d84a81fcf88b4b86d365185691824ef603ee94463f6cfd805ee1962"
+}

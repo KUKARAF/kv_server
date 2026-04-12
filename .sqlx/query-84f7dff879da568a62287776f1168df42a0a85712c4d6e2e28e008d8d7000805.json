@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO zt_used_tokens (jti, expires_at) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "84f7dff879da568a62287776f1168df42a0a85712c4d6e2e28e008d8d7000805"
+}

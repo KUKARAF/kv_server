@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT zt_ciphertext, zt_wrapped_dek, zt_nonce, zt_aad, zt_prf_salt\n         FROM kv_entries\n         WHERE key = ? AND owner_id = ?\n           AND zt_ciphertext IS NOT NULL\n           AND (expires_at IS NULL OR expires_at > datetime('now'))",
+  "describe": {
+    "columns": [
+      {
+        "name": "zt_ciphertext",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "zt_wrapped_dek",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "zt_nonce",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "zt_aad",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "zt_prf_salt",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "9a8218375a7b74069f7eaff46507ba724552943fe78537251c01914a7a1782c6"
+}

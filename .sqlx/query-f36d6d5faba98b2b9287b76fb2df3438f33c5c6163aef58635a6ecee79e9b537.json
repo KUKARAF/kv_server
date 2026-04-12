@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT zt_prf_salt, zt_credential_id\n         FROM kv_entries\n         WHERE key = ? AND owner_id = ?\n           AND zt_ciphertext IS NOT NULL\n           AND (expires_at IS NULL OR expires_at > datetime('now'))",
+  "describe": {
+    "columns": [
+      {
+        "name": "zt_prf_salt",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "zt_credential_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "f36d6d5faba98b2b9287b76fb2df3438f33c5c6163aef58635a6ecee79e9b537"
+}

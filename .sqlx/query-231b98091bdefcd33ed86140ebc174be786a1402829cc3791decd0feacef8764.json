@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE zero_trust_credentials\n                 SET last_used_at = datetime('now')\n                 WHERE credential_id = ? AND owner_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "231b98091bdefcd33ed86140ebc174be786a1402829cc3791decd0feacef8764"
+}
