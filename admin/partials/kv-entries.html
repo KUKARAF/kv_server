@@ -421,6 +421,12 @@
     const out = { ...pk };
     if (pk.challenge) out.challenge = b64uDecode(pk.challenge);
     if (pk.allowCredentials) out.allowCredentials = pk.allowCredentials.map(c => ({ ...c, id: b64uDecode(c.id) }));
+    if (pk.extensions?.prf?.eval?.first) {
+      out.extensions = {
+        ...pk.extensions,
+        prf: { ...pk.extensions.prf, eval: { ...pk.extensions.prf.eval, first: b64uDecode(pk.extensions.prf.eval.first) } },
+      };
+    }
     return out;
   }
 </script>

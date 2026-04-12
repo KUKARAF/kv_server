@@ -398,6 +398,12 @@
           ...c, id: b64decode(c.id),
         }));
       }
+      if (pk.extensions?.prf?.eval?.first) {
+        out.extensions = {
+          ...pk.extensions,
+          prf: { ...pk.extensions.prf, eval: { ...pk.extensions.prf.eval, first: b64decode(pk.extensions.prf.eval.first) } },
+        };
+      }
       return out;
     }
 
