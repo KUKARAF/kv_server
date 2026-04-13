@@ -46,37 +46,6 @@
   <div id="keys-list" hx-get="/api/admin/keys" hx-trigger="load" hx-swap="none">
     Loading…
   </div>
-
-  <h2 style="margin-top:2rem;">Request Links</h2>
-  <p style="color:#666;font-size:12px;margin-bottom:1rem;">
-    Generate a one-time link to send to someone so they can provide you with secrets.
-    The link expires after the first submission.
-  </p>
-
-  <form id="secret-request-form" onsubmit="return createSecretRequest(event)" class="panel">
-    <h3>Generate request link</h3>
-    <label>Description (shown to recipient, optional)
-      <input name="description" placeholder="e.g. Please provide your database credentials">
-    </label>
-    <label style="margin-top:0.6rem;">Scope label (applied to submitted entries, optional)
-      <input name="scope" list="key-scopes-list" placeholder="e.g. myapp/production">
-    </label>
-    <button type="submit" style="margin-top:0.75rem;">Generate link</button>
-  </form>
-
-  <div id="secret-request-reveal" class="share-reveal hidden" style="margin-bottom:1.25rem;">
-    <div class="share-reveal-header">
-      <span>🔏 Request link generated — share it now</span>
-      <button type="button" class="btn-icon" onclick="document.getElementById('secret-request-reveal').classList.add('hidden')">✕</button>
-    </div>
-    <p class="share-reveal-warn">Send this link to the person you want secrets from. It works <strong>once</strong> — after submission it deactivates.</p>
-    <div class="share-reveal-url">
-      <code id="secret-request-url"></code>
-      <button type="button" class="btn-secondary" onclick="copyRequestLink()">Copy</button>
-    </div>
-  </div>
-
-  <div id="secret-requests-list">Loading…</div>
 </section>
 
 <script>
@@ -180,75 +149,5 @@
 
   function esc(s) {
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  }
-
-  // ── Secret request links ──────────────────────────────────────────────────
-
-  loadSecretRequests();
-
-  async function createSecretRequest(e) {
-    e.preventDefault();
-    const form = e.target;
-    const body = {
-      description: form.description.value.trim() || null,
-      scope: form.scope.value.trim() || null,
-    };
-
-    const resp = await fetch('/api/admin/secret-requests', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!resp.ok) { alert('Error creating request link: ' + resp.status); return false; }
-
-    const data = await resp.json();
-    const url = location.origin + '/collect?id=' + encodeURIComponent(data.id);
-    document.getElementById('secret-request-url').textContent = url;
-    document.getElementById('secret-request-reveal').classList.remove('hidden');
-    form.reset();
-    loadSecretRequests();
-    return false;
-  }
-
-  function copyRequestLink() {
-    navigator.clipboard.writeText(document.getElementById('secret-request-url').textContent);
-  }
-
-  async function loadSecretRequests() {
-    const resp = await fetch('/api/admin/secret-requests');
-    if (!resp.ok) return;
-    renderSecretRequests(await resp.json());
-  }
-
-  function renderSecretRequests(rows) {
-    const el = document.getElementById('secret-requests-list');
-    if (!rows.length) { el.innerHTML = '<p style="color:#555;font-size:13px;">No request links yet.</p>'; return; }
-    el.innerHTML = `<table>
-      <thead><tr><th>Description</th><th>Scope</th><th>Status</th><th>Created</th><th>Fulfilled</th><th></th></tr></thead>
-      <tbody>${rows.map(r => {
-        const canRevoke = r.status === 'pending';
-        const action = canRevoke
-          ? `<button class="btn-secondary"
-                     onclick="revokeSecretRequest('${esc(r.id)}', this)">Revoke</button>`
-          : '';
-        return `<tr>
-          <td>${r.description ? esc(r.description) : '<span style="color:#444">—</span>'}</td>
-          <td>${r.scope ? `<span class="badge badge-scope">${esc(r.scope)}</span>` : '<span style="color:#444">—</span>'}</td>
-          <td><span class="badge badge-${esc(r.status)}">${esc(r.status)}</span></td>
-          <td>${esc(r.created_at.slice(0, 16))}</td>
-          <td>${r.fulfilled_at ? esc(r.fulfilled_at.slice(0, 16)) : '—'}</td>
-          <td>${action}</td>
-        </tr>`;
-      }).join('')}
-      </tbody></table>`;
-  }
-
-  async function revokeSecretRequest(id, btn) {
-    if (!confirm('Revoke this request link? It will no longer accept submissions.')) return;
-    const resp = await fetch('/api/admin/secret-requests/' + encodeURIComponent(id) + '/revoke', {
-      method: 'POST',
-    });
-    if (!resp.ok) { alert('Failed to revoke: ' + resp.status); return; }
-    loadSecretRequests();
   }
 </script>
