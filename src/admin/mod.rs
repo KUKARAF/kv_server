@@ -17,6 +17,14 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/approvals", get(handlers::list_approvals))
         .route("/approvals/:id/approve", post(handlers::approve_request))
         .route("/approvals/:id/reject", post(handlers::reject_request))
+        .route(
+            "/secret-requests",
+            get(handlers::list_secret_requests).post(handlers::create_secret_request),
+        )
+        .route(
+            "/secret-requests/:id/revoke",
+            post(handlers::revoke_secret_request),
+        )
         .route("/session", get(handlers::get_session))
         .route("/session/token", get(handlers::get_session_token))
         .route("/session/device-token", post(handlers::create_device_token))

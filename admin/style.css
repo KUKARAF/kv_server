@@ -131,6 +131,7 @@ code { font-family: monospace; font-size: 12px; background: #1a1a1a; padding: 1p
 .badge-active, .badge-approved { background: #14532d; color: #86efac; }
 .badge-pending_approval, .badge-pending { background: #713f12; color: #fde68a; }
 .badge-revoked, .badge-rejected, .badge-used { background: #450a0a; color: #fca5a5; }
+.badge-fulfilled { background: #14532d; color: #86efac; }
 .badge-standard { background: #1e3a5f; color: #93c5fd; }
 .badge-one_time { background: #2d1b69; color: #c4b5fd; }
 .badge-approval_required { background: #713f12; color: #fde68a; }

@@ -112,6 +112,50 @@ pub struct ApproveRequest {
     pub confirm: String, // emoji sequence submitted by admin — must match stored sequence
 }
 
+// ── Secret request links ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CreateSecretRequestBody {
+    pub description: Option<String>,
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateSecretRequestResponse {
+    pub id: String,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct SecretRequestRow {
+    pub id: String,
+    pub owner_label: String,
+    pub description: Option<String>,
+    pub scope: Option<String>,
+    pub status: String,
+    pub created_at: String,
+    pub fulfilled_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SecretRequestPublic {
+    pub owner_label: String,
+    pub description: Option<String>,
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitSecretRequestBody {
+    pub entries: Vec<SubmitEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitEntry {
+    pub key: String,
+    pub value: String,
+}
+
+// ── Session ──────────────────────────────────────────────────────────────────
+
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SessionRow {
     pub id: String,

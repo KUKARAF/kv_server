@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Provide secrets — kv.osmosis.page</title>
+  <link rel="stylesheet" href="/admin/style.css">
+  <style>
+    .collect-box {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 2.5rem;
+      max-width: 560px;
+      width: 100%;
+    }
+    .collect-icon { font-size: 3rem; margin-bottom: 0.75rem; text-align: center; }
+    .collect-box h1 { font-size: 1.3rem; margin-bottom: 0.5rem; text-align: center; }
+    .collect-desc { color: #aaa; font-size: 13px; margin-bottom: 1.5rem; line-height: 1.6; text-align: center; }
+    .kv-pairs { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
+    .kv-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; }
+    .kv-row input { margin-top: 0; }
+    .env-upload-label {
+      display: block;
+      font-size: 12px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.4rem;
+    }
+    .env-area { font-family: monospace; font-size: 12px; min-height: 80px; resize: vertical; }
+    .divider { display: flex; align-items: center; gap: 0.75rem; margin: 1rem 0; color: #444; font-size: 12px; }
+    .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #2a2a2a; }
+    .submit-row { display: flex; justify-content: flex-end; margin-top: 1rem; }
+    .success-box { text-align: center; }
+    .success-box .success-icon { font-size: 3rem; margin-bottom: 1rem; }
+    .success-box p { color: #86efac; font-size: 14px; }
+  </style>
+</head>
+<body class="login-page">
+  <div class="collect-box">
+    <div class="collect-icon">🔏</div>
+    <h1 id="page-title">Requested values</h1>
+    <p id="page-desc" class="collect-desc hidden"></p>
+
+    <div id="step-form">
+      <p class="label-sm" style="margin-bottom:0.5rem;">Key / Value pairs</p>
+      <div class="kv-pairs" id="kv-pairs">
+        <div class="kv-row">
+          <input placeholder="KEY_NAME" class="kv-key" autocomplete="off" spellcheck="false">
+          <input placeholder="value" class="kv-val" autocomplete="off">
+          <button type="button" class="btn-icon" onclick="removeRow(this)" title="Remove">✕</button>
+        </div>
+      </div>
+      <button type="button" class="btn-secondary" onclick="addRow()" style="margin-bottom:1rem;">+ Add row</button>
+
+      <div class="divider">or paste a .env file</div>
+
+      <span class="env-upload-label">Paste .env contents</span>
+      <textarea id="env-paste" class="env-area" placeholder="DATABASE_URL=postgres://...&#10;SECRET_KEY=abc123&#10;API_TOKEN=xyz789"></textarea>
+
+      <div class="submit-row">
+        <button type="button" class="btn" onclick="submitSecrets()">Submit secrets</button>
+      </div>
+      <p id="error-msg" class="share-error hidden"></p>
+    </div>
+
+    <div id="step-done" class="success-box hidden">
+      <div class="success-icon">✅</div>
+      <p>Secrets received. This link has been deactivated.</p>
+    </div>
+
+    <div id="step-invalid" class="success-box hidden">
+      <div class="success-icon">🚫</div>
+      <p id="invalid-reason" style="color:#fca5a5;font-size:14px;"></p>
+    </div>
+  </div>
+
+  <script>
+    const id = new URLSearchParams(location.search).get('id');
+
+    if (!id) {
+      showInvalid('Invalid link — no request ID found.');
+    } else {
+      loadRequest();
+    }
+
+    async function loadRequest() {
+      try {
+        const resp = await fetch('/api/collect/' + encodeURIComponent(id));
+        if (resp.status === 404) { showInvalid('This link does not exist.'); return; }
+        if (!resp.ok) { showInvalid('Failed to load request (' + resp.status + ').'); return; }
+
+        const data = await resp.json();
+
+        document.getElementById('page-title').textContent = data.owner_label + ' requested values:';
+
+        if (data.description) {
+          const desc = document.getElementById('page-desc');
+          desc.textContent = data.description;
+          desc.classList.remove('hidden');
+        }
+
+        if (data.status === 'fulfilled') {
+          showInvalid('This link has already been used.');
+        } else if (data.status === 'revoked') {
+          showInvalid('This link has been revoked.');
+        }
+      } catch (e) {
+        showInvalid('Could not reach the server.');
+      }
+    }
+
+    function addRow() {
+      const row = document.createElement('div');
+      row.className = 'kv-row';
+      row.innerHTML = `
+        <input placeholder="KEY_NAME" class="kv-key" autocomplete="off" spellcheck="false">
+        <input placeholder="value" class="kv-val" autocomplete="off">
+        <button type="button" class="btn-icon" onclick="removeRow(this)" title="Remove">✕</button>
+      `;
+      document.getElementById('kv-pairs').appendChild(row);
+    }
+
+    function removeRow(btn) {
+      const rows = document.querySelectorAll('.kv-row');
+      if (rows.length <= 1) {
+        btn.closest('.kv-row').querySelectorAll('input').forEach(i => i.value = '');
+        return;
+      }
+      btn.closest('.kv-row').remove();
+    }
+
+    function parseEnv(text) {
+      const entries = [];
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eq = trimmed.indexOf('=');
+        if (eq === -1) continue;
+        const key = trimmed.slice(0, eq).trim();
+        let value = trimmed.slice(eq + 1).trim();
+        if ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))) {
+          value = value.slice(1, -1);
+        }
+        if (key) entries.push({ key, value });
+      }
+      return entries;
+    }
+
+    async function submitSecrets() {
+      hideError();
+
+      const entries = [];
+
+      // KV rows
+      document.querySelectorAll('.kv-row').forEach(row => {
+        const key = row.querySelector('.kv-key').value.trim();
+        const value = row.querySelector('.kv-val').value;
+        if (key) entries.push({ key, value });
+      });
+
+      // .env paste
+      const envText = document.getElementById('env-paste').value.trim();
+      if (envText) {
+        entries.push(...parseEnv(envText));
+      }
+
+      if (entries.length === 0) {
+        showError('Please add at least one key-value pair.');
+        return;
+      }
+
+      try {
+        const resp = await fetch('/api/collect/' + encodeURIComponent(id) + '/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ entries }),
+        });
+
+        if (resp.status === 403) {
+          showInvalid('This link has already been used or revoked.');
+          return;
+        }
+        if (!resp.ok) {
+          showError('Submission failed (' + resp.status + '). Please try again.');
+          return;
+        }
+
+        document.getElementById('step-form').classList.add('hidden');
+        document.getElementById('step-done').classList.remove('hidden');
+      } catch (e) {
+        showError('Could not reach the server. Please check your connection.');
+      }
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('error-msg');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+
+    function hideError() {
+      document.getElementById('error-msg').classList.add('hidden');
+    }
+
+    function showInvalid(reason) {
+      document.getElementById('step-form').classList.add('hidden');
+      document.getElementById('step-invalid').classList.remove('hidden');
+      document.getElementById('invalid-reason').textContent = reason;
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT owner_id, scope, status FROM secret_requests WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "owner_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "scope",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "c88f95c728fe9e43c2221ce7d0cdc2f97740c63a17c919e14593e20d7bf32072"
+}

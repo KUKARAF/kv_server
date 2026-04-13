@@ -478,6 +478,138 @@ fn unquote(s: &str) -> String {
     }
 }
 
+// ── Secret request links ─────────────────────────────────────────────────────
+
+pub async fn create_secret_request(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    Json(body): Json<CreateSecretRequestBody>,
+) -> Result<(StatusCode, Json<CreateSecretRequestResponse>), AppError> {
+    let owner = &auth.0.oidc_subject;
+    let email = &auth.0.email;
+    let id = Uuid::new_v4().to_string();
+
+    sqlx::query!(
+        "INSERT INTO secret_requests (id, owner_id, owner_label, description, scope)
+         VALUES (?, ?, ?, ?, ?)",
+        id, owner, email, body.description, body.scope
+    )
+    .execute(&state.pool)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(CreateSecretRequestResponse { id })))
+}
+
+pub async fn list_secret_requests(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+) -> Result<Json<Vec<SecretRequestRow>>, AppError> {
+    let owner = &auth.0.oidc_subject;
+    let rows = sqlx::query_as!(
+        SecretRequestRow,
+        "SELECT id, owner_label, description, scope, status, created_at, fulfilled_at
+         FROM secret_requests WHERE owner_id = ? ORDER BY created_at DESC",
+        owner
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+pub async fn revoke_secret_request(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
+    let result = sqlx::query!(
+        "UPDATE secret_requests SET status = 'revoked'
+         WHERE id = ? AND owner_id = ? AND status = 'pending'",
+        id, owner
+    )
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Public — no admin auth. Returns minimal metadata to render the collect page.
+pub async fn get_secret_request_public(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<SecretRequestPublic>, AppError> {
+    let row = sqlx::query!(
+        "SELECT owner_label, description, status FROM secret_requests WHERE id = ?",
+        id
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(Json(SecretRequestPublic {
+        owner_label: row.owner_label,
+        description: row.description,
+        status: row.status,
+    }))
+}
+
+/// Public — no admin auth. Inserts submitted entries into the owner's KV store,
+/// then marks the request as fulfilled (one-time use).
+pub async fn submit_secret_request(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<SubmitSecretRequestBody>,
+) -> Result<StatusCode, AppError> {
+    let mut tx = state.pool.begin().await?;
+
+    let row = sqlx::query!(
+        "SELECT owner_id, scope, status FROM secret_requests WHERE id = ?",
+        id
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if row.status != "pending" {
+        return Err(AppError::Forbidden(
+            "this request link has already been used or revoked".to_string(),
+        ));
+    }
+
+    sqlx::query!(
+        "UPDATE secret_requests SET status = 'fulfilled', fulfilled_at = datetime('now') WHERE id = ?",
+        id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    let owner_id = row.owner_id;
+    let scope = row.scope;
+
+    for entry in &body.entries {
+        let key = entry.key.trim().to_string();
+        if key.is_empty() {
+            continue;
+        }
+        sqlx::query!(
+            "INSERT INTO kv_entries (key, owner_id, value, scope)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(key, owner_id) DO UPDATE SET
+                 value = excluded.value,
+                 scope = excluded.scope",
+            key, owner_id, entry.value, scope
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ── Session ─────────────────────────────────────────────────────────────────
 
 pub async fn get_session(

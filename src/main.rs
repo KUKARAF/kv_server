@@ -15,7 +15,7 @@ use axum::{
     body::Body,
     http::{Response, StatusCode},
     middleware as axum_middleware,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use include_dir::{include_dir, Dir};
@@ -77,9 +77,15 @@ async fn main() -> Result<()> {
         .nest("/auth", auth::router())
         .nest("/webauthn", webauthn::router())
         .nest("/api/admin", admin::router())
+        .route("/api/collect/:id", get(admin::handlers::get_secret_request_public))
+        .route(
+            "/api/collect/:id/submit",
+            post(admin::handlers::submit_secret_request),
+        )
         .route("/admin/", get(serve_dashboard))
         .route("/admin/*path", get(serve_admin_static))
         .route("/share", get(serve_share))
+        .route("/collect", get(serve_collect))
         .route("/", get(serve_index))
         .layer(axum_middleware::from_fn_with_state(
             Arc::clone(&state),
@@ -133,6 +139,10 @@ async fn serve_index() -> Response<Body> {
 
 async fn serve_share() -> Response<Body> {
     serve_file("share.html", "text/html")
+}
+
+async fn serve_collect() -> Response<Body> {
+    serve_file("collect.html", "text/html")
 }
 
 async fn serve_dashboard() -> Response<Body> {

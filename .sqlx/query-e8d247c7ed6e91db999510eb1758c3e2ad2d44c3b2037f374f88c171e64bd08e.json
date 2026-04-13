@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE secret_requests SET status = 'revoked'\n         WHERE id = ? AND owner_id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e8d247c7ed6e91db999510eb1758c3e2ad2d44c3b2037f374f88c171e64bd08e"
+}
