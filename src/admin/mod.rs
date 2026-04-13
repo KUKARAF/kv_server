@@ -25,6 +25,10 @@ pub fn router() -> Router<Arc<AppState>> {
             "/secret-requests/:id/revoke",
             post(handlers::revoke_secret_request),
         )
+        .route(
+            "/secret-requests/:id",
+            delete(handlers::delete_secret_request),
+        )
         .route("/session", get(handlers::get_session))
         .route("/session/token", get(handlers::get_session_token))
         .route("/session/device-token", post(handlers::create_device_token))

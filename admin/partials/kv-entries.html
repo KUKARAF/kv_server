@@ -471,16 +471,17 @@
     el.innerHTML = `<table>
       <thead><tr><th>Description</th><th>Scope</th><th>Status</th><th>Created</th><th>Fulfilled</th><th></th></tr></thead>
       <tbody>${rows.map(r => {
-        const action = r.status === 'pending'
-          ? `<button class="btn-secondary" onclick="revokeSecretRequest('${esc(r.id)}')">Revoke</button>`
-          : '';
+        const actions = (r.status === 'pending'
+          ? `<button class="btn-secondary" onclick="revokeSecretRequest('${esc(r.id)}')">Revoke</button> `
+          : '')
+          + `<button class="btn-icon" onclick="deleteSecretRequest('${esc(r.id)}')" title="Delete">🗑️</button>`;
         return `<tr>
           <td>${r.description ? esc(r.description) : '<span style="color:#444">—</span>'}</td>
           <td>${r.scope ? `<span class="badge badge-scope">${esc(r.scope)}</span>` : '<span style="color:#444">—</span>'}</td>
           <td><span class="badge badge-${esc(r.status)}">${esc(r.status)}</span></td>
           <td>${esc(r.created_at.slice(0, 16))}</td>
           <td>${r.fulfilled_at ? esc(r.fulfilled_at.slice(0, 16)) : '—'}</td>
-          <td>${action}</td>
+          <td style="white-space:nowrap">${actions}</td>
         </tr>`;
       }).join('')}
       </tbody></table>`;
@@ -490,6 +491,13 @@
     if (!confirm('Revoke this request link? It will no longer accept submissions.')) return;
     const resp = await fetch('/api/admin/secret-requests/' + encodeURIComponent(id) + '/revoke', { method: 'POST' });
     if (!resp.ok) { alert('Failed to revoke: ' + resp.status); return; }
+    loadSecretRequests();
+  }
+
+  async function deleteSecretRequest(id) {
+    if (!confirm('Permanently delete this request link?')) return;
+    const resp = await fetch('/api/admin/secret-requests/' + encodeURIComponent(id), { method: 'DELETE' });
+    if (!resp.ok) { alert('Failed to delete: ' + resp.status); return; }
     loadSecretRequests();
   }
 

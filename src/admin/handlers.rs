@@ -536,6 +536,25 @@ pub async fn revoke_secret_request(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn delete_secret_request(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
+    let result = sqlx::query!(
+        "DELETE FROM secret_requests WHERE id = ? AND owner_id = ?",
+        id, owner
+    )
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Public — no admin auth. Returns minimal metadata to render the collect page.
 pub async fn get_secret_request_public(
     State(state): State<Arc<AppState>>,
