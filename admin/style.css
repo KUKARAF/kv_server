@@ -23,7 +23,8 @@ nav {
   background: #1a1a1a;
   border-bottom: 1px solid #2a2a2a;
 }
-.brand { font-weight: 600; margin-right: 1rem; color: #aaa; }
+.brand { margin-right: 1rem; text-decoration: none; }
+.brand-logo { height: 28px; width: auto; display: block; }
 .tab-btn {
   background: none;
   border: none;
@@ -239,6 +240,8 @@ code { font-family: monospace; font-size: 12px; background: #1a1a1a; padding: 1p
 .share-reveal-url code { flex: 1; font-size: 11px; word-break: break-all; background: #111; padding: 0.4rem 0.6rem; border-radius: 4px; }
 
 /* Share page */
+.share-brand { margin-bottom: 1.5rem; display: flex; justify-content: center; }
+.share-brand-logo { height: 32px; width: auto; }
 .share-box { background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 2.5rem; max-width: 480px; width: 100%; text-align: center; }
 .share-icon { font-size: 3rem; margin-bottom: 0.75rem; }
 .share-box h1 { font-size: 1.4rem; margin-bottom: 0.5rem; }
