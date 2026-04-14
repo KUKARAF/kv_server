@@ -17,6 +17,9 @@
     <button onclick="showTab('zero-trust')" class="tab-btn" id="tab-zero-trust">Zero Trust</button>
     <button onclick="showTab('session')" class="tab-btn" id="tab-session">Session</button>
     <button onclick="copySession()" class="tab-btn" title="Copy session token">📋</button>
+    <span class="nav-spacer"></span>
+    <span id="nav-user" class="nav-user"></span>
+    <button onclick="logout()" class="tab-btn nav-logout">Logout</button>
   </nav>
 
   <main>
@@ -103,6 +106,20 @@
       } else {
         removeToast(btn.closest('.toast'));
       }
+    }
+
+    // ── Nav user info ────────────────────────────────────────────────────────
+    async function loadNavUser() {
+      const resp = await fetch('/api/admin/session');
+      if (!resp.ok) return;
+      const s = await resp.json();
+      document.getElementById('nav-user').textContent = s.email;
+    }
+    loadNavUser();
+
+    async function logout() {
+      await fetch('/api/admin/session/logout', { method: 'POST' });
+      window.location.href = '/auth/login';
     }
 
     // ── Copy session token ──────────────────────────────────────────────────

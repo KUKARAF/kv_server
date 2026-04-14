@@ -9,9 +9,10 @@ use crate::{
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Redirect, Response},
     Json,
 };
-use axum_extra::extract::cookie::CookieJar;
+use axum_extra::extract::cookie::{Cookie, CookieJar};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -659,6 +660,23 @@ pub async fn get_session_token(
         .map(|c| c.value().to_string())
         .ok_or(AppError::Unauthorized)?;
     Ok(Json(token))
+}
+
+pub async fn logout(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    _auth: AdminAuth,
+) -> Result<Response, AppError> {
+    if let Some(token) = jar.get("session_token").map(|c| c.value().to_string()) {
+        let _ = session::revoke_session(&state.pool, &token).await;
+    }
+    let clear = Cookie::build(("session_token", ""))
+        .http_only(true)
+        .secure(true)
+        .path("/")
+        .max_age(time::Duration::seconds(0))
+        .build();
+    Ok((jar.remove(clear), Redirect::to("/auth/login")).into_response())
 }
 
 /// Issues a long-lived device token (180 days) for the authenticated admin.

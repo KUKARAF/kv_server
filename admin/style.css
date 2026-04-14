@@ -25,6 +25,10 @@ nav {
 }
 .brand { margin-right: 1rem; text-decoration: none; }
 .brand-logo { height: 28px; width: auto; display: block; }
+.nav-spacer { flex: 1; }
+.nav-user { color: #888; font-size: 13px; }
+.nav-logout { color: #f87171; }
+.nav-logout:hover { color: #fff; background: #7f1d1d; }
 .tab-btn {
   background: none;
   border: none;

@@ -31,6 +31,7 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/session", get(handlers::get_session))
         .route("/session/token", get(handlers::get_session_token))
+        .route("/session/logout", post(handlers::logout))
         .route("/session/device-token", post(handlers::create_device_token))
         .route("/kv", get(handlers::list_kv_entries).put(handlers::admin_write_kv))
         .route("/kv/scopes", get(handlers::list_scopes))
