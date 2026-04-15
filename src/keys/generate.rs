@@ -24,16 +24,8 @@ pub fn generate_session_token() -> (String, String) {
     (plaintext, hash)
 }
 
-const EMOJI_POOL: &[&str] = &[
-    "🦊", "🐬", "🎸", "🌊", "🔥", "⚡", "🌈", "🎯",
-    "🦋", "🌙", "⭐", "🎪", "🦁", "🐉", "🌺", "🎨",
-    "🔮", "🎭", "🦄", "🌸", "🎵", "🏔", "🌿", "🦅",
-    "🐧", "🦀", "🌴", "🎃", "🦩", "🐙", "🌋", "🎠",
-    "🦜", "🐳", "🌵", "🎡", "🦢", "🐝", "🌻", "🎺",
-    "🦚", "🐞", "🌾", "🎻", "🦝", "🦋", "🍄", "🎲",
-    "🦠", "🌍", "🏜", "🎳", "🦌", "🌠", "🏝", "🎯",
-    "🦏", "🌌", "🏕", "🎪", "🦓", "🌅", "🏔", "🎭",
-];
+// Generated at compile time from admin/emoji.json — refresh with .tools/get_emojis.sh
+include!(concat!(env!("OUT_DIR"), "/emoji_pool.rs"));
 
 pub fn generate_emoji_sequence() -> String {
     let mut rng = rand::thread_rng();

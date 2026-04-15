@@ -164,10 +164,12 @@ code { font-family: monospace; font-size: 12px; background: #1a1a1a; padding: 1p
 .emoji-picker { display: flex; flex-direction: column; gap: 0.4rem; min-width: 220px; }
 .emoji-pinned { display: flex; gap: 0.3rem; align-items: center; min-height: 2rem; flex-wrap: wrap; }
 .pinned-chip {
-  display: inline-flex; align-items: center; gap: 2px;
-  background: #14532d; border-radius: 4px; padding: 2px 6px;
+  display: inline-flex; flex-direction: column; align-items: center; gap: 1px;
+  background: #14532d; border-radius: 4px; padding: 4px 8px;
   font-size: 1.3rem;
 }
+.pinned-chip-name { font-size: 10px; color: #86efac; line-height: 1; white-space: nowrap; }
+.pinned-chip-top { display: flex; align-items: center; gap: 2px; }
 .pinned-chip button {
   background: none; border: none; color: #86efac; cursor: pointer;
   font-size: 12px; padding: 0 2px; line-height: 1;

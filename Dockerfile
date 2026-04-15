@@ -1,7 +1,8 @@
 FROM rust:alpine AS builder
 # openssl-dev is required by webauthn-rs; OPENSSL_STATIC links it into the binary
 # so the runtime image doesn't need OpenSSL shared libraries.
-RUN apk add --no-cache musl-dev sqlite-dev openssl-dev openssl-libs-static
+# curl + jq are needed to fetch the emoji dataset before compilation.
+RUN apk add --no-cache musl-dev sqlite-dev openssl-dev openssl-libs-static curl jq
 WORKDIR /app
 COPY . .
 ARG VERSION=dev
@@ -9,6 +10,8 @@ ARG VERSION=dev
 ENV VERSION=$VERSION
 ENV SQLX_OFFLINE=true
 ENV OPENSSL_STATIC=1
+# Refresh emoji data from upstream so the build always has the latest set.
+RUN sh .tools/get_emojis.sh admin/emoji.json
 RUN cargo build --release
 
 # ── production image ──────────────────────────────────────────────────────────
