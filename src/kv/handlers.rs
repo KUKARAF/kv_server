@@ -1,6 +1,9 @@
 use crate::{
     error::AppError,
-    keys::generate::{generate_emoji_sequence, hash_key},
+    keys::{
+        generate::{generate_emoji_sequence, hash_key},
+        scope::check_scope,
+    },
     kv::model::{compute_expires_at, KvMetaResponse, KvUpsertRequest},
     middleware::{api_key::ApiKeyAuth, rate_limit::extract_real_ip},
     state::{AccessLogEntry, AppState, ACCESS_LOG_CAP},
@@ -281,6 +284,15 @@ pub async fn list_entries(
             .fetch_all(&state.pool)
             .await?
         }
+    };
+
+    // When using an API key, filter results to only entries within allowed scopes
+    let rows = if auth.api_key_id.is_some() && !auth.allowed_scopes.is_empty() {
+        rows.into_iter()
+            .filter(|e| check_scope(&auth.allowed_scopes, e.scope.as_deref(), "list"))
+            .collect()
+    } else {
+        rows
     };
 
     Ok(Json(rows))

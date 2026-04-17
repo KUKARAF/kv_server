@@ -46,6 +46,7 @@ pub struct ApiKeyAuth {
     pub owner_id: Option<String>,  // None only for open-access reads
     pub api_key_id: Option<String>,
     pub op: Op,
+    pub allowed_scopes: Vec<ScopeRule>, // populated for API key auth; empty for session tokens
 }
 
 #[async_trait]
@@ -70,6 +71,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     owner_id: Some(claims.oidc_subject),
                     api_key_id: None,
                     op,
+                    allowed_scopes: vec![],
                 }),
                 Err(_) => return Err(AppError::Unauthorized),
             }
@@ -101,7 +103,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             .unwrap_or(0);
 
             if open != 0 {
-                return Ok(ApiKeyAuth { owner_id: None, api_key_id: None, op });
+                return Ok(ApiKeyAuth { owner_id: None, api_key_id: None, op, allowed_scopes: vec![] });
             }
         }
 
@@ -208,20 +210,35 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         }
 
         // Scope check
-        let check_key = if op == Op::List { "" } else { &kv_key };
-
         let scopes = sqlx::query_as!(
             ScopeRule,
-            "SELECT key_pattern, ops FROM api_key_scopes WHERE api_key_id = ?",
+            "SELECT scope, ops FROM api_key_scopes WHERE api_key_id = ?",
             api_key.id
         )
         .fetch_all(&state.pool)
         .await?;
 
-        if !check_scope(&scopes, check_key, op.as_str()) {
+        // For reads/writes/deletes on a specific key, fetch the entry's scope to check
+        // hierarchical access. For list, we pass None and let the handler filter by scope.
+        let entry_scope: Option<String> = if op != Op::List && !kv_key.is_empty() {
+            sqlx::query_scalar!(
+                "SELECT scope FROM kv_entries WHERE key = ?
+                 AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 LIMIT 1",
+                kv_key
+            )
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten()
+        } else {
+            None
+        };
+
+        let check_scope_val = if op == Op::List { None } else { entry_scope.as_deref() };
+        if !check_scope(&scopes, check_scope_val, op.as_str()) {
             notify::send(
                 state.pool.clone(),
-                format!("Auth failure: scope denied for key {} on '{check_key}'", &api_key.id[..8]),
+                format!("Auth failure: scope denied for key {} on '{kv_key}'", &api_key.id[..8]),
                 "medium",
             );
             return Err(AppError::Forbidden("insufficient scope".to_string()));
@@ -245,6 +262,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             owner_id: Some(api_key.owner_id),
             api_key_id: Some(api_key.id),
             op,
+            allowed_scopes: scopes,
         })
     }
 }

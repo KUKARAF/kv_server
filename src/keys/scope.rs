@@ -1,29 +1,33 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, Deserialize, sqlx::FromRow, Clone)]
 pub struct ScopeRule {
-    pub key_pattern: String,
-    pub ops: String,
+    pub scope: String, // scope prefix; "*" grants access to all scopes
+    pub ops: String,   // comma-separated: read,write,delete,list
 }
 
-/// Check if `key` matches `pattern` where `*` is a wildcard.
-/// Supports a single `*` anywhere in the pattern.
-pub fn matches_pattern(pattern: &str, key: &str) -> bool {
-    match pattern.split_once('*') {
-        None => pattern == key,
-        Some((prefix, suffix)) => {
-            key.starts_with(prefix)
-                && key.ends_with(suffix)
-                && key.len() >= prefix.len() + suffix.len()
-        }
-    }
+/// Returns true if `allowed` scope covers `entry_scope`.
+///
+/// Rules:
+/// - `"*"` covers everything
+/// - exact match covers itself
+/// - `"osmosis"` covers `"osmosis/media"`, `"osmosis/ai"`, `"osmosis/a/b"` (any sub-scope)
+pub fn scope_covers(allowed: &str, entry_scope: &str) -> bool {
+    allowed == "*"
+        || allowed == entry_scope
+        || entry_scope.starts_with(&format!("{allowed}/"))
 }
 
-/// Returns true if any scope rule permits `op` on `key`.
-pub fn check_scope(scopes: &[ScopeRule], key: &str, op: &str) -> bool {
+/// Returns true if any scope rule permits `op` on an entry with the given scope.
+///
+/// `entry_scope` is `None` for unscoped entries; only a `"*"` rule covers those.
+pub fn check_scope(scopes: &[ScopeRule], entry_scope: Option<&str>, op: &str) -> bool {
     scopes.iter().any(|rule| {
-        matches_pattern(&rule.key_pattern, key)
-            && rule.ops.split(',').any(|o| o.trim() == op)
+        let scope_ok = match entry_scope {
+            None => rule.scope == "*",
+            Some(s) => scope_covers(&rule.scope, s),
+        };
+        scope_ok && rule.ops.split(',').any(|o| o.trim() == op)
     })
 }
 
@@ -33,46 +37,58 @@ mod tests {
 
     #[test]
     fn exact_match() {
-        assert!(matches_pattern("app-version", "app-version"));
-        assert!(!matches_pattern("app-version", "app-version2"));
+        assert!(scope_covers("osmosis", "osmosis"));
+        assert!(!scope_covers("osmosis", "osmosis2"));
+        assert!(!scope_covers("osmosis", "other"));
     }
 
     #[test]
-    fn suffix_wildcard() {
-        assert!(matches_pattern("payments-*", "payments-prod"));
-        assert!(matches_pattern("payments-*", "payments-"));
-        assert!(!matches_pattern("payments-*", "other-prod"));
+    fn sub_scope() {
+        assert!(scope_covers("osmosis", "osmosis/media"));
+        assert!(scope_covers("osmosis", "osmosis/ai"));
+        assert!(scope_covers("osmosis", "osmosis/a/b/c"));
+        assert!(!scope_covers("osmosis/media", "osmosis/ai"));
+        assert!(!scope_covers("osmosis/media", "osmosis"));
     }
 
     #[test]
-    fn prefix_wildcard() {
-        assert!(matches_pattern("*-prod", "payments-prod"));
-        assert!(!matches_pattern("*-prod", "payments-staging"));
+    fn wildcard_covers_all() {
+        assert!(scope_covers("*", "osmosis"));
+        assert!(scope_covers("*", "osmosis/media"));
+        assert!(scope_covers("*", ""));
     }
 
     #[test]
-    fn both_wildcard() {
-        assert!(matches_pattern("app-*-v2", "app-payments-v2"));
-        assert!(!matches_pattern("app-*-v2", "app-payments-v3"));
+    fn no_partial_prefix() {
+        // "osmosis" must not cover "osmosisX" (no slash)
+        assert!(!scope_covers("osmosis", "osmosisX"));
+        assert!(!scope_covers("osmosis", "osmosis2/sub"));
     }
 
     #[test]
-    fn star_matches_all() {
-        assert!(matches_pattern("*", "anything"));
-        assert!(matches_pattern("*", ""));
-    }
-
-    #[test]
-    fn scope_check() {
+    fn check_scope_any_rule() {
         let scopes = vec![
-            ScopeRule { key_pattern: "payments-*".to_string(), ops: "read,write".to_string() },
-            ScopeRule { key_pattern: "app-version".to_string(), ops: "read".to_string() },
+            ScopeRule { scope: "osmosis".to_string(), ops: "read,list".to_string() },
+            ScopeRule { scope: "other".to_string(), ops: "read".to_string() },
         ];
-        assert!(check_scope(&scopes, "payments-prod", "read"));
-        assert!(check_scope(&scopes, "payments-prod", "write"));
-        assert!(!check_scope(&scopes, "payments-prod", "delete"));
-        assert!(check_scope(&scopes, "app-version", "read"));
-        assert!(!check_scope(&scopes, "app-version", "write"));
-        assert!(!check_scope(&scopes, "other-key", "read"));
+        assert!(check_scope(&scopes, Some("osmosis"), "read"));
+        assert!(check_scope(&scopes, Some("osmosis/media"), "read"));
+        assert!(check_scope(&scopes, Some("osmosis/ai"), "list"));
+        assert!(!check_scope(&scopes, Some("osmosis"), "write"));
+        assert!(!check_scope(&scopes, Some("unrelated"), "read"));
+        assert!(!check_scope(&scopes, None, "read")); // unscoped requires "*"
+    }
+
+    #[test]
+    fn unscoped_requires_wildcard() {
+        let scopes = vec![
+            ScopeRule { scope: "*".to_string(), ops: "read".to_string() },
+        ];
+        assert!(check_scope(&scopes, None, "read"));
+
+        let scopes2 = vec![
+            ScopeRule { scope: "osmosis".to_string(), ops: "read".to_string() },
+        ];
+        assert!(!check_scope(&scopes2, None, "read"));
     }
 }

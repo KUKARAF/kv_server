@@ -15,7 +15,7 @@ pub struct ApiKeyRow {
 pub struct ScopeRow {
     pub id: String,
     pub api_key_id: String,
-    pub key_pattern: String,
+    pub scope: String,
     pub ops: String,
 }
 
@@ -36,7 +36,7 @@ pub struct CreateKeyRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateScopeRequest {
-    pub key_pattern: String,
+    pub scope: String,
     pub ops: String, // comma-separated: read,write,delete,list
 }
 

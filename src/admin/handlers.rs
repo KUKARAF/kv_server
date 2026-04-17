@@ -36,7 +36,7 @@ pub async fn list_keys(
     for key in keys {
         let scopes = sqlx::query_as!(
             ScopeRow,
-            "SELECT id, api_key_id, key_pattern, ops FROM api_key_scopes WHERE api_key_id = ?",
+            "SELECT id, api_key_id, scope, ops FROM api_key_scopes WHERE api_key_id = ?",
             key.id
         )
         .fetch_all(&state.pool)
@@ -82,8 +82,8 @@ pub async fn create_key(
     for scope in &body.scopes {
         let scope_id = Uuid::new_v4().to_string();
         sqlx::query!(
-            "INSERT INTO api_key_scopes (id, api_key_id, key_pattern, ops) VALUES (?, ?, ?, ?)",
-            scope_id, id, scope.key_pattern, scope.ops
+            "INSERT INTO api_key_scopes (id, api_key_id, scope, ops) VALUES (?, ?, ?, ?)",
+            scope_id, id, scope.scope, scope.ops
         )
         .execute(&state.pool)
         .await?;
