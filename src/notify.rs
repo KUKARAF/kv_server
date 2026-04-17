@@ -11,7 +11,7 @@ pub fn send(pool: SqlitePool, title: String, priority: &'static str) {
 
         let client = reqwest::Client::new();
         if let Err(e) = client
-            .post("http://localhost:8000/api/notifications/")
+            .post("https://notifications.osmosis.page/api/notifications/")
             .header("Authorization", format!("Bearer {api_key}"))
             .json(&serde_json::json!({
                 "title": title,
