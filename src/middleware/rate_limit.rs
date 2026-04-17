@@ -2,11 +2,26 @@ use crate::{error::AppError, state::AppState};
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::Request,
+    http::{HeaderMap, Request},
     middleware::Next,
     response::Response,
 };
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::{IpAddr, SocketAddr}, sync::Arc};
+
+pub fn extract_real_ip(headers: &HeaderMap, fallback: IpAddr) -> IpAddr {
+    headers
+        .get("x-real-ip")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .or_else(|| {
+            headers
+                .get("x-forwarded-for")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.split(',').next())
+                .and_then(|s| s.trim().parse().ok())
+        })
+        .unwrap_or(fallback)
+}
 
 pub async fn layer(
     State(state): State<Arc<AppState>>,
@@ -35,18 +50,7 @@ pub async fn layer(
 
     // Resolve the real client IP from proxy headers set by Caddy,
     // falling back to the socket address when running without a proxy.
-    let ip = headers
-        .get("x-real-ip")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.parse().ok())
-        .or_else(|| {
-            headers
-                .get("x-forwarded-for")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.split(',').next())
-                .and_then(|s| s.trim().parse().ok())
-        })
-        .unwrap_or_else(|| addr.ip());
+    let ip = extract_real_ip(headers, addr.ip());
 
     let limit = state.config.daily_rate_limit;
     let mut entry = state.rate_counters.entry(ip).or_insert(0);

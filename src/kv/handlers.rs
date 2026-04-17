@@ -2,18 +2,35 @@ use crate::{
     error::AppError,
     keys::generate::{generate_emoji_sequence, hash_key},
     kv::model::{compute_expires_at, KvMetaResponse, KvUpsertRequest},
-    middleware::api_key::ApiKeyAuth,
-    state::AppState,
+    middleware::{api_key::ApiKeyAuth, rate_limit::extract_real_ip},
+    state::{AccessLogEntry, AppState, ACCESS_LOG_CAP},
 };
 use axum::{
-    extract::{Path, Query, State},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 use uuid::Uuid;
+
+fn log_access(state: &AppState, headers: &HeaderMap, addr: SocketAddr, auth: &ApiKeyAuth, key: &str) {
+    let ip = extract_real_ip(headers, addr.ip()).to_string();
+    let entry = AccessLogEntry {
+        ip,
+        api_key_id: auth.api_key_id.clone(),
+        key: key.to_string(),
+        op: auth.op.as_str().to_string(),
+        ts: chrono::Utc::now(),
+    };
+    if let Ok(mut log) = state.access_log.lock() {
+        if log.len() >= ACCESS_LOG_CAP {
+            log.pop_front();
+        }
+        log.push_back(entry);
+    }
+}
 
 #[derive(Serialize)]
 pub struct RequestAccessResponse {
@@ -78,9 +95,12 @@ pub struct ListQuery {
 
 pub async fn get_entry(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: ApiKeyAuth,
+    headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<String, AppError> {
+    log_access(&state, &headers, addr, &auth, &key);
     let (value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext) = if let Some(ref oid) = auth.owner_id {
         let row = sqlx::query!(
             "SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext
@@ -133,10 +153,13 @@ pub async fn get_entry(
 
 pub async fn upsert_entry(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: ApiKeyAuth,
+    headers: HeaderMap,
     Path(key): Path<String>,
     Json(body): Json<KvUpsertRequest>,
 ) -> Result<StatusCode, AppError> {
+    log_access(&state, &headers, addr, &auth, &key);
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
 
     // Validate ZT fields: either all required ZT fields present, or none.
@@ -196,9 +219,12 @@ pub async fn upsert_entry(
 
 pub async fn delete_entry(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: ApiKeyAuth,
+    headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    log_access(&state, &headers, addr, &auth, &key);
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
 
     let result = sqlx::query!(
@@ -217,9 +243,12 @@ pub async fn delete_entry(
 
 pub async fn list_entries(
     State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: ApiKeyAuth,
+    headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Vec<KvMetaResponse>>, AppError> {
+    log_access(&state, &headers, addr, &auth, "");
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
 
     let rows = match q.prefix {

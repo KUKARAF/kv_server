@@ -1,10 +1,23 @@
 use crate::config::Config;
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use openidconnect::core::CoreClient;
 use sqlx::SqlitePool;
+use std::collections::VecDeque;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use webauthn_rs::prelude::{Passkey, PasskeyAuthentication, PasskeyRegistration, Webauthn};
+
+pub const ACCESS_LOG_CAP: usize = 500;
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AccessLogEntry {
+    pub ip: String,
+    pub api_key_id: Option<String>,
+    pub key: String,
+    pub op: String,
+    pub ts: DateTime<Utc>,
+}
 
 /// Pending WebAuthn registration state (between begin and finish).
 pub struct RegChallengeEntry {
@@ -24,6 +37,7 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub config: Config,
     pub rate_counters: Arc<DashMap<IpAddr, u32>>,
+    pub access_log: Arc<Mutex<VecDeque<AccessLogEntry>>>,
     pub oidc_client: Option<CoreClient>,
     pub webauthn: Option<Webauthn>,
     /// challenge_id -> registration state (cleared on finish or timeout)
@@ -41,6 +55,7 @@ impl AppState {
             pool,
             config,
             rate_counters: Arc::new(DashMap::new()),
+            access_log: Arc::new(Mutex::new(VecDeque::with_capacity(ACCESS_LOG_CAP))),
             oidc_client,
             webauthn,
             webauthn_reg_challenges: DashMap::new(),

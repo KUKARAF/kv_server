@@ -479,6 +479,31 @@ fn unquote(s: &str) -> String {
     }
 }
 
+// ── Access log ───────────────────────────────────────────────────────────────
+
+pub async fn list_access_log(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+) -> Json<Vec<serde_json::Value>> {
+    let entries = state
+        .access_log
+        .lock()
+        .map(|log| log.iter().rev().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    Json(
+        entries
+            .into_iter()
+            .map(|e| serde_json::json!({
+                "ip": e.ip,
+                "api_key_id": e.api_key_id,
+                "key": e.key,
+                "op": e.op,
+                "ts": e.ts.to_rfc3339(),
+            }))
+            .collect(),
+    )
+}
+
 // ── Rate limits ──────────────────────────────────────────────────────────────
 
 pub async fn list_rate_counters(

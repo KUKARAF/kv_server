@@ -2,42 +2,69 @@
   <h2>Rate Limits</h2>
   <p>Current request counts per IP since last daily reset. Authenticated requests are exempt.</p>
 
-  <button type="button" class="btn-secondary" onclick="document.getElementById('rate-limits-list').dispatchEvent(new Event('refresh'))">Refresh</button>
+  <button type="button" class="btn-secondary" onclick="loadRateLimits()">Refresh</button>
 
-  <div id="rate-limits-list"
-       hx-get="/api/admin/rate-limits"
-       hx-trigger="load, refresh"
-       hx-swap="innerHTML"
-       style="margin-top:1rem;">
-    Loading...
-  </div>
+  <div id="rate-limits-table" style="margin-top:1rem;">Loading...</div>
+</section>
+
+<section style="margin-top:2rem;">
+  <h2>Access Log</h2>
+  <p>Last 500 authenticated KV operations (newest first).</p>
+
+  <button type="button" class="btn-secondary" onclick="loadAccessLog()">Refresh</button>
+
+  <div id="access-log-table" style="margin-top:1rem;">Loading...</div>
 </section>
 
 <script>
-  htmx.defineExtension && htmx.on('#rate-limits-list', 'htmx:afterSwap', function (evt) {});
+  async function loadRateLimits() {
+    const el = document.getElementById('rate-limits-table');
+    const resp = await fetch('/api/admin/rate-limits');
+    if (!resp.ok) { el.textContent = 'Failed to load.'; return; }
+    const data = await resp.json();
+    if (!data.length) { el.innerHTML = '<p style="color:var(--muted)">No IPs tracked yet.</p>'; return; }
+    let html = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr><th style="text-align:left;padding:6px 8px;">IP</th>'
+      + '<th style="text-align:right;padding:6px 8px;">Requests today</th></tr></thead><tbody>';
+    for (const row of data) {
+      html += `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:6px 8px;font-family:monospace">${row.ip}</td>
+        <td style="padding:6px 8px;text-align:right">${row.count}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }
 
-  document.body.addEventListener('htmx:afterSwap', function (evt) {
-    if (evt.target.id !== 'rate-limits-list') return;
-    try {
-      const data = JSON.parse(evt.detail.xhr.responseText);
-      if (!Array.isArray(data)) return;
-      const container = evt.target;
-      if (data.length === 0) {
-        container.innerHTML = '<p style="color:var(--muted)">No IPs tracked yet.</p>';
-        return;
-      }
-      const limit = window._rlLimit || '?';
-      let html = '<table style="width:100%;border-collapse:collapse;">'
-        + '<thead><tr><th style="text-align:left;padding:6px 8px;">IP</th>'
-        + '<th style="text-align:right;padding:6px 8px;">Requests today</th></tr></thead><tbody>';
-      for (const row of data) {
-        html += `<tr style="border-top:1px solid var(--border)">
-          <td style="padding:6px 8px;font-family:monospace">${row.ip}</td>
-          <td style="padding:6px 8px;text-align:right">${row.count}</td>
-        </tr>`;
-      }
-      html += '</tbody></table>';
-      container.innerHTML = html;
-    } catch (_) {}
-  });
+  async function loadAccessLog() {
+    const el = document.getElementById('access-log-table');
+    const resp = await fetch('/api/admin/access-log');
+    if (!resp.ok) { el.textContent = 'Failed to load.'; return; }
+    const data = await resp.json();
+    if (!data.length) { el.innerHTML = '<p style="color:var(--muted)">No accesses logged yet.</p>'; return; }
+    let html = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr>'
+      + '<th style="text-align:left;padding:6px 8px;">Time</th>'
+      + '<th style="text-align:left;padding:6px 8px;">IP</th>'
+      + '<th style="text-align:left;padding:6px 8px;">Op</th>'
+      + '<th style="text-align:left;padding:6px 8px;">Key</th>'
+      + '<th style="text-align:left;padding:6px 8px;">API Key ID</th>'
+      + '</tr></thead><tbody>';
+    for (const row of data) {
+      const ts = new Date(row.ts).toLocaleString();
+      const keyId = row.api_key_id ? row.api_key_id.slice(0, 8) + '…' : '<span style="color:var(--muted)">session</span>';
+      html += `<tr style="border-top:1px solid var(--border)">
+        <td style="padding:6px 8px;font-size:0.85em;white-space:nowrap">${ts}</td>
+        <td style="padding:6px 8px;font-family:monospace">${row.ip}</td>
+        <td style="padding:6px 8px">${row.op}</td>
+        <td style="padding:6px 8px;font-family:monospace">${row.key || '<em>list</em>'}</td>
+        <td style="padding:6px 8px;font-family:monospace;font-size:0.85em">${keyId}</td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }
+
+  loadRateLimits();
+  loadAccessLog();
 </script>
