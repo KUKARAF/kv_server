@@ -6,6 +6,7 @@ mod error;
 mod keys;
 mod kv;
 mod middleware;
+mod notify;
 mod state;
 mod tasks;
 mod webauthn;

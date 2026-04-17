@@ -1,4 +1,4 @@
-use crate::{error::AppError, state::AppState};
+use crate::{error::AppError, notify, state::AppState};
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
@@ -60,6 +60,14 @@ pub async fn layer(
 
     if current > limit {
         tracing::warn!(ip = %ip, count = current, limit, "rate limit exceeded");
+        // Notify only on the first crossing to avoid spamming.
+        if current == limit + 1 {
+            notify::send(
+                state.pool.clone(),
+                format!("Rate limit exceeded by {ip}"),
+                "medium",
+            );
+        }
         return Err(AppError::RateLimited);
     }
 

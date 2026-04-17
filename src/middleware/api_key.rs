@@ -1,4 +1,4 @@
-use crate::{auth::session::validate_session, error::AppError, keys::scope::{check_scope, ScopeRule}, state::AppState};
+use crate::{auth::session::validate_session, error::AppError, keys::scope::{check_scope, ScopeRule}, notify, state::AppState};
 use axum::{
     async_trait,
     extract::FromRequestParts,
@@ -120,6 +120,11 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
 
         // Reject revoked/used keys immediately
         if api_key.status == "revoked" || api_key.status == "used" {
+            notify::send(
+                state.pool.clone(),
+                format!("Auth failure: {} key used ({})", api_key.status, &api_key.id[..8]),
+                "medium",
+            );
             return Err(AppError::Unauthorized);
         }
 
@@ -133,6 +138,11 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             .await? != 0;
 
             if expired {
+                notify::send(
+                    state.pool.clone(),
+                    format!("Auth failure: expired key used ({})", &api_key.id[..8]),
+                    "medium",
+                );
                 return Err(AppError::Unauthorized);
             }
         }
@@ -209,6 +219,11 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         .await?;
 
         if !check_scope(&scopes, check_key, op.as_str()) {
+            notify::send(
+                state.pool.clone(),
+                format!("Auth failure: scope denied for key {} on '{check_key}'", &api_key.id[..8]),
+                "medium",
+            );
             return Err(AppError::Forbidden("insufficient scope".to_string()));
         }
 
