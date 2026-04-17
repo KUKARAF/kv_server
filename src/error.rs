@@ -1,6 +1,6 @@
 use axum::{
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     Json,
 };
 use serde_json::json;
@@ -50,6 +50,10 @@ impl IntoResponse for AppError {
                 Json(json!({ "error": "pending approval", "confirm": confirm, "approver": approver })),
             )
                 .into_response();
+        }
+
+        if matches!(self, AppError::RateLimited) {
+            return Redirect::to("https://static.osmosis.page/osmosis/429.html").into_response();
         }
 
         if matches!(self, AppError::ZeroTrustRequired) {

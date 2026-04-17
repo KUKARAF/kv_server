@@ -15,6 +15,7 @@
     <button onclick="showTab('approvals')" class="tab-btn" id="tab-approvals">Approvals</button>
     <button onclick="showTab('entries')" class="tab-btn" id="tab-entries">KV Entries</button>
     <button onclick="showTab('zero-trust')" class="tab-btn" id="tab-zero-trust">Zero Trust</button>
+    <button onclick="showTab('rate-limits')" class="tab-btn" id="tab-rate-limits">Rate Limits</button>
     <button onclick="showTab('session')" class="tab-btn" id="tab-session">Session</button>
     <button onclick="copySession()" class="tab-btn" title="Copy session token">📋</button>
     <span class="nav-spacer"></span>
@@ -34,6 +35,9 @@
     </div>
     <div id="tab-zero-trust-content" class="tab-content hidden">
       <div hx-get="/admin/partials/zero-trust.html" hx-trigger="load" hx-swap="innerHTML"></div>
+    </div>
+    <div id="tab-rate-limits-content" class="tab-content hidden">
+      <div hx-get="/admin/partials/rate-limits.html" hx-trigger="load" hx-swap="innerHTML"></div>
     </div>
     <div id="tab-session-content" class="tab-content hidden">
       <div hx-get="/admin/partials/session.html" hx-trigger="load" hx-swap="innerHTML"></div>

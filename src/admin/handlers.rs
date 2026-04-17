@@ -479,6 +479,26 @@ fn unquote(s: &str) -> String {
     }
 }
 
+// ── Rate limits ──────────────────────────────────────────────────────────────
+
+pub async fn list_rate_counters(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+) -> Json<Vec<serde_json::Value>> {
+    let mut entries: Vec<(String, u32)> = state
+        .rate_counters
+        .iter()
+        .map(|e| (e.key().to_string(), *e.value()))
+        .collect();
+    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    Json(
+        entries
+            .into_iter()
+            .map(|(ip, count)| serde_json::json!({ "ip": ip, "count": count }))
+            .collect(),
+    )
+}
+
 // ── Secret request links ─────────────────────────────────────────────────────
 
 pub async fn create_secret_request(

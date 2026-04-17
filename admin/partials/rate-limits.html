@@ -1,0 +1,43 @@
+<section>
+  <h2>Rate Limits</h2>
+  <p>Current request counts per IP since last daily reset. Authenticated requests are exempt.</p>
+
+  <button type="button" class="btn-secondary" onclick="document.getElementById('rate-limits-list').dispatchEvent(new Event('refresh'))">Refresh</button>
+
+  <div id="rate-limits-list"
+       hx-get="/api/admin/rate-limits"
+       hx-trigger="load, refresh"
+       hx-swap="innerHTML"
+       style="margin-top:1rem;">
+    Loading...
+  </div>
+</section>
+
+<script>
+  htmx.defineExtension && htmx.on('#rate-limits-list', 'htmx:afterSwap', function (evt) {});
+
+  document.body.addEventListener('htmx:afterSwap', function (evt) {
+    if (evt.target.id !== 'rate-limits-list') return;
+    try {
+      const data = JSON.parse(evt.detail.xhr.responseText);
+      if (!Array.isArray(data)) return;
+      const container = evt.target;
+      if (data.length === 0) {
+        container.innerHTML = '<p style="color:var(--muted)">No IPs tracked yet.</p>';
+        return;
+      }
+      const limit = window._rlLimit || '?';
+      let html = '<table style="width:100%;border-collapse:collapse;">'
+        + '<thead><tr><th style="text-align:left;padding:6px 8px;">IP</th>'
+        + '<th style="text-align:right;padding:6px 8px;">Requests today</th></tr></thead><tbody>';
+      for (const row of data) {
+        html += `<tr style="border-top:1px solid var(--border)">
+          <td style="padding:6px 8px;font-family:monospace">${row.ip}</td>
+          <td style="padding:6px 8px;text-align:right">${row.count}</td>
+        </tr>`;
+      }
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    } catch (_) {}
+  });
+</script>
