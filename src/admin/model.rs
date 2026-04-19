@@ -36,6 +36,7 @@ pub struct CreateKeyRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateScopeRequest {
+    #[serde(rename = "key_pattern")]
     pub scope: String,
     pub ops: String, // comma-separated: read,write,delete,list
 }
