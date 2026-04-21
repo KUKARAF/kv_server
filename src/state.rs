@@ -6,6 +6,7 @@ use sqlx::SqlitePool;
 use std::collections::VecDeque;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
+use tokio::sync::RwLock;
 use webauthn_rs::prelude::{Passkey, PasskeyAuthentication, PasskeyRegistration, Webauthn};
 
 pub const ACCESS_LOG_CAP: usize = 500;
@@ -38,7 +39,7 @@ pub struct AppState {
     pub config: Config,
     pub rate_counters: Arc<DashMap<IpAddr, u32>>,
     pub access_log: Arc<Mutex<VecDeque<AccessLogEntry>>>,
-    pub oidc_client: Option<CoreClient>,
+    pub oidc_client: Arc<RwLock<Option<CoreClient>>>,
     pub webauthn: Option<Webauthn>,
     /// challenge_id -> registration state (cleared on finish or timeout)
     pub webauthn_reg_challenges: DashMap<String, RegChallengeEntry>,
@@ -56,7 +57,7 @@ impl AppState {
             config,
             rate_counters: Arc::new(DashMap::new()),
             access_log: Arc::new(Mutex::new(VecDeque::with_capacity(ACCESS_LOG_CAP))),
-            oidc_client,
+            oidc_client: Arc::new(RwLock::new(oidc_client)),
             webauthn,
             webauthn_reg_challenges: DashMap::new(),
             webauthn_auth_challenges: DashMap::new(),

@@ -61,6 +61,7 @@ async fn main() -> Result<()> {
     })
     .ok();
 
+    let oidc_failed = oidc_client.is_none();
     let state = state::AppState::new(pool, config.clone(), oidc_client);
 
     // Spawn background tasks
@@ -69,6 +70,9 @@ async fn main() -> Result<()> {
         config.ttl_cleanup_interval_secs,
     ));
     tokio::spawn(tasks::rate_limit_reset::run(Arc::clone(&state)));
+    if oidc_failed {
+        tokio::spawn(tasks::oidc_retry::run(Arc::clone(&state)));
+    }
 
     let app = Router::new()
         .route("/health", get(health))

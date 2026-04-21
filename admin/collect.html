@@ -185,6 +185,12 @@
           showInvalid('This link has already been used or revoked.');
           return;
         }
+        if (resp.status === 409) {
+          const data = await resp.json();
+          const keys = (data.keys || []).join(', ');
+          showError('Key already in use: ' + keys + '. Please use a different name.');
+          return;
+        }
         if (!resp.ok) {
           showError('Submission failed (' + resp.status + '). Please try again.');
           return;

@@ -81,7 +81,9 @@ fn decode_state_cookie(
 pub async fn login(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     let oidc_client = state
         .oidc_client
-        .as_ref()
+        .read()
+        .await
+        .clone()
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("OIDC not initialized")))?;
 
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
@@ -134,7 +136,9 @@ pub async fn callback(
 ) -> Result<Response, AppError> {
     let oidc_client = state
         .oidc_client
-        .as_ref()
+        .read()
+        .await
+        .clone()
         .ok_or_else(|| AppError::Internal(anyhow::anyhow!("OIDC not initialized")))?;
 
     // Verify state cookie

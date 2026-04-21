@@ -21,6 +21,9 @@ pub enum AppError {
     #[error("conflict: {0}")]
     Conflict(String),
 
+    #[error("key conflict")]
+    KeyConflict(Vec<String>),
+
     #[error("rate limit exceeded")]
     RateLimited,
 
@@ -56,6 +59,14 @@ impl IntoResponse for AppError {
             return Redirect::to("https://static.osmosis.page/osmosis/429.html").into_response();
         }
 
+        if let AppError::KeyConflict(keys) = &self {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "key already in use", "keys": keys })),
+            )
+                .into_response();
+        }
+
         if matches!(self, AppError::ZeroTrustRequired) {
             return (
                 StatusCode::FORBIDDEN,
@@ -70,7 +81,7 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded".to_string()),
-            AppError::PendingApproval { .. } | AppError::ZeroTrustRequired => unreachable!(),
+            AppError::PendingApproval { .. } | AppError::ZeroTrustRequired | AppError::KeyConflict(_) => unreachable!(),
             AppError::Internal(e) => {
                 tracing::error!("internal error: {e:#}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string())

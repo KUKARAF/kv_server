@@ -644,6 +644,34 @@ pub async fn submit_secret_request(
         ));
     }
 
+    let owner_id = row.owner_id;
+    let scope = row.scope;
+
+    let keys: Vec<String> = body
+        .entries
+        .iter()
+        .map(|e| e.key.trim().to_string())
+        .filter(|k| !k.is_empty())
+        .collect();
+
+    // Check for existing keys before touching anything.
+    let mut conflicts = Vec::new();
+    for key in &keys {
+        let exists = sqlx::query_scalar!(
+            r#"SELECT 1 as "x: i32" FROM kv_entries WHERE key = ? AND owner_id = ?
+             AND (expires_at IS NULL OR expires_at > datetime('now'))"#,
+            key, owner_id
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+        if exists.is_some() {
+            conflicts.push(key.clone());
+        }
+    }
+    if !conflicts.is_empty() {
+        return Err(AppError::KeyConflict(conflicts));
+    }
+
     sqlx::query!(
         "UPDATE secret_requests SET status = 'fulfilled', fulfilled_at = datetime('now') WHERE id = ?",
         id
@@ -651,21 +679,16 @@ pub async fn submit_secret_request(
     .execute(&mut *tx)
     .await?;
 
-    let owner_id = row.owner_id;
-    let scope = row.scope;
-
-    for entry in &body.entries {
-        let key = entry.key.trim().to_string();
-        if key.is_empty() {
-            continue;
-        }
+    for key in &keys {
+        let value = body
+            .entries
+            .iter()
+            .find(|e| e.key.trim() == key)
+            .map(|e| e.value.as_str())
+            .unwrap_or("");
         sqlx::query!(
-            "INSERT INTO kv_entries (key, owner_id, value, scope)
-             VALUES (?, ?, ?, ?)
-             ON CONFLICT(key, owner_id) DO UPDATE SET
-                 value = excluded.value,
-                 scope = excluded.scope",
-            key, owner_id, entry.value, scope
+            "INSERT INTO kv_entries (key, owner_id, value, scope) VALUES (?, ?, ?, ?)",
+            key, owner_id, value, scope
         )
         .execute(&mut *tx)
         .await?;
