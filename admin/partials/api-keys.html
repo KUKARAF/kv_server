@@ -137,7 +137,7 @@
           <td>${esc(k.label)}</td>
           <td><span class="badge badge-${k.key_type}">${esc(k.key_type)}</span></td>
           <td><span class="badge badge-${k.status}">${esc(k.status)}</span></td>
-          <td><small>${k.scopes.map(s => `${esc(s.key_pattern)} [${esc(s.ops)}]`).join('<br>')}</small></td>
+          <td><small>${k.scopes.map(s => `${esc(s.scope)} [${esc(s.ops)}]`).join('<br>')}</small></td>
           <td>${k.expires_at ? esc(k.expires_at) : '—'}</td>
           <td>${k.last_used_at ? esc(k.last_used_at) : '—'}</td>
           <td>${action}</td>

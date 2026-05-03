@@ -149,22 +149,8 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             }
         }
 
-        // Type-specific checks
+        // Type-specific checks (status only — one_time consumption happens after scope check)
         match api_key.key_type.as_str() {
-            "one_time" => {
-                let result = sqlx::query!(
-                    "UPDATE api_keys
-                     SET status = 'used', last_used_at = datetime('now')
-                     WHERE id = ? AND status = 'active' AND type = 'one_time'",
-                    api_key.id
-                )
-                .execute(&state.pool)
-                .await?;
-
-                if result.rows_affected() == 0 {
-                    return Err(AppError::Forbidden("one-time key already used".to_string()));
-                }
-            }
             "zero_trust" => {
                 // zero_trust keys must be active; the actual secret access
                 // requires a WebAuthn ceremony and a short-lived ZT JWT.
@@ -222,10 +208,10 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         // hierarchical access. For list, we pass None and let the handler filter by scope.
         let entry_scope: Option<String> = if op != Op::List && !kv_key.is_empty() {
             sqlx::query_scalar!(
-                "SELECT scope FROM kv_entries WHERE key = ?
+                "SELECT scope FROM kv_entries WHERE key = ? AND owner_id = ?
                  AND (expires_at IS NULL OR expires_at > datetime('now'))
                  LIMIT 1",
-                kv_key
+                kv_key, api_key.owner_id
             )
             .fetch_optional(&state.pool)
             .await?
@@ -242,6 +228,22 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                 "medium",
             );
             return Err(AppError::Forbidden("insufficient scope".to_string()));
+        }
+
+        // Consume one-time key only after scope check passes
+        if api_key.key_type == "one_time" {
+            let result = sqlx::query!(
+                    "UPDATE api_keys
+                     SET status = 'used', last_used_at = datetime('now')
+                     WHERE id = ? AND status = 'active' AND type = 'one_time'",
+                    api_key.id
+            )
+            .execute(&state.pool)
+            .await?;
+
+            if result.rows_affected() == 0 {
+                return Err(AppError::Forbidden("one-time key already used".to_string()));
+            }
         }
 
         // Update last_used_at (fire and forget, only for non-one-time)
