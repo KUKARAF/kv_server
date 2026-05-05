@@ -92,6 +92,7 @@ async fn main() -> Result<()> {
         .route("/share", get(serve_share))
         .route("/collect", get(serve_collect))
         .route("/", get(serve_index))
+        .layer(axum_middleware::from_fn(middleware::security_headers::layer))
         .layer(axum_middleware::from_fn_with_state(
             Arc::clone(&state),
             middleware::rate_limit::layer,
