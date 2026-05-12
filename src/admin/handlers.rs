@@ -60,6 +60,36 @@ pub async fn create_key(
         )));
     }
 
+    // For one-time keys with entry_scope, allow empty scopes array and generate scope automatically
+    let mut scopes = body.scopes.clone();
+    let is_one_time_with_entry_scope = body.key_type == "one_time" && body.entry_scope.is_some();
+    
+    if is_one_time_with_entry_scope {
+        // One-time key tied to a specific entry scope
+        let entry_scope = body.entry_scope.as_ref().unwrap();
+        scopes.push(CreateScopeRequest {
+            scope: entry_scope.clone(),
+            ops: "read".to_string(), // One-time key can only read by default
+        });
+    }
+
+    // For one-time keys with entry_scope, we auto-generate the scope
+    // For all other key types, require at least one scope
+    if scopes.is_empty() && !is_one_time_with_entry_scope {
+        return Err(AppError::Forbidden(
+            "at least one scope is required (or provide entry_scope for one-time keys)".to_string(),
+        ));
+    }
+
+    // Validate each scope has at least one operation
+    for scope in &scopes {
+        if scope.ops.is_empty() {
+            return Err(AppError::Forbidden(
+                "each scope must have at least one operation (read, write, delete, list)".to_string(),
+            ));
+        }
+    }
+
     let owner = &auth.0.oidc_subject;
     let (plaintext, key_hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();
@@ -79,7 +109,7 @@ pub async fn create_key(
     .execute(&state.pool)
     .await?;
 
-    for scope in &body.scopes {
+    for scope in &scopes {
         let scope_id = Uuid::new_v4().to_string();
         sqlx::query!(
             "INSERT INTO api_key_scopes (id, api_key_id, scope, ops) VALUES (?, ?, ?, ?)",

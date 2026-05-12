@@ -26,15 +26,46 @@ pub struct ApiKeyWithScopes {
     pub scopes: Vec<ScopeRow>,
 }
 
+/// Request to create a new API key.
+///
+/// # Examples
+///
+/// Standard key with multiple scopes:
+/// ```json
+/// {
+///   "label": "my-standard-key",
+///   "key_type": "standard",
+///   "scopes": [
+///     { "key_pattern": "config", "ops": "read,list" },
+///     { "key_pattern": "secrets", "ops": "read" }
+///   ]
+/// }
+/// ```
+///
+/// One-time key tied to a specific entry scope (no additional scopes needed):
+/// ```json
+/// {
+///   "label": "share-api-key-with-john",
+///   "key_type": "one_time",
+///   "entry_scope": "api_keys/staging",
+///   "scopes": []
+/// }
+/// ```
 #[derive(Debug, Deserialize)]
 pub struct CreateKeyRequest {
     pub label: String,
-    pub key_type: String, // standard | one_time | approval_required
+    pub key_type: String, // standard | one_time | approval_required | zero_trust
     pub expires_at: Option<String>,
     pub scopes: Vec<CreateScopeRequest>,
+    /// For one-time keys: if provided, automatically creates a read-only scope tied to this entry scope.
+    /// The one-time key will only be able to read entries with this scope.
+    /// Example: "api_keys/staging" restricts access to entries with scope "api_keys/staging".
+    #[serde(default)]
+    pub entry_scope: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+
+#[derive(Debug, Deserialize, Clone)]
 pub struct CreateScopeRequest {
     #[serde(rename = "key_pattern")]
     pub scope: String,
