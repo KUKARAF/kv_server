@@ -188,6 +188,13 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     });
                 }
             }
+            "shareable" => {
+                // shareable keys must be active; they can be used multiple times
+                // and are scoped to a single entry via entry_scope
+                if api_key.status != "active" {
+                    return Err(AppError::Unauthorized);
+                }
+            }
             _ => {
                 if api_key.status != "active" {
                     return Err(AppError::Unauthorized);
@@ -245,6 +252,8 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                 return Err(AppError::Forbidden("one-time key already used".to_string()));
             }
         }
+        
+        // Note: 'shareable' keys are NOT consumed; they can be used multiple times
 
         // Update last_used_at (fire and forget, only for non-one-time)
         if api_key.key_type != "one_time" {

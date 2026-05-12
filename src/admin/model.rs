@@ -51,14 +51,27 @@ pub struct ApiKeyWithScopes {
 ///   "scopes": []
 /// }
 /// ```
+///
+/// Shareable key tied to a specific entry scope (reusable, for URLs):
+/// ```json
+/// {
+///   "label": "share-secret-with-team",
+///   "key_type": "shareable",
+///   "entry_scope": "secrets/api_key",
+///   "scopes": []
+/// }
+/// ```
 #[derive(Debug, Deserialize)]
 pub struct CreateKeyRequest {
     pub label: String,
-    pub key_type: String, // standard | one_time | approval_required | zero_trust
+    pub key_type: String, // standard | one_time | approval_required | zero_trust | shareable
     pub expires_at: Option<String>,
     pub scopes: Vec<CreateScopeRequest>,
-    /// For one-time keys: if provided, automatically creates a read-only scope tied to this entry scope.
-    /// The one-time key will only be able to read entries with this scope.
+    /// For one-time or shareable keys: if provided, automatically creates a read-only scope tied to this entry scope.
+    /// The key will only be able to read entries with this scope.
+    /// - one_time: key can only be used once, then expires
+    /// - shareable: key can be used multiple times (ideal for shareable URLs)
+    ///
     /// Example: "api_keys/staging" restricts access to entries with scope "api_keys/staging".
     #[serde(default)]
     pub entry_scope: Option<String>,
