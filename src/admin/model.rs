@@ -199,6 +199,16 @@ pub struct SubmitEntry {
     pub value: String,
 }
 
+// ── Blocked IPs ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct BlockedIpRow {
+    pub ip: String,
+    pub failed_count: i64,
+    pub blocked_at: Option<String>,
+    pub last_failure: String,
+}
+
 // ── Session ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

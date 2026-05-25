@@ -536,6 +536,37 @@ pub async fn list_access_log(
     )
 }
 
+// ── Blocked IPs ──────────────────────────────────────────────────────────────
+
+pub async fn list_blocked_ips(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+) -> Result<Json<Vec<crate::admin::model::BlockedIpRow>>, AppError> {
+    let rows = sqlx::query_as!(
+        crate::admin::model::BlockedIpRow,
+        "SELECT ip, failed_count, blocked_at, last_failure
+         FROM blocked_ips ORDER BY failed_count DESC"
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+pub async fn unblock_ip(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+    Path(ip): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let result = sqlx::query!("DELETE FROM blocked_ips WHERE ip = ?", ip)
+        .execute(&state.pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // ── Rate limits ──────────────────────────────────────────────────────────────
 
 pub async fn list_rate_counters(

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT failed_count, blocked_at FROM blocked_ips WHERE ip = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "failed_count",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "blocked_at",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "15262d4850654ee0c2fd81fafe348f4849993118b5701c30b1ce02f9d2079e62"
+}

@@ -1,4 +1,4 @@
-use crate::{auth::session::{validate_session, SessionClaims}, error::AppError, state::AppState};
+use crate::{auth::session::{validate_session, SessionClaims}, error::AppError, middleware::ip_block::{record_auth_failure, ClientIp}, state::AppState};
 use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use std::sync::Arc;
 
@@ -41,7 +41,16 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         }
 
         let token = extract_token(parts).ok_or(AppError::Unauthorized)?;
-        let claims = validate_session(&state.pool, &token).await?;
-        Ok(AdminAuth(claims))
+        match validate_session(&state.pool, &token).await {
+            Ok(claims) => Ok(AdminAuth(claims)),
+            Err(e) => {
+                if let Some(ip) = parts.extensions.get::<ClientIp>().map(|c| c.0) {
+                    let pool = state.pool.clone();
+                    let threshold = state.config.auth_failure_threshold;
+                    tokio::spawn(async move { record_auth_failure(&pool, ip, threshold).await });
+                }
+                Err(e)
+            }
+        }
     }
 }

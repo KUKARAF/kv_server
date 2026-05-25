@@ -1,4 +1,4 @@
-use crate::{auth::session::validate_session, error::AppError, keys::scope::{check_scope, ScopeRule}, notify, state::AppState};
+use crate::{auth::session::validate_session, error::AppError, keys::scope::{check_scope, ScopeRule}, middleware::ip_block::{record_auth_failure, ClientIp}, notify, state::AppState};
 use axum::{
     async_trait,
     extract::FromRequestParts,
@@ -58,6 +58,15 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         state: &Arc<AppState>,
     ) -> Result<Self, Self::Rejection> {
         let op = Op::from_request(parts);
+        let client_ip = parts.extensions.get::<ClientIp>().map(|c| c.0);
+
+        let record_failure = || {
+            if let Some(ip) = client_ip {
+                let pool = state.pool.clone();
+                let threshold = state.config.auth_failure_threshold;
+                tokio::spawn(async move { record_auth_failure(&pool, ip, threshold).await });
+            }
+        };
 
         // Session token (Authorization: Bearer) grants full access, same as admin.
         if let Some(token) = parts
@@ -73,7 +82,10 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     op,
                     allowed_scopes: vec![],
                 }),
-                Err(_) => return Err(AppError::Unauthorized),
+                Err(_) => {
+                    record_failure();
+                    return Err(AppError::Unauthorized);
+                }
             }
         }
 
@@ -118,7 +130,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         )
         .fetch_optional(&state.pool)
         .await?
-        .ok_or(AppError::Unauthorized)?;
+        .ok_or_else(|| { record_failure(); AppError::Unauthorized })?;
 
         // Reject revoked/used keys immediately
         if api_key.status == "revoked" || api_key.status == "used" {
@@ -127,6 +139,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                 format!("Auth failure: {} key used ({})", api_key.status, &api_key.id[..8]),
                 "medium",
             );
+            record_failure();
             return Err(AppError::Unauthorized);
         }
 
@@ -145,6 +158,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     format!("Auth failure: expired key used ({})", &api_key.id[..8]),
                     "medium",
                 );
+                record_failure();
                 return Err(AppError::Unauthorized);
             }
         }

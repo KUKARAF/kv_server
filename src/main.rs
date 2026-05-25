@@ -97,6 +97,10 @@ async fn main() -> Result<()> {
             Arc::clone(&state),
             middleware::rate_limit::layer,
         ))
+        .layer(axum_middleware::from_fn_with_state(
+            Arc::clone(&state),
+            middleware::ip_block::layer,
+        ))
         .with_state(Arc::clone(&state));
 
     let listener = TcpListener::bind(&config.listen_addr).await?;

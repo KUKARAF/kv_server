@@ -1,4 +1,13 @@
 <section>
+  <h2>Blocked IPs</h2>
+  <p>Permanently blocked IPs due to repeated authentication failures. Unblocking requires an active admin session.</p>
+
+  <button type="button" class="btn-secondary" onclick="loadBlockedIps()">Refresh</button>
+
+  <div id="blocked-ips-table" style="margin-top:1rem;">Loading...</div>
+</section>
+
+<section style="margin-top:2rem;">
   <h2>Rate Limits</h2>
   <p>Current request counts per IP since last daily reset. Authenticated requests are exempt.</p>
 
@@ -17,6 +26,51 @@
 </section>
 
 <script>
+  async function loadBlockedIps() {
+    const el = document.getElementById('blocked-ips-table');
+    const resp = await fetch('/api/admin/blocked-ips');
+    if (!resp.ok) { el.textContent = 'Failed to load.'; return; }
+    const data = await resp.json();
+    if (!data.length) { el.innerHTML = '<p style="color:var(--muted)">No blocked IPs.</p>'; return; }
+    let html = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr>'
+      + '<th style="text-align:left;padding:6px 8px;">IP</th>'
+      + '<th style="text-align:right;padding:6px 8px;">Failures</th>'
+      + '<th style="text-align:left;padding:6px 8px;">Blocked at</th>'
+      + '<th style="text-align:left;padding:6px 8px;">Last failure</th>'
+      + '<th style="padding:6px 8px;"></th>'
+      + '</tr></thead><tbody>';
+    for (const row of data) {
+      const blockedAt = row.blocked_at ? new Date(row.blocked_at).toLocaleString() : '<span style="color:var(--muted)">tracking</span>';
+      const lastFailure = new Date(row.last_failure).toLocaleString();
+      const rowStyle = row.blocked_at ? 'background:color-mix(in srgb,var(--danger,#e53e3e) 8%,transparent)' : '';
+      html += `<tr style="border-top:1px solid var(--border);${rowStyle}">
+        <td style="padding:6px 8px;font-family:monospace">${row.ip}</td>
+        <td style="padding:6px 8px;text-align:right">${row.failed_count}</td>
+        <td style="padding:6px 8px;font-size:0.85em">${blockedAt}</td>
+        <td style="padding:6px 8px;font-size:0.85em;white-space:nowrap">${lastFailure}</td>
+        <td style="padding:6px 8px;text-align:right">
+          <button class="btn-secondary" style="font-size:0.8em;padding:2px 8px"
+            onclick="unblockIp(${JSON.stringify(row.ip)}, this)">Unblock</button>
+        </td>
+      </tr>`;
+    }
+    html += '</tbody></table>';
+    el.innerHTML = html;
+  }
+
+  async function unblockIp(ip, btn) {
+    btn.disabled = true;
+    const resp = await fetch('/api/admin/blocked-ips/' + encodeURIComponent(ip), { method: 'DELETE' });
+    if (resp.ok) {
+      showToast('Unblocked ' + ip, { type: 'success' });
+      loadBlockedIps();
+    } else {
+      showToast('Failed to unblock ' + ip, { type: 'error' });
+      btn.disabled = false;
+    }
+  }
+
   async function loadRateLimits() {
     const el = document.getElementById('rate-limits-table');
     const resp = await fetch('/api/admin/rate-limits');
@@ -65,6 +119,7 @@
     el.innerHTML = html;
   }
 
+  loadBlockedIps();
   loadRateLimits();
   loadAccessLog();
 </script>

@@ -34,6 +34,8 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/session/logout", post(handlers::logout))
         .route("/session/device-token", post(handlers::create_device_token))
         .route("/kv", get(handlers::list_kv_entries).put(handlers::admin_write_kv))
+        .route("/blocked-ips", get(handlers::list_blocked_ips))
+        .route("/blocked-ips/:ip", delete(handlers::unblock_ip))
         .route("/rate-limits", get(handlers::list_rate_counters))
         .route("/access-log", get(handlers::list_access_log))
         .route("/kv/scopes", get(handlers::list_scopes))
