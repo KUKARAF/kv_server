@@ -51,7 +51,7 @@
         <td style="padding:6px 8px;font-size:0.85em;white-space:nowrap">${lastFailure}</td>
         <td style="padding:6px 8px;text-align:right">
           <button class="btn-secondary" style="font-size:0.8em;padding:2px 8px"
-            onclick="unblockIp(${JSON.stringify(row.ip)}, this)">Unblock</button>
+            onclick="unblockIp('${row.ip}', this)">Unblock</button>
         </td>
       </tr>`;
     }
