@@ -219,3 +219,10 @@ pub struct SessionRow {
     pub expires_at: String,
     pub created_at: String,
 }
+
+/// Info about the current active session key for an owner
+#[derive(Debug, Serialize)]
+pub struct SessionKeyInfo {
+    pub id: String,
+    pub expires_at: Option<String>,
+}

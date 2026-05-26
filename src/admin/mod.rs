@@ -29,10 +29,8 @@ pub fn router() -> Router<Arc<AppState>> {
             "/secret-requests/:id",
             delete(handlers::delete_secret_request),
         )
-        .route("/session", get(handlers::get_session))
-        .route("/session/token", get(handlers::get_session_token))
-        .route("/session/logout", post(handlers::logout))
-        .route("/session/device-token", post(handlers::create_device_token))
+        .route("/session-key", get(handlers::get_session_key).post(handlers::create_session_key))
+        .route("/session-key/logout", post(handlers::logout))
         .route("/kv", get(handlers::list_kv_entries).put(handlers::admin_write_kv))
         .route("/blocked-ips", get(handlers::list_blocked_ips))
         .route("/blocked-ips/:ip", delete(handlers::unblock_ip))

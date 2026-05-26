@@ -1,6 +1,5 @@
 pub mod middleware;
 pub mod oidc;
-pub mod session;
 
 use crate::state::AppState;
 use axum::{routing::get, Router};

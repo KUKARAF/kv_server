@@ -1,11 +1,18 @@
-use crate::{auth::session::{validate_session, SessionClaims}, error::AppError, middleware::ip_block::{record_auth_failure, ClientIp}, state::AppState};
+use crate::{error::AppError, keys::generate::hash_key, middleware::ip_block::{record_auth_failure, ClientIp}, state::AppState};
 use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use std::sync::Arc;
+
+#[derive(Debug, Clone)]
+pub struct SessionClaims {
+    pub id: String,
+    pub oidc_subject: String,
+    pub email: Option<String>,
+}
 
 pub struct AdminAuth(pub SessionClaims);
 
 fn extract_token(parts: &Parts) -> Option<String> {
-    // 1. Authorization: Bearer <token>
+    // 1. Authorization: Bearer ***
     if let Some(token) = parts
         .headers
         .get("Authorization")
@@ -36,21 +43,30 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
             return Ok(AdminAuth(SessionClaims {
                 id: "dev".to_string(),
                 oidc_subject: "dev".to_string(),
-                email: "dev@localhost".to_string(),
+                email: Some("dev@localhost".to_string()),
             }));
         }
 
         let token = extract_token(parts).ok_or(AppError::Unauthorized)?;
-        match validate_session(&state.pool, &token).await {
-            Ok(claims) => Ok(AdminAuth(claims)),
-            Err(e) => {
-                if let Some(ip) = parts.extensions.get::<ClientIp>().map(|c| c.0) {
-                    let pool = state.pool.clone();
-                    let threshold = state.config.auth_failure_threshold;
-                    tokio::spawn(async move { record_auth_failure(&pool, ip, threshold).await });
-                }
-                Err(e)
-            }
-        }
+        
+        // Validate session via api_keys table with type='session'
+        let key_hash = hash_key(&token);
+        
+        let row = sqlx::query!(
+            "SELECT id, owner_id 
+             FROM api_keys 
+             WHERE key_hash = ? AND type = 'session' AND status = 'active' 
+               AND (expires_at IS NULL OR expires_at > datetime('now'))",
+            key_hash
+        )
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+        Ok(AdminAuth(SessionClaims {
+            id: row.id,
+            oidc_subject: row.owner_id,
+            email: None, // Session keys don't store email
+        }))
     }
 }

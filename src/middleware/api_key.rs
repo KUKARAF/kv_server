@@ -1,4 +1,4 @@
-use crate::{auth::session::validate_session, error::AppError, keys::scope::{check_scope, ScopeRule}, middleware::ip_block::{record_auth_failure, ClientIp}, notify, state::AppState};
+use crate::{error::AppError, keys::scope::{check_scope, ScopeRule}, middleware::ip_block::{record_auth_failure, ClientIp}, notify, state::AppState};
 use axum::{
     async_trait,
     extract::FromRequestParts,
@@ -41,12 +41,11 @@ impl Op {
     }
 }
 
-#[allow(dead_code)]
 pub struct ApiKeyAuth {
     pub owner_id: Option<String>,  // None only for open-access reads
     pub api_key_id: Option<String>,
     pub op: Op,
-    pub allowed_scopes: Vec<ScopeRule>, // populated for API key auth; empty for session tokens
+    pub allowed_scopes: Vec<ScopeRule>, // populated for API key auth
 }
 
 #[async_trait]
@@ -68,24 +67,120 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             }
         };
 
-        // Session token (Authorization: Bearer) grants full access, same as admin.
-        if let Some(token) = parts
+        // Check for Authorization: Bearer token (could be session-type API key)
+        let bearer_token = parts
             .headers
             .get("Authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-        {
-            match validate_session(&state.pool, token).await {
-                Ok(claims) => return Ok(ApiKeyAuth {
-                    owner_id: Some(claims.oidc_subject),
-                    api_key_id: None,
-                    op,
-                    allowed_scopes: vec![],
-                }),
-                Err(_) => {
+            .and_then(|v| v.strip_prefix("Bearer "));
+
+        // First, check if Bearer token is a session-type API key
+        if let Some(token) = bearer_token {
+            let key_hash = crate::keys::generate::hash_key(token);
+            
+            // Look up in api_keys with type='session'
+            let api_key = sqlx::query!(
+                "SELECT id, type as key_type, status, expires_at, owner_id
+                 FROM api_keys
+                 WHERE key_hash = ? AND type = 'session'",
+                key_hash
+            )
+            .fetch_optional(&state.pool)
+            .await?;
+            
+            if let Some(api_key) = api_key {
+                // Session-type key found - validate and check scope
+                // Check status
+                if api_key.status == "revoked" || api_key.status == "used" {
+                    notify::send(
+                        state.pool.clone(),
+                        format!("Auth failure: {} key used ({})", api_key.status, &api_key.id[..8]),
+                        "medium",
+                    );
                     record_failure();
                     return Err(AppError::Unauthorized);
                 }
+                
+                // Check expiry
+                if let Some(ref exp) = api_key.expires_at {
+                    let expired: bool = sqlx::query_scalar!(
+                        "SELECT datetime(?) <= datetime('now')",
+                        exp
+                    )
+                    .fetch_one(&state.pool)
+                    .await? != 0;
+
+                    if expired {
+                        notify::send(
+                            state.pool.clone(),
+                            format!("Auth failure: expired session key used ({})", &api_key.id[..8]),
+                            "medium",
+                        );
+                        record_failure();
+                        return Err(AppError::Unauthorized);
+                    }
+                }
+                
+                // Fetch scopes for session-type key
+                let scopes = sqlx::query_as!(
+                    ScopeRule,
+                    "SELECT scope, ops FROM api_key_scopes WHERE api_key_id = ?",
+                    api_key.id
+                )
+                .fetch_all(&state.pool)
+                .await?;
+
+                // Session-type keys now ENFORCE scope checks (this is the key improvement!)
+                // For list operations, allow empty scopes (full access to list)
+                // For key operations, require matching scope
+                let kv_key = parts
+                    .uri
+                    .path()
+                    .trim_start_matches('/')
+                    .to_string();
+                
+                let entry_scope: Option<String> = if op != Op::List && !kv_key.is_empty() {
+                    sqlx::query_scalar!(
+                        "SELECT scope FROM kv_entries WHERE key = ? AND owner_id = ?
+                         AND (expires_at IS NULL OR expires_at > datetime('now'))
+                         LIMIT 1",
+                        kv_key, api_key.owner_id
+                    )
+                    .fetch_optional(&state.pool)
+                    .await?
+                    .flatten()
+                } else {
+                    None
+                };
+
+                let check_scope_val = if op == Op::List { None } else { entry_scope.as_deref() };
+                if !check_scope(&scopes, check_scope_val, op.as_str()) {
+                    notify::send(
+                        state.pool.clone(),
+                        format!("Auth failure: scope denied for session key {} on '{kv_key}'", &api_key.id[..8]),
+                        "medium",
+                    );
+                    return Err(AppError::Forbidden("insufficient scope".to_string()));
+                }
+
+                // Update last_used_at (fire and forget)
+                let id = api_key.id.clone();
+                let pool = state.pool.clone();
+                tokio::spawn(async move {
+                    let _ = sqlx::query!(
+                        "UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?",
+                        id
+                    )
+                    .execute(&pool)
+                    .await;
+                });
+
+                return Ok(ApiKeyAuth {
+                    owner_id: Some(api_key.owner_id),
+                    api_key_id: Some(api_key.id),
+                    op,
+                    allowed_scopes: scopes,
+                });
             }
         }
 
@@ -125,7 +220,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         let api_key = sqlx::query!(
             "SELECT id, type as key_type, status, expires_at, owner_id
              FROM api_keys
-             WHERE key_hash = ?",
+             WHERE key_hash = ? AND type NOT IN ('session', 'Bearer')",
             key_hash
         )
         .fetch_optional(&state.pool)
@@ -184,10 +279,12 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     .fetch_optional(&state.pool)
                     .await?;
 
+                    // For approval_required, check if owner has an active session
+                    // We now look in api_keys instead of session_tokens
                     let approver = sqlx::query_scalar!(
-                        "SELECT email FROM session_tokens
-                         WHERE expires_at > datetime('now')
-                           AND oidc_subject = ?
+                        "SELECT id FROM api_keys
+                         WHERE owner_id = ? AND type = 'session' AND status = 'active'
+                           AND (expires_at IS NULL OR expires_at > datetime('now'))
                          ORDER BY created_at DESC LIMIT 1",
                         api_key.owner_id
                     )
@@ -198,7 +295,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
 
                     return Err(AppError::PendingApproval {
                         confirm: emoji.unwrap_or_else(|| "pending approval".to_string()),
-                        approver,
+                        approver: None, // Session keys don't store email
                     });
                 }
             }

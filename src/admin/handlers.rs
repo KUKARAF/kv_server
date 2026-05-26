@@ -1,6 +1,6 @@
 use crate::{
     admin::model::*,
-    auth::{middleware::AdminAuth, session},
+    auth::middleware::AdminAuth,
     error::AppError,
     keys::generate::{generate_api_key, generate_emoji_sequence},
     kv::model::compute_expires_at,
@@ -162,6 +162,87 @@ pub async fn delete_key(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Session Keys ─────────────────────────────────────────────────────────────
+
+/// Create a session key for the authenticated admin.
+/// Auto-revokes any existing active session key for this owner.
+pub async fn create_session_key(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
+    let owner = &auth.0.oidc_subject;
+    
+    // Auto-revoke any existing active session key for this owner
+    sqlx::query!(
+        "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active'",
+        owner
+    )
+    .execute(&state.pool)
+    .await?;
+    
+    // Create new session key with 15 hour TTL
+    let (plaintext, key_hash) = generate_api_key();
+    let id = Uuid::new_v4().to_string();
+    
+    sqlx::query!(
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
+         VALUES (?, ?, 'session', 'session', 'active', datetime('now', '+15 hours'), ?)",
+        id, key_hash, owner
+    )
+    .execute(&state.pool)
+    .await?;
+    
+    Ok((StatusCode::CREATED, Json(CreateKeyResponse { id, key: plaintext })))
+}
+
+/// Get the current active session key info for this owner (id only, not the key itself)
+pub async fn get_session_key(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+) -> Result<Json<Option<SessionKeyInfo>>, AppError> {
+    let owner = &auth.0.oidc_subject;
+    
+    let row = sqlx::query!(
+        "SELECT id, expires_at FROM api_keys 
+         WHERE owner_id = ? AND type = 'session' AND status = 'active' 
+           AND (expires_at IS NULL OR expires_at > datetime('now'))
+         ORDER BY created_at DESC LIMIT 1",
+        owner
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+    
+    Ok(Json(row.map(|r| SessionKeyInfo {
+        id: r.id,
+        expires_at: r.expires_at,
+    })))
+}
+
+/// Revoke the current session key and clear the cookie
+pub async fn logout(
+    State(state): State<Arc<AppState>>,
+    jar: CookieJar,
+    auth: AdminAuth,
+) -> Result<Response, AppError> {
+    let owner = &auth.0.oidc_subject;
+    
+    // Revoke all active session keys for this owner
+    sqlx::query!(
+        "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active'",
+        owner
+    )
+    .execute(&state.pool)
+    .await?;
+    
+    let clear = Cookie::build(("session_token", ""))
+        .http_only(true)
+        .secure(true)
+        .path("/")
+        .max_age(time::Duration::seconds(0))
+        .build();
+    Ok((jar.remove(clear), Redirect::to("/auth/login")).into_response())
 }
 
 // ── Approvals ───────────────────────────────────────────────────────────────
@@ -595,7 +676,7 @@ pub async fn create_secret_request(
     Json(body): Json<CreateSecretRequestBody>,
 ) -> Result<(StatusCode, Json<CreateSecretRequestResponse>), AppError> {
     let owner = &auth.0.oidc_subject;
-    let email = &auth.0.email;
+    let email = auth.0.email.as_deref().unwrap_or(owner);
     let id = Uuid::new_v4().to_string();
 
     sqlx::query!(
@@ -759,68 +840,4 @@ pub async fn submit_secret_request(
 
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
-}
-
-// ── Session ─────────────────────────────────────────────────────────────────
-
-pub async fn get_session(
-    State(state): State<Arc<AppState>>,
-    auth: AdminAuth,
-) -> Result<Json<SessionRow>, AppError> {
-    let row = sqlx::query_as!(
-        SessionRow,
-        "SELECT id, email, oidc_subject, expires_at, created_at
-         FROM session_tokens WHERE oidc_subject = ? ORDER BY created_at DESC LIMIT 1",
-        auth.0.oidc_subject
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    Ok(Json(row))
-}
-
-/// Returns the raw session token from the cookie so the browser can copy it.
-/// Safe because the caller must already possess the cookie to pass AdminAuth.
-pub async fn get_session_token(
-    jar: CookieJar,
-    _auth: AdminAuth,
-) -> Result<Json<String>, AppError> {
-    let token = jar
-        .get("session_token")
-        .map(|c| c.value().to_string())
-        .ok_or(AppError::Unauthorized)?;
-    Ok(Json(token))
-}
-
-pub async fn logout(
-    State(state): State<Arc<AppState>>,
-    jar: CookieJar,
-    _auth: AdminAuth,
-) -> Result<Response, AppError> {
-    if let Some(token) = jar.get("session_token").map(|c| c.value().to_string()) {
-        let _ = session::revoke_session(&state.pool, &token).await;
-    }
-    let clear = Cookie::build(("session_token", ""))
-        .http_only(true)
-        .secure(true)
-        .path("/")
-        .max_age(time::Duration::seconds(0))
-        .build();
-    Ok((jar.remove(clear), Redirect::to("/auth/login")).into_response())
-}
-
-/// Issues a long-lived device token (180 days) for the authenticated admin.
-/// The token is returned once in plaintext — store it immediately.
-pub async fn create_device_token(
-    State(state): State<Arc<AppState>>,
-    auth: AdminAuth,
-) -> Result<Json<String>, AppError> {
-    let token = session::create_device_token(
-        &state.pool,
-        &auth.0.oidc_subject,
-        &auth.0.email,
-    )
-    .await?;
-    Ok(Json(token))
 }

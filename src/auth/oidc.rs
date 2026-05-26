@@ -1,4 +1,4 @@
-use crate::{auth::session::create_session, error::AppError, state::AppState};
+use crate::error::AppError;
 use anyhow::Context;
 use axum::{
     extract::{Query, State},
@@ -129,6 +129,37 @@ pub struct CallbackParams {
     state: String,
 }
 
+/// Creates a session key in api_keys table with type='session'
+async fn create_session_key(
+    pool: &sqlx::SqlitePool,
+    owner_id: &str,
+) -> Result<String, AppError> {
+    use crate::keys::generate::generate_api_key;
+    use uuid::Uuid;
+    
+    // Auto-revoke any existing active session key
+    sqlx::query!(
+        "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active'",
+        owner_id
+    )
+    .execute(pool)
+    .await?;
+    
+    // Create new session key with 15 hour TTL
+    let (plaintext, key_hash) = generate_api_key();
+    let id = Uuid::new_v4().to_string();
+    
+    sqlx::query!(
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
+         VALUES (?, ?, 'session', 'session', 'active', datetime('now', '+15 hours'), ?)",
+        id, key_hash, owner_id
+    )
+    .execute(pool)
+    .await?;
+    
+    Ok(plaintext)
+}
+
 pub async fn callback(
     State(state): State<Arc<AppState>>,
     jar: CookieJar,
@@ -175,13 +206,13 @@ pub async fn callback(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("id_token verification failed: {e}")))?;
 
     let oidc_subject = claims.subject().to_string();
-    let email = claims
+    let _email = claims
         .email()
         .map(|e| e.to_string())
         .unwrap_or_else(|| oidc_subject.clone());
 
-    // Issue session token
-    let session_token = create_session(&state.pool, &oidc_subject, &email).await?;
+    // Create session key in api_keys table
+    let session_token = create_session_key(&state.pool, &oidc_subject).await?;
 
     // Clear oidc_state cookie, set session cookie, redirect to admin
     let clear_cookie = Cookie::build(("oidc_state", ""))
@@ -195,7 +226,7 @@ pub async fn callback(
         .http_only(true)
         .secure(true)
         .same_site(SameSite::Strict)
-        .max_age(time::Duration::seconds(36000))
+        .max_age(time::Duration::hours(15))
         .path("/")
         .build();
 
