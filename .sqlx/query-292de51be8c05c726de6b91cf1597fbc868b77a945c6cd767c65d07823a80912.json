@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, type as key_type, status, expires_at, owner_id\n             FROM api_keys\n             WHERE key_hash = ?",
+  "query": "SELECT id, type as key_type, status, expires_at, owner_id\n                 FROM api_keys\n                 WHERE key_hash = ? AND type = 'session'",
   "describe": {
     "columns": [
       {
@@ -40,5 +40,5 @@
       false
     ]
   },
-  "hash": "d22001eb381739861ee880dea092a4e7a589edb3138c812ba175c28dde1c7aca"
+  "hash": "292de51be8c05c726de6b91cf1597fbc868b77a945c6cd767c65d07823a80912"
 }

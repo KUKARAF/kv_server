@@ -1,4 +1,4 @@
-use crate::error::AppError;
+use crate::{error::AppError, state::AppState};
 use anyhow::Context;
 use axum::{
     extract::{Query, State},

@@ -209,16 +209,6 @@ pub struct BlockedIpRow {
     pub last_failure: String,
 }
 
-// ── Session ──────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct SessionRow {
-    pub id: String,
-    pub email: String,
-    pub oidc_subject: String,
-    pub expires_at: String,
-    pub created_at: String,
-}
 
 /// Info about the current active session key for an owner
 #[derive(Debug, Serialize)]

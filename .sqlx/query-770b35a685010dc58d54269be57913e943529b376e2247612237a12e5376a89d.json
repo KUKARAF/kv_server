@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, email, oidc_subject, expires_at, created_at\n         FROM session_tokens WHERE oidc_subject = ? ORDER BY created_at DESC LIMIT 1",
+  "query": "SELECT id, type as key_type, status, expires_at, owner_id\n             FROM api_keys\n             WHERE key_hash = ? AND type NOT IN ('session', 'Bearer')",
   "describe": {
     "columns": [
       {
@@ -9,12 +9,12 @@
         "type_info": "Text"
       },
       {
-        "name": "email",
+        "name": "key_type",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "oidc_subject",
+        "name": "status",
         "ordinal": 2,
         "type_info": "Text"
       },
@@ -24,7 +24,7 @@
         "type_info": "Text"
       },
       {
-        "name": "created_at",
+        "name": "owner_id",
         "ordinal": 4,
         "type_info": "Text"
       }
@@ -36,9 +36,9 @@
       false,
       false,
       false,
-      false,
+      true,
       false
     ]
   },
-  "hash": "f1eaf9fbb6a6e92414b26795f2c9d3d4f8ff9506816d5ce962e11e7ea526ce8c"
+  "hash": "770b35a685010dc58d54269be57913e943529b376e2247612237a12e5376a89d"
 }

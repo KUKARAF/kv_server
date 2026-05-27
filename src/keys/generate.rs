@@ -16,13 +16,6 @@ pub fn hash_key(plaintext: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-pub fn generate_session_token() -> (String, String) {
-    let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    let plaintext = URL_SAFE_NO_PAD.encode(bytes);
-    let hash = hash_key(&plaintext);
-    (plaintext, hash)
-}
 
 // Generated at compile time from admin/emoji.json — refresh with .tools/get_emojis.sh
 include!(concat!(env!("OUT_DIR"), "/emoji_pool.rs"));

@@ -1,10 +1,9 @@
-use crate::{error::AppError, keys::generate::hash_key, middleware::ip_block::{record_auth_failure, ClientIp}, state::AppState};
+use crate::{error::AppError, keys::generate::hash_key, state::AppState};
 use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct SessionClaims {
-    pub id: String,
     pub oidc_subject: String,
     pub email: Option<String>,
 }
@@ -41,7 +40,6 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
     ) -> Result<Self, Self::Rejection> {
         if state.config.dev_mode {
             return Ok(AdminAuth(SessionClaims {
-                id: "dev".to_string(),
                 oidc_subject: "dev".to_string(),
                 email: Some("dev@localhost".to_string()),
             }));
@@ -64,9 +62,8 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         .ok_or(AppError::Unauthorized)?;
 
         Ok(AdminAuth(SessionClaims {
-            id: row.id,
             oidc_subject: row.owner_id,
-            email: None, // Session keys don't store email
+            email: None,
         }))
     }
 }

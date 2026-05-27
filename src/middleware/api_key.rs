@@ -139,7 +139,11 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     .trim_start_matches('/')
                     .to_string();
                 
-                let entry_scope: Option<String> = if op != Op::List && !kv_key.is_empty() {
+                // None = entry doesn't exist → skip scope check, auth passes, handler returns 404
+                // Some(scope) = entry exists → check scope normally
+                let scope_to_check: Option<Option<String>> = if op == Op::List {
+                    Some(None)
+                } else if !kv_key.is_empty() {
                     sqlx::query_scalar!(
                         "SELECT scope FROM kv_entries WHERE key = ? AND owner_id = ?
                          AND (expires_at IS NULL OR expires_at > datetime('now'))
@@ -148,19 +152,19 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     )
                     .fetch_optional(&state.pool)
                     .await?
-                    .flatten()
                 } else {
-                    None
+                    Some(None)
                 };
 
-                let check_scope_val = if op == Op::List { None } else { entry_scope.as_deref() };
-                if !check_scope(&scopes, check_scope_val, op.as_str()) {
-                    notify::send(
-                        state.pool.clone(),
-                        format!("Auth failure: scope denied for session key {} on '{kv_key}'", &api_key.id[..8]),
-                        "medium",
-                    );
-                    return Err(AppError::Forbidden("insufficient scope".to_string()));
+                if let Some(entry_scope) = scope_to_check {
+                    if !check_scope(&scopes, entry_scope.as_deref(), op.as_str()) {
+                        notify::send(
+                            state.pool.clone(),
+                            format!("Auth failure: scope denied for session key {} on '{kv_key}'", &api_key.id[..8]),
+                            "medium",
+                        );
+                        return Err(AppError::Forbidden("insufficient scope".to_string()));
+                    }
                 }
 
                 // Update last_used_at (fire and forget)
@@ -279,23 +283,9 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     .fetch_optional(&state.pool)
                     .await?;
 
-                    // For approval_required, check if owner has an active session
-                    // We now look in api_keys instead of session_tokens
-                    let approver = sqlx::query_scalar!(
-                        "SELECT id FROM api_keys
-                         WHERE owner_id = ? AND type = 'session' AND status = 'active'
-                           AND (expires_at IS NULL OR expires_at > datetime('now'))
-                         ORDER BY created_at DESC LIMIT 1",
-                        api_key.owner_id
-                    )
-                    .fetch_optional(&state.pool)
-                    .await
-                    .ok()
-                    .flatten();
-
                     return Err(AppError::PendingApproval {
                         confirm: emoji.unwrap_or_else(|| "pending approval".to_string()),
-                        approver: None, // Session keys don't store email
+                        approver: None,
                     });
                 }
             }
@@ -322,9 +312,11 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         .fetch_all(&state.pool)
         .await?;
 
-        // For reads/writes/deletes on a specific key, fetch the entry's scope to check
-        // hierarchical access. For list, we pass None and let the handler filter by scope.
-        let entry_scope: Option<String> = if op != Op::List && !kv_key.is_empty() {
+        // None = entry doesn't exist → skip scope check, auth passes, handler returns 404
+        // Some(scope) = entry exists → check scope normally
+        let scope_to_check: Option<Option<String>> = if op == Op::List {
+            Some(None)
+        } else if !kv_key.is_empty() {
             sqlx::query_scalar!(
                 "SELECT scope FROM kv_entries WHERE key = ? AND owner_id = ?
                  AND (expires_at IS NULL OR expires_at > datetime('now'))
@@ -333,19 +325,19 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             )
             .fetch_optional(&state.pool)
             .await?
-            .flatten()
         } else {
-            None
+            Some(None)
         };
 
-        let check_scope_val = if op == Op::List { None } else { entry_scope.as_deref() };
-        if !check_scope(&scopes, check_scope_val, op.as_str()) {
-            notify::send(
-                state.pool.clone(),
-                format!("Auth failure: scope denied for key {} on '{kv_key}'", &api_key.id[..8]),
-                "medium",
-            );
-            return Err(AppError::Forbidden("insufficient scope".to_string()));
+        if let Some(entry_scope) = scope_to_check {
+            if !check_scope(&scopes, entry_scope.as_deref(), op.as_str()) {
+                notify::send(
+                    state.pool.clone(),
+                    format!("Auth failure: scope denied for key {} on '{kv_key}'", &api_key.id[..8]),
+                    "medium",
+                );
+                return Err(AppError::Forbidden("insufficient scope".to_string()));
+            }
         }
 
         // Consume one-time key only after scope check passes

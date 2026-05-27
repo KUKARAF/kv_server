@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, expires_at FROM api_keys \n         WHERE owner_id = ? AND type = 'session' AND status = 'active' \n           AND (expires_at IS NULL OR expires_at > datetime('now'))\n         ORDER BY created_at DESC LIMIT 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "488bb31b7c84d5476015034e23e83b7cc42deae88a3a9217dd9d45e4769ae79c"
+}
