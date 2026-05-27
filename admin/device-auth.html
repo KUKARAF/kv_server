@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Approve Device — KV Manager</title>
+  <link rel="stylesheet" href="/admin/style.css">
+  <style>
+    .device-box {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 2.5rem;
+      max-width: 560px;
+      width: 100%;
+    }
+    .device-icon { font-size: 3rem; text-align: center; margin-bottom: 0.75rem; }
+    .device-box h1 { font-size: 1.3rem; text-align: center; margin-bottom: 0.5rem; }
+    .device-meta { color: #888; font-size: 12px; text-align: center; margin-bottom: 1.5rem; }
+    .countdown { color: #f59e0b; font-weight: 600; }
+    .action-row { display: flex; gap: 0.75rem; margin-top: 1.5rem; justify-content: flex-end; }
+    .btn-danger { background: #dc2626; color: #fff; padding: 0.4rem 1rem; border-radius: 5px; border: none; cursor: pointer; font-size: 13px; }
+    .btn-danger:hover { background: #b91c1c; }
+    .status-msg { text-align: center; padding: 2rem; }
+    .status-msg .status-icon { font-size: 3rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body class="login-page">
+  <div class="device-box">
+    <div class="share-brand"><img src="https://static.layer55.eu/kv/kv_logo.svg" alt="KV Manager" class="share-brand-logo"></div>
+
+    <div id="loading">
+      <div class="device-icon">⏳</div>
+      <h1>Loading…</h1>
+    </div>
+
+    <div id="status-view" class="hidden">
+      <div class="status-msg">
+        <div class="status-icon" id="status-icon"></div>
+        <p id="status-text"></p>
+      </div>
+    </div>
+
+    <div id="approve-view" class="hidden">
+      <div class="device-icon">💻</div>
+      <h1>Device wants access</h1>
+      <p id="device-label" class="device-meta" style="font-size:14px;color:#e0e0e0;margin-bottom:0.25rem;"></p>
+      <p class="device-meta">
+        Requested <span id="requested-at"></span> &nbsp;·&nbsp;
+        Expires in <span id="countdown" class="countdown"></span>
+      </p>
+
+      <datalist id="key-scopes-list"></datalist>
+
+      <label>API key label
+        <input id="key-label" type="text" placeholder="deploy bot key" required>
+      </label>
+
+      <label style="margin-top:0.75rem;">Expires at (optional)
+        <input id="key-expires" type="datetime-local">
+      </label>
+
+      <div style="margin-top:1rem;">
+        <p class="label-sm">Scope rules</p>
+        <table class="scope-table">
+          <thead><tr><th>Key pattern</th><th>R</th><th>W</th><th></th></tr></thead>
+          <tbody id="scope-rules">
+            <tr class="scope-row">
+              <td><input name="key_pattern" list="key-scopes-list" placeholder="myapp/config"></td>
+              <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
+              <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
+              <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <button type="button" class="btn-secondary" onclick="addScope()" style="margin-top:0.5rem;">+ Add scope rule</button>
+      </div>
+
+      <div id="approve-error" class="hidden" style="color:#fca5a5;font-size:13px;margin-top:0.75rem;"></div>
+
+      <div class="action-row">
+        <button class="btn-danger" onclick="rejectRequest()">Reject</button>
+        <button class="btn" onclick="approveRequest()">Approve</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── Auth guard ────────────────────────────────────────────────────────────
+    const _fetch = window.fetch;
+    window.fetch = async (...args) => {
+      const resp = await _fetch(...args);
+      if (resp.status === 401) { window.location.href = '/auth/login?return=' + encodeURIComponent(location.href); }
+      return resp;
+    };
+
+    // ── Init ──────────────────────────────────────────────────────────────────
+    const params = new URLSearchParams(location.search);
+    const requestId = params.get('id');
+
+    if (!requestId) {
+      showStatus('❌', 'No request ID provided.');
+    } else {
+      loadRequest();
+    }
+
+    async function loadRequest() {
+      const resp = await fetch('/api/admin/device-auth/' + requestId);
+      if (resp.status === 404) { showStatus('❌', 'Request not found.'); return; }
+      if (!resp.ok) { showStatus('❌', 'Failed to load request (' + resp.status + ').'); return; }
+
+      const data = await resp.json();
+
+      if (data.status !== 'pending') {
+        const msgs = {
+          approved:  ['✅', 'This request has already been approved.'],
+          rejected:  ['✗', 'This request was rejected.'],
+          expired:   ['⏰', 'This request has expired.'],
+          delivered: ['✅', 'This request was approved and the key was delivered.'],
+        };
+        const [icon, text] = msgs[data.status] || ['?', 'Unknown status: ' + data.status];
+        showStatus(icon, text);
+        return;
+      }
+
+      if (data.label) document.getElementById('device-label').textContent = data.label;
+      document.getElementById('requested-at').textContent = data.requested_at;
+      startCountdown(data.expires_at);
+      loadScopes();
+
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('approve-view').classList.remove('hidden');
+    }
+
+    function showStatus(icon, text) {
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('status-icon').textContent = icon;
+      document.getElementById('status-text').textContent = text;
+      document.getElementById('status-view').classList.remove('hidden');
+    }
+
+    // ── Countdown ─────────────────────────────────────────────────────────────
+    function startCountdown(expiresAt) {
+      const el = document.getElementById('countdown');
+      function tick() {
+        const diff = Math.max(0, new Date(expiresAt + 'Z') - Date.now());
+        const m = Math.floor(diff / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        el.textContent = m + ':' + String(s).padStart(2, '0');
+        if (diff <= 0) { showStatus('⏰', 'This request has expired.'); }
+      }
+      tick();
+      setInterval(tick, 1000);
+    }
+
+    // ── Scopes ────────────────────────────────────────────────────────────────
+    async function loadScopes() {
+      const resp = await fetch('/api/admin/kv/scopes');
+      if (!resp.ok) return;
+      const scopes = await resp.json();
+      const dl = document.getElementById('key-scopes-list');
+      dl.innerHTML = scopes.map(s => `<option value="${esc(s)}">`).join('');
+    }
+
+    function addScope() {
+      const tr = document.createElement('tr');
+      tr.className = 'scope-row';
+      tr.innerHTML = `
+        <td><input name="key_pattern" list="key-scopes-list" placeholder="myapp/config"></td>
+        <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
+        <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
+        <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
+      `;
+      document.getElementById('scope-rules').appendChild(tr);
+    }
+
+    // ── Approve / Reject ──────────────────────────────────────────────────────
+    async function approveRequest() {
+      const label = document.getElementById('key-label').value.trim();
+      const expiresAt = document.getElementById('key-expires').value || null;
+      const errEl = document.getElementById('approve-error');
+
+      const scopes = Array.from(document.querySelectorAll('#scope-rules .scope-row'))
+        .map(row => {
+          const pattern = row.querySelector('[name=key_pattern]').value.trim();
+          const r = row.querySelector('[name=ops_read]').checked;
+          const w = row.querySelector('[name=ops_write]').checked;
+          const ops = [r && 'read', w && 'write'].filter(Boolean).join(',');
+          return { key_pattern: pattern, ops };
+        })
+        .filter(s => s.key_pattern && s.ops);
+
+      if (!label) { showError('Label is required.'); return; }
+      if (!scopes.length) { showError('At least one scope with an operation is required.'); return; }
+
+      errEl.classList.add('hidden');
+
+      const resp = await fetch('/api/admin/device-auth/' + requestId + '/approve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, scopes, expires_at: expiresAt }),
+      });
+
+      if (resp.ok) {
+        showStatus('✅', 'Approved! The API key has been sent to the device.');
+      } else {
+        const body = await resp.json().catch(() => null);
+        showError(body?.error || 'Approval failed (' + resp.status + ').');
+      }
+    }
+
+    async function rejectRequest() {
+      const resp = await fetch('/api/admin/device-auth/' + requestId + '/reject', { method: 'POST' });
+      if (resp.ok) {
+        showStatus('✗', 'Request rejected.');
+      } else {
+        showError('Rejection failed (' + resp.status + ').');
+      }
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('approve-error');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    }
+  </script>
+</body>
+</html>

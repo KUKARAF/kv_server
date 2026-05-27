@@ -40,4 +40,5 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/kv/import", post(handlers::admin_import_kv))
         .route("/kv/:key", patch(handlers::admin_patch_kv).delete(handlers::admin_delete_kv))
         .nest("/webauthn", webauthn::admin_router())
+        .nest("/device-auth", crate::device_auth::admin_router())
 }

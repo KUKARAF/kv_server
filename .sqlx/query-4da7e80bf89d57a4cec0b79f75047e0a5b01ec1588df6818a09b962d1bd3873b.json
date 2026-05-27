@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT datetime('now', '+15 minutes')",
+  "describe": {
+    "columns": [
+      {
+        "name": "datetime('now', '+15 minutes')",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "4da7e80bf89d57a4cec0b79f75047e0a5b01ec1588df6818a09b962d1bd3873b"
+}

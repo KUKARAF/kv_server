@@ -21,6 +21,8 @@ pub struct Config {
     pub daily_rate_limit: u32,
     pub auth_failure_threshold: u32,
     pub ttl_cleanup_interval_secs: u64,
+
+    pub public_base_url: String,
 }
 
 impl Config {
@@ -74,6 +76,9 @@ impl Config {
                 .unwrap_or_else(|_| "300".to_string())
                 .parse()
                 .context("TTL_CLEANUP_INTERVAL_SECS must be a number")?,
+
+            public_base_url: env::var("PUBLIC_BASE_URL")
+                .unwrap_or_else(|_| "http://localhost:3000".to_string()),
         })
     }
 }

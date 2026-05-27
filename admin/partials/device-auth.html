@@ -1,0 +1,39 @@
+<section>
+  <h2>Pending Device Auth Requests</h2>
+  <p>Devices waiting for an API key. Click Review to configure scopes and approve.</p>
+
+  <div id="device-auth-list"
+       hx-get="/api/admin/device-auth"
+       hx-trigger="load, every 30s"
+       hx-swap="innerHTML">
+    Loading...
+  </div>
+</section>
+
+<script>
+  document.addEventListener('htmx:afterRequest', function(e) {
+    if (e.detail.pathInfo?.requestPath === '/api/admin/device-auth') {
+      renderDeviceAuthList(e.detail.xhr.response);
+    }
+  });
+
+  function renderDeviceAuthList(json) {
+    let items;
+    try { items = JSON.parse(json); } catch { return; }
+    const el = document.getElementById('device-auth-list');
+    if (!items.length) { el.innerHTML = '<p>No pending device auth requests.</p>'; return; }
+    el.innerHTML = items.map(r => `
+      <div class="approval-card" id="dcard-${esc(r.id)}">
+        <div class="info">
+          ${r.label ? `<strong>${esc(r.label)}</strong><br>` : ''}
+          <small>Requested ${esc(r.requested_at)} · expires ${esc(r.expires_at)}</small>
+        </div>
+        <a href="/admin/device-auth.html?id=${esc(r.id)}" class="btn">Review</a>
+      </div>
+    `).join('');
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+</script>

@@ -19,13 +19,6 @@ async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
     .await?
     .rows_affected();
 
-    let sessions = sqlx::query!(
-        "DELETE FROM session_tokens WHERE expires_at <= datetime('now')"
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
-
     let approvals = sqlx::query!(
         "UPDATE approval_requests SET status = 'expired'
          WHERE status = 'pending' AND expires_at <= datetime('now')"
@@ -34,11 +27,19 @@ async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
     .await?
     .rows_affected();
 
-    if kv + sessions + approvals > 0 {
+    let device_auth = sqlx::query!(
+        "UPDATE device_auth_requests SET status = 'expired'
+         WHERE status = 'pending' AND expires_at <= datetime('now')"
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    if kv + approvals + device_auth > 0 {
         tracing::info!(
             kv_deleted = kv,
-            sessions_deleted = sessions,
             approvals_expired = approvals,
+            device_auth_expired = device_auth,
             "TTL cleanup complete"
         );
     }

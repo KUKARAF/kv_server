@@ -7,6 +7,10 @@ edition = "2021"
 name = "kv_manager"
 path = "src/main.rs"
 
+[[bin]]
+name = "kv_cli"
+path = "cli/main.rs"
+
 [dependencies]
 axum = { version = "0.7", features = ["macros"] }
 axum-extra = { version = "0.9", features = ["typed-header", "cookie"] }
@@ -46,6 +50,12 @@ time = "0.3"
 webauthn-rs = { version = "0.5", features = ["danger-allow-state-serialisation"] }
 url = "2"
 jsonwebtoken = "9"
+
+# CLI
+qrcode = { version = "0.14", default-features = false }
+dirs = "5"
+clap = { version = "4", features = ["derive", "env"] }
+toml = "0.8"
 
 [build-dependencies]
 serde_json = "1"

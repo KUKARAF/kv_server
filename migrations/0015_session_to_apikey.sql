@@ -1,20 +1,28 @@
--- Migration: Add type column to api_keys and migrate session tokens
--- Phase 1 of unifying all auth under api_keys table
+-- Migration: Add 'session' type to api_keys and migrate session tokens.
+-- Follows the same table-recreation pattern as 0005/0008 (SQLite can't ALTER CHECK).
 
--- 1. Add 'type' column to api_keys (default 'standard' for existing keys)
-ALTER TABLE api_keys ADD COLUMN type TEXT NOT NULL DEFAULT 'standard';
+PRAGMA foreign_keys = OFF;
 
--- 2. Update existing keys to have explicit 'standard' type
-UPDATE api_keys SET type = 'standard' WHERE type = '' OR type IS NULL;
+CREATE TABLE api_keys_new (
+    id           TEXT NOT NULL PRIMARY KEY,
+    key_hash     TEXT NOT NULL UNIQUE,
+    label        TEXT NOT NULL,
+    type         TEXT NOT NULL CHECK(type IN ('standard','one_time','approval_required','zero_trust','shareable','session')),
+    status       TEXT NOT NULL DEFAULT 'active'
+                     CHECK(status IN ('active','pending_approval','used','revoked')),
+    expires_at   TEXT,
+    owner_id     TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    last_used_at TEXT
+);
 
--- 3. Add 'session' to the allowed types in the CHECK constraint
--- SQLite doesn't support ALTER TABLE to change constraints, so we recreate the table
--- This is safe because we've already added the column above
+INSERT INTO api_keys_new (id, key_hash, label, type, status, expires_at, owner_id, created_at, last_used_at)
+SELECT id, key_hash, label, type, status, expires_at, owner_id, created_at, last_used_at
+FROM api_keys;
 
--- 4. For existing session_tokens, migrate them to api_keys with type='session'
--- Note: We only migrate active, non-expired tokens
-INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id, created_at)
-SELECT 
+-- Migrate active, non-expired session tokens into api_keys with type='session'
+INSERT INTO api_keys_new (id, key_hash, label, type, status, expires_at, owner_id, created_at)
+SELECT
     id,
     token_hash,
     'session_token',
@@ -23,8 +31,41 @@ SELECT
     expires_at,
     oidc_subject,
     created_at
-FROM session_tokens 
+FROM session_tokens
 WHERE expires_at > datetime('now');
 
--- 5. Drop session_tokens table (all auth now goes through api_keys)
+DROP TABLE api_keys;
+ALTER TABLE api_keys_new RENAME TO api_keys;
+
+-- Recreate indexes
+CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_status   ON api_keys(status);
+CREATE INDEX IF NOT EXISTS idx_api_keys_owner    ON api_keys(owner_id);
+
+-- Recreate dependent tables with correct FK references
+CREATE TABLE approval_requests_new (
+    id             TEXT NOT NULL PRIMARY KEY,
+    api_key_id     TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    emoji_sequence TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(status IN ('pending','approved','rejected','expired')),
+    requested_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at     TEXT NOT NULL
+);
+INSERT INTO approval_requests_new SELECT * FROM approval_requests;
+DROP TABLE approval_requests;
+ALTER TABLE approval_requests_new RENAME TO approval_requests;
+
+CREATE TABLE api_key_scopes_new (
+    id          TEXT NOT NULL PRIMARY KEY,
+    api_key_id  TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    scope       TEXT NOT NULL,
+    ops         TEXT NOT NULL
+);
+INSERT INTO api_key_scopes_new SELECT * FROM api_key_scopes;
+DROP TABLE api_key_scopes;
+ALTER TABLE api_key_scopes_new RENAME TO api_key_scopes;
+
 DROP TABLE session_tokens;
+
+PRAGMA foreign_keys = ON;

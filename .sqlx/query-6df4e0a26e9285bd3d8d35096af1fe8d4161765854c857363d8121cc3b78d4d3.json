@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE device_auth_requests\n         SET status = 'approved',\n             plaintext_key = ?,\n             api_key_id = ?,\n             approved_by = ?,\n             approved_at = datetime('now')\n         WHERE id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "6df4e0a26e9285bd3d8d35096af1fe8d4161765854c857363d8121cc3b78d4d3"
+}

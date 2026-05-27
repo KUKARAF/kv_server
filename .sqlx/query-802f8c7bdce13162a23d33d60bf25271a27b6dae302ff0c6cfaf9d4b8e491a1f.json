@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE device_auth_requests\n         SET status = 'delivered', plaintext_key = NULL\n         WHERE id = ? AND status = 'approved'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "802f8c7bdce13162a23d33d60bf25271a27b6dae302ff0c6cfaf9d4b8e491a1f"
+}
