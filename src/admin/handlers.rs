@@ -36,7 +36,7 @@ pub async fn list_keys(
     for key in keys {
         let scopes = sqlx::query_as!(
             ScopeRow,
-            "SELECT id, api_key_id, scope, ops FROM api_key_scopes WHERE api_key_id = ?",
+            "SELECT id, api_key_id, scope, ops, deny as \"deny: bool\" FROM api_key_scopes WHERE api_key_id = ?",
             key.id
         )
         .fetch_all(&state.pool)
@@ -71,6 +71,7 @@ pub async fn create_key(
         scopes.push(CreateScopeRequest {
             scope: entry_scope.clone(),
             ops: "read".to_string(), // Read-only by default
+            deny: false,
         });
     }
 
@@ -114,8 +115,8 @@ pub async fn create_key(
     for scope in &scopes {
         let scope_id = Uuid::new_v4().to_string();
         sqlx::query!(
-            "INSERT INTO api_key_scopes (id, api_key_id, scope, ops) VALUES (?, ?, ?, ?)",
-            scope_id, id, scope.scope, scope.ops
+            "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny) VALUES (?, ?, ?, ?, ?)",
+            scope_id, id, scope.scope, scope.ops, scope.deny
         )
         .execute(&state.pool)
         .await?;
@@ -193,7 +194,16 @@ pub async fn create_session_key(
     )
     .execute(&state.pool)
     .await?;
-    
+
+    let scope_id = Uuid::new_v4().to_string();
+    sqlx::query!(
+        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny)
+         VALUES (?, ?, '*', 'read,write,delete,list', 0)",
+        scope_id, id
+    )
+    .execute(&state.pool)
+    .await?;
+
     Ok((StatusCode::CREATED, Json(CreateKeyResponse { id, key: plaintext })))
 }
 
@@ -305,7 +315,7 @@ pub async fn create_device_token(
     // Full read access to all keys
     let scope_id = Uuid::new_v4().to_string();
     sqlx::query!(
-        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops) VALUES (?, ?, '*', 'read,list')",
+        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny) VALUES (?, ?, '*', 'read,list', 0)",
         scope_id, id
     )
     .execute(&mut *tx)

@@ -180,11 +180,12 @@ pub async fn approve(
     for scope in &body.scopes {
         let scope_id = Uuid::new_v4().to_string();
         sqlx::query!(
-            "INSERT INTO api_key_scopes (id, api_key_id, scope, ops) VALUES (?, ?, ?, ?)",
+            "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny) VALUES (?, ?, ?, ?, ?)",
             scope_id,
             key_id,
             scope.scope,
-            scope.ops
+            scope.ops,
+            scope.deny
         )
         .execute(&mut *tx)
         .await?;

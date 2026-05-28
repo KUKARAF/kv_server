@@ -63,12 +63,13 @@
       <div style="margin-top:1rem;">
         <p class="label-sm">Scope rules</p>
         <table class="scope-table">
-          <thead><tr><th>Key pattern</th><th>R</th><th>W</th><th></th></tr></thead>
+          <thead><tr><th>Key pattern</th><th>R</th><th>W</th><th>Deny</th><th></th></tr></thead>
           <tbody id="scope-rules">
             <tr class="scope-row">
               <td><input name="key_pattern" list="key-scopes-list" placeholder="myapp/config"></td>
               <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
               <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
+              <td class="ops-cell"><input type="checkbox" name="ops_deny"></td>
               <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
             </tr>
           </tbody>
@@ -169,6 +170,7 @@
         <td><input name="key_pattern" list="key-scopes-list" placeholder="myapp/config"></td>
         <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
         <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
+        <td class="ops-cell"><input type="checkbox" name="ops_deny"></td>
         <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
       `;
       document.getElementById('scope-rules').appendChild(tr);
@@ -185,8 +187,9 @@
           const pattern = row.querySelector('[name=key_pattern]').value.trim();
           const r = row.querySelector('[name=ops_read]').checked;
           const w = row.querySelector('[name=ops_write]').checked;
+          const deny = row.querySelector('[name=ops_deny]').checked;
           const ops = [r && 'read', w && 'write'].filter(Boolean).join(',');
-          return { key_pattern: pattern, ops };
+          return { key_pattern: pattern, ops, deny };
         })
         .filter(s => s.key_pattern && s.ops);
 

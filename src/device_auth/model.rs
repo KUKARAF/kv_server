@@ -30,6 +30,8 @@ pub struct DeviceAuthScope {
     #[serde(rename = "key_pattern")]
     pub scope: String,
     pub ops: String,
+    #[serde(default)]
+    pub deny: bool,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

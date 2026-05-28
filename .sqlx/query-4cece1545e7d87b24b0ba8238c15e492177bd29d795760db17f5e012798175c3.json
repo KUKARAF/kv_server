@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny)\n         VALUES (?, ?, '*', 'read,write,delete,list', 0)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "4cece1545e7d87b24b0ba8238c15e492177bd29d795760db17f5e012798175c3"
+}

@@ -157,6 +157,15 @@ async fn create_session_key(
     .execute(pool)
     .await?;
 
+    let scope_id = Uuid::new_v4().to_string();
+    sqlx::query!(
+        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny)
+         VALUES (?, ?, '*', 'read,write,delete,list', 0)",
+        scope_id, id
+    )
+    .execute(pool)
+    .await?;
+
     Ok(plaintext)
 }
 

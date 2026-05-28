@@ -124,7 +124,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                 // Fetch scopes for session-type key
                 let scopes = sqlx::query_as!(
                     ScopeRule,
-                    "SELECT scope, ops FROM api_key_scopes WHERE api_key_id = ?",
+                    "SELECT scope, ops, deny as \"deny: bool\" FROM api_key_scopes WHERE api_key_id = ?",
                     api_key.id
                 )
                 .fetch_all(&state.pool)
@@ -306,7 +306,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         // Scope check
         let scopes = sqlx::query_as!(
             ScopeRule,
-            "SELECT scope, ops FROM api_key_scopes WHERE api_key_id = ?",
+            "SELECT scope, ops, deny as \"deny: bool\" FROM api_key_scopes WHERE api_key_id = ?",
             api_key.id
         )
         .fetch_all(&state.pool)

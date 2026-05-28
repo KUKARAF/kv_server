@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT scope, ops FROM api_key_scopes WHERE api_key_id = ?",
+  "query": "SELECT scope, ops, deny as \"deny: bool\" FROM api_key_scopes WHERE api_key_id = ?",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "name": "ops",
         "ordinal": 1,
         "type_info": "Text"
+      },
+      {
+        "name": "deny: bool",
+        "ordinal": 2,
+        "type_info": "Int64"
       }
     ],
     "parameters": {
@@ -19,8 +24,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "885266e2812ce1cef628bcdf46a8fcd892d1b8f905aa547e0224497dbddbac40"
+  "hash": "cd41ab6355c0eacde692115f11aa8afe74b0d1cd08d7ce0f9ed1229ca8e6d316"
 }
