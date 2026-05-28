@@ -129,34 +129,34 @@ pub struct CallbackParams {
     state: String,
 }
 
-/// Creates a session key in api_keys table with type='session'
+/// Creates a session key in api_keys table with type='session'.
+/// `email` is stored in the label field so it can be retrieved later.
 async fn create_session_key(
     pool: &sqlx::SqlitePool,
     owner_id: &str,
+    email: &str,
 ) -> Result<String, AppError> {
     use crate::keys::generate::generate_api_key;
     use uuid::Uuid;
-    
-    // Auto-revoke any existing active session key
+
     sqlx::query!(
         "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active'",
         owner_id
     )
     .execute(pool)
     .await?;
-    
-    // Create new session key with 15 hour TTL
+
     let (plaintext, key_hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();
-    
+
     sqlx::query!(
         "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
-         VALUES (?, ?, 'session', 'session', 'active', datetime('now', '+15 hours'), ?)",
-        id, key_hash, owner_id
+         VALUES (?, ?, ?, 'session', 'active', datetime('now', '+15 hours'), ?)",
+        id, key_hash, email, owner_id
     )
     .execute(pool)
     .await?;
-    
+
     Ok(plaintext)
 }
 
@@ -206,13 +206,12 @@ pub async fn callback(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("id_token verification failed: {e}")))?;
 
     let oidc_subject = claims.subject().to_string();
-    let _email = claims
+    let email = claims
         .email()
         .map(|e| e.to_string())
         .unwrap_or_else(|| oidc_subject.clone());
 
-    // Create session key in api_keys table
-    let session_token = create_session_key(&state.pool, &oidc_subject).await?;
+    let session_token = create_session_key(&state.pool, &oidc_subject, &email).await?;
 
     // Clear oidc_state cookie, set session cookie, redirect to admin
     let clear_cookie = Cookie::build(("oidc_state", ""))

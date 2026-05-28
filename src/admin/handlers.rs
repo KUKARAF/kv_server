@@ -245,6 +245,76 @@ pub async fn logout(
     Ok((jar.remove(clear), Redirect::to("/auth/login")).into_response())
 }
 
+/// GET /api/admin/session — current session info (email, expiry, etc.)
+pub async fn get_session_info(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+) -> Result<Json<SessionInfo>, AppError> {
+    let owner = &auth.0.oidc_subject;
+    let row = sqlx::query!(
+        "SELECT label, expires_at, created_at FROM api_keys
+         WHERE owner_id = ? AND type = 'session' AND status = 'active'
+           AND (expires_at IS NULL OR expires_at > datetime('now'))
+         ORDER BY created_at DESC LIMIT 1",
+        owner
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::Unauthorized)?;
+
+    Ok(Json(SessionInfo {
+        email: auth.0.email.unwrap_or_else(|| owner.clone()),
+        oidc_subject: owner.clone(),
+        expires_at: row.expires_at,
+        created_at: row.created_at,
+    }))
+}
+
+/// GET /api/admin/session/token — returns the plaintext session token from the cookie.
+/// Used by the dashboard "copy session token" button for use in scripts.
+pub async fn get_session_token(
+    jar: CookieJar,
+    _auth: AdminAuth,
+) -> Result<Json<String>, AppError> {
+    let token = jar
+        .get("session_token")
+        .map(|c| c.value().to_string())
+        .ok_or(AppError::Unauthorized)?;
+    Ok(Json(token))
+}
+
+/// POST /api/admin/session/device-token — creates a 180-day api_key for the KV Approver app.
+pub async fn create_device_token(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+) -> Result<Json<String>, AppError> {
+    let owner = &auth.0.oidc_subject;
+    let (plaintext, key_hash) = generate_api_key();
+    let id = Uuid::new_v4().to_string();
+
+    let mut tx = state.pool.begin().await?;
+
+    sqlx::query!(
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
+         VALUES (?, ?, 'kv-approver device', 'standard', 'active', datetime('now', '+180 days'), ?)",
+        id, key_hash, owner
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Full read access to all keys
+    let scope_id = Uuid::new_v4().to_string();
+    sqlx::query!(
+        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops) VALUES (?, ?, '*', 'read,list')",
+        scope_id, id
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(Json(plaintext))
+}
+
 // ── Approvals ───────────────────────────────────────────────────────────────
 
 pub async fn list_approvals(

@@ -51,9 +51,9 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         let key_hash = hash_key(&token);
         
         let row = sqlx::query!(
-            "SELECT id, owner_id 
-             FROM api_keys 
-             WHERE key_hash = ? AND type = 'session' AND status = 'active' 
+            "SELECT owner_id, label
+             FROM api_keys
+             WHERE key_hash = ? AND type = 'session' AND status = 'active'
                AND (expires_at IS NULL OR expires_at > datetime('now'))",
             key_hash
         )
@@ -63,7 +63,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
 
         Ok(AdminAuth(SessionClaims {
             oidc_subject: row.owner_id,
-            email: None,
+            email: Some(row.label),
         }))
     }
 }

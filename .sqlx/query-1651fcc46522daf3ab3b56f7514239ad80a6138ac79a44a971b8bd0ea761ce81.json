@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)\n         VALUES (?, ?, ?, 'session', 'active', datetime('now', '+15 hours'), ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "1651fcc46522daf3ab3b56f7514239ad80a6138ac79a44a971b8bd0ea761ce81"
+}

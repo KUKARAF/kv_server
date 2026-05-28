@@ -216,3 +216,12 @@ pub struct SessionKeyInfo {
     pub id: String,
     pub expires_at: Option<String>,
 }
+
+/// Returned by GET /api/admin/session — used by the dashboard nav and session tab
+#[derive(Debug, Serialize)]
+pub struct SessionInfo {
+    pub email: String,
+    pub oidc_subject: String,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+}
