@@ -2,7 +2,7 @@ use crate::{error::AppError, notify, state::AppState};
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{HeaderMap, Request},
+    http::{HeaderMap, Request, StatusCode},
     middleware::Next,
     response::Response,
 };
@@ -53,23 +53,33 @@ pub async fn layer(
     let ip = extract_real_ip(headers, addr.ip());
 
     let limit = state.config.daily_rate_limit;
-    let mut entry = state.rate_counters.entry(ip).or_insert(0);
-    *entry += 1;
-    let current = *entry;
-    drop(entry);
 
-    if current > limit {
+    // Reject immediately if already over the limit from previous failures.
+    let current = *state.rate_counters.entry(ip).or_insert(0);
+    if current >= limit {
         tracing::warn!(ip = %ip, count = current, limit, "rate limit exceeded");
-        // Notify only on the first crossing to avoid spamming.
-        if current == limit + 1 {
-            notify::send(
-                state.pool.clone(),
-                format!("Rate limit exceeded by {ip}"),
-                "medium",
-            );
-        }
         return Err(AppError::RateLimited);
     }
 
-    Ok(next.run(request).await)
+    let response = next.run(request).await;
+
+    // Only count failed authentication attempts — successful requests (including
+    // open-access reads) must not penalise the caller.
+    if response.status() == StatusCode::UNAUTHORIZED {
+        let mut entry = state.rate_counters.entry(ip).or_insert(0);
+        *entry += 1;
+        let new_count = *entry;
+        drop(entry);
+
+        if new_count == limit {
+            tracing::warn!(ip = %ip, count = new_count, limit, "rate limit reached");
+            notify::send(
+                state.pool.clone(),
+                format!("Rate limit reached by {ip}"),
+                "medium",
+            );
+        }
+    }
+
+    Ok(response)
 }
