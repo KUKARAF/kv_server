@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT owner_label, description, status FROM secret_requests WHERE id = ?",
+  "query": "SELECT owner_label, description, status, key_prefix, required_keys FROM secret_requests WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -17,6 +17,16 @@
         "name": "status",
         "ordinal": 2,
         "type_info": "Text"
+      },
+      {
+        "name": "key_prefix",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "required_keys",
+        "ordinal": 4,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -25,8 +35,10 @@
     "nullable": [
       false,
       true,
-      false
+      false,
+      true,
+      true
     ]
   },
-  "hash": "0bb2ec945d2a1b3c8de28e6584687382cea35e914927c3b1d1b914b32b4b2842"
+  "hash": "ef5396706f70d529cf68e31359ac9acea5488179baed6b1f5435a21367254677"
 }

@@ -12,7 +12,7 @@
       border: 1px solid #2a2a2a;
       border-radius: 12px;
       padding: 2.5rem;
-      max-width: 560px;
+      max-width: 580px;
       width: 100%;
     }
     .collect-icon { font-size: 3rem; margin-bottom: 0.75rem; text-align: center; }
@@ -21,6 +21,48 @@
     .kv-pairs { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
     .kv-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; }
     .kv-row input { margin-top: 0; }
+    .kv-row.required-row .kv-key { background: #111; color: #ccc; cursor: default; }
+    .kv-row.required-row .kv-key::placeholder { color: #555; }
+    .required-badge {
+      display: inline-block;
+      font-size: 10px;
+      background: #450a0a;
+      color: #fca5a5;
+      border-radius: 4px;
+      padding: 1px 5px;
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+    .bypass-row {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.5rem;
+      align-items: center;
+      margin-top: -0.25rem;
+      padding: 0 0 0.25rem 0;
+    }
+    .bypass-row label { font-size: 11px; color: #666; white-space: nowrap; }
+    .bypass-row input { font-size: 12px; margin-top: 0; }
+    .btn-bypass {
+      background: none;
+      border: none;
+      color: #555;
+      font-size: 11px;
+      cursor: pointer;
+      padding: 0 2px;
+      text-decoration: underline;
+    }
+    .btn-bypass:hover { color: #aaa; }
+    .prefix-banner {
+      background: #1e293b;
+      border: 1px solid #2a3a4a;
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      font-size: 12px;
+      color: #94a3b8;
+      margin-bottom: 0.75rem;
+    }
+    .prefix-banner code { color: #7dd3fc; }
     .divider { display: flex; align-items: center; gap: 0.75rem; margin: 1rem 0; color: #444; font-size: 12px; }
     .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #2a2a2a; }
     .submit-row { display: flex; justify-content: flex-end; margin-top: 1rem; }
@@ -39,10 +81,7 @@
       transition: border-color 0.15s, color 0.15s;
       user-select: none;
     }
-    .file-drop-zone:hover, .file-drop-zone.drag-over {
-      border-color: #555;
-      color: #aaa;
-    }
+    .file-drop-zone:hover, .file-drop-zone.drag-over { border-color: #555; color: #aaa; }
     .file-drop-zone strong { color: #888; }
   </style>
 </head>
@@ -54,6 +93,8 @@
     <p id="page-desc" class="collect-desc hidden"></p>
 
     <div id="step-form">
+      <div id="prefix-banner" class="prefix-banner hidden"></div>
+
       <p class="label-sm" style="margin-bottom:0.5rem;">Key / Value pairs</p>
       <div class="kv-pairs" id="kv-pairs">
         <div class="kv-row">
@@ -140,17 +181,22 @@
     }
 
     function attachValidation(row) {
-      row.querySelector('.kv-key').addEventListener('blur', () => {
-        const err = validateRow(row);
-        if (err) showToast(err, { type: 'error' });
-      });
+      const keyInput = row.querySelector('.kv-key');
+      if (!keyInput.readOnly) {
+        keyInput.addEventListener('blur', () => {
+          const err = validateRow(row);
+          if (err) showToast(err, { type: 'error' });
+        });
+      }
     }
 
     // Attach to the initial static row
     attachValidation(document.querySelector('.kv-row'));
 
-    // ── Request loading ─────────────────────────────────────────────────────
+    // ── Request state ───────────────────────────────────────────────────────
     const id = new URLSearchParams(location.search).get('id');
+    let keyPrefix = '';
+    let requiredKeys = [];
 
     if (!id) {
       showInvalid('Invalid link — no request ID found.');
@@ -176,11 +222,92 @@
 
         if (data.status === 'fulfilled') {
           showInvalid('This link has already been used.');
+          return;
         } else if (data.status === 'revoked') {
           showInvalid('This link has been revoked.');
+          return;
+        }
+
+        keyPrefix = data.key_prefix || '';
+        requiredKeys = data.required_keys || [];
+
+        if (keyPrefix) {
+          const banner = document.getElementById('prefix-banner');
+          banner.innerHTML = `All keys will be stored with prefix: <code>${esc(keyPrefix)}</code>`;
+          banner.classList.remove('hidden');
+        }
+
+        if (requiredKeys.length) {
+          addRequiredRows(requiredKeys);
         }
       } catch (e) {
         showInvalid('Could not reach the server.');
+      }
+    }
+
+    // ── Required rows ───────────────────────────────────────────────────────
+    function addRequiredRows(keys) {
+      const container = document.getElementById('kv-pairs');
+      // Clear out the default empty row if it's truly empty
+      const existing = container.querySelectorAll('.kv-row');
+      if (existing.length === 1) {
+        const k = existing[0].querySelector('.kv-key').value.trim();
+        const v = existing[0].querySelector('.kv-val').value.trim();
+        if (!k && !v) container.innerHTML = '';
+      }
+      for (const key of keys) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'kv-required-wrapper';
+        wrapper.dataset.requiredKey = key;
+
+        const row = document.createElement('div');
+        row.className = 'kv-row required-row';
+        row.innerHTML = `
+          <input class="kv-key" value="${esc(key)}" readonly>
+          <input placeholder="value (required)" class="kv-val" autocomplete="off">
+          <button type="button" class="btn-bypass" onclick="toggleBypass(this)" title="Bypass this field">bypass</button>
+        `;
+        const bypassRow = document.createElement('div');
+        bypassRow.className = 'bypass-row hidden';
+        bypassRow.innerHTML = `
+          <label>Bypass note:</label>
+          <input class="bypass-note" placeholder="Reason for not providing this value…" autocomplete="off">
+        `;
+        wrapper.appendChild(row);
+        wrapper.appendChild(bypassRow);
+        container.appendChild(wrapper);
+      }
+      // Re-add the blank row for optional extras after required ones
+      const extraRow = document.createElement('div');
+      extraRow.className = 'kv-row';
+      extraRow.innerHTML = `
+        <input placeholder="KEY_NAME" class="kv-key" autocomplete="off" spellcheck="false">
+        <input placeholder="value" class="kv-val" autocomplete="off">
+        <button type="button" class="btn-icon" onclick="removeRow(this)" title="Remove">✕</button>
+      `;
+      container.appendChild(extraRow);
+      attachValidation(extraRow);
+    }
+
+    function toggleBypass(btn) {
+      const wrapper = btn.closest('.kv-required-wrapper');
+      const bypassRow = wrapper.querySelector('.bypass-row');
+      const valInput = wrapper.querySelector('.kv-val');
+      const bypassNote = wrapper.querySelector('.bypass-note');
+      const isBypassing = !bypassRow.classList.contains('hidden');
+      if (isBypassing) {
+        bypassRow.classList.add('hidden');
+        bypassNote.value = '';
+        valInput.disabled = false;
+        valInput.placeholder = 'value (required)';
+        btn.textContent = 'bypass';
+      } else {
+        bypassRow.classList.remove('hidden');
+        valInput.disabled = true;
+        valInput.value = '';
+        valInput.placeholder = '(bypassed)';
+        btn.textContent = 'undo';
+        bypassNote.focus();
       }
     }
 
@@ -199,7 +326,7 @@
     }
 
     function removeRow(btn) {
-      const rows = document.querySelectorAll('.kv-row');
+      const rows = document.querySelectorAll('#kv-pairs > .kv-row');
       if (rows.length <= 1) {
         btn.closest('.kv-row').querySelectorAll('input').forEach(i => i.value = '');
         return;
@@ -242,11 +369,12 @@
 
     function populateRows(entries) {
       const container = document.getElementById('kv-pairs');
-      const existing = container.querySelectorAll('.kv-row');
-      if (existing.length === 1) {
-        const k = existing[0].querySelector('.kv-key').value.trim();
-        const v = existing[0].querySelector('.kv-val').value.trim();
-        if (!k && !v) container.innerHTML = '';
+      // Find all non-required rows and replace a single empty one
+      const regularRows = container.querySelectorAll(':scope > .kv-row');
+      if (regularRows.length === 1) {
+        const k = regularRows[0].querySelector('.kv-key').value.trim();
+        const v = regularRows[0].querySelector('.kv-val').value.trim();
+        if (!k && !v) regularRows[0].remove();
       }
       for (const { key, value } of entries) {
         const row = document.createElement('div');
@@ -299,25 +427,70 @@
 
     // ── Submit ──────────────────────────────────────────────────────────────
     async function submitSecrets() {
-      // Validate all rows first
-      const errors = [];
-      document.querySelectorAll('.kv-row').forEach(row => {
+      // 1. Validate all regular rows
+      const validationErrors = [];
+      document.querySelectorAll('#kv-pairs > .kv-row').forEach(row => {
         const err = validateRow(row);
-        if (err) errors.push(err);
+        if (err) validationErrors.push(err);
       });
-      if (errors.length) {
-        errors.forEach(e => showToast(e, { type: 'error' }));
+      if (validationErrors.length) {
+        validationErrors.forEach(e => showToast(e, { type: 'error' }));
         return;
       }
 
+      // 2. Check required rows: must have a value or a bypass note
+      const missingRequired = [];
+      const bypasses = [];
+      document.querySelectorAll('.kv-required-wrapper').forEach(wrapper => {
+        const key = wrapper.dataset.requiredKey;
+        const bypassRow = wrapper.querySelector('.bypass-row');
+        const isBypassing = !bypassRow.classList.contains('hidden');
+        if (isBypassing) {
+          const note = wrapper.querySelector('.bypass-note').value.trim();
+          if (!note) {
+            missingRequired.push({ key, reason: 'bypass-no-note' });
+          } else {
+            bypasses.push({ key, note });
+          }
+        } else {
+          const val = wrapper.querySelector('.kv-val').value;
+          if (!val) {
+            missingRequired.push({ key, reason: 'empty' });
+          }
+        }
+      });
+
+      if (missingRequired.length) {
+        for (const { key, reason } of missingRequired) {
+          if (reason === 'bypass-no-note') {
+            showToast(`Please provide a bypass reason for "${key}".`, { type: 'error' });
+          } else {
+            showToast(`"${key}" was explicitly requested — please fill it in (or use bypass).`, { type: 'error' });
+          }
+        }
+        return;
+      }
+
+      // 3. Collect all entries
       const entries = [];
-      document.querySelectorAll('.kv-row').forEach(row => {
+
+      // Required rows (non-bypassed)
+      document.querySelectorAll('.kv-required-wrapper').forEach(wrapper => {
+        const key = wrapper.dataset.requiredKey;
+        const bypassRow = wrapper.querySelector('.bypass-row');
+        if (bypassRow.classList.contains('hidden')) {
+          entries.push({ key, value: wrapper.querySelector('.kv-val').value });
+        }
+      });
+
+      // Regular rows
+      document.querySelectorAll('#kv-pairs > .kv-row').forEach(row => {
         const key = row.querySelector('.kv-key').value.trim();
         const value = row.querySelector('.kv-val').value;
         if (key) entries.push({ key, value });
       });
 
-      if (entries.length === 0) {
+      if (entries.length === 0 && bypasses.length === 0) {
         showToast('Please add at least one key-value pair.', { type: 'error' });
         return;
       }
@@ -326,7 +499,7 @@
         const resp = await fetch('/api/collect/' + encodeURIComponent(id) + '/submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ entries }),
+          body: JSON.stringify({ entries, bypasses: bypasses.length ? bypasses : undefined }),
         });
 
         if (resp.status === 403) {

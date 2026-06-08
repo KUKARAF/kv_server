@@ -49,6 +49,14 @@
         <input name="scope" list="scopes-list" placeholder="e.g. myapp/production">
       </label>
     </div>
+    <div class="form-row-2" style="margin-top:0.5rem;">
+      <label>Key prefix (prepended to all submitted keys, optional)
+        <input name="key_prefix" placeholder="e.g. prod/ or myapp/">
+      </label>
+      <label>Required keys (comma-separated, optional)
+        <input name="required_keys" placeholder="e.g. DATABASE_URL, SECRET_KEY">
+      </label>
+    </div>
     <button type="submit" style="margin-top:0.75rem;">Generate link</button>
   </form>
 
@@ -436,9 +444,15 @@
   async function createSecretRequest(e) {
     e.preventDefault();
     const form = e.target;
+    const requiredRaw = form.required_keys.value.trim();
+    const required_keys = requiredRaw
+      ? requiredRaw.split(',').map(k => k.trim()).filter(Boolean)
+      : null;
     const body = {
       description: form.description.value.trim() || null,
       scope: form.scope.value.trim() || null,
+      key_prefix: form.key_prefix.value.trim() || null,
+      required_keys,
     };
     const resp = await fetch('/api/admin/secret-requests', {
       method: 'POST',
@@ -469,15 +483,24 @@
     const el = document.getElementById('secret-requests-list');
     if (!rows.length) { el.innerHTML = ''; return; }
     el.innerHTML = `<table>
-      <thead><tr><th>Description</th><th>Scope</th><th>Status</th><th>Created</th><th>Fulfilled</th><th></th></tr></thead>
+      <thead><tr><th>Description</th><th>Scope</th><th>Prefix</th><th>Required keys</th><th>Status</th><th>Created</th><th>Fulfilled</th><th></th></tr></thead>
       <tbody>${rows.map(r => {
         const actions = (r.status === 'pending'
           ? `<button class="btn-secondary" onclick="revokeSecretRequest('${esc(r.id)}')">Revoke</button> `
           : '')
           + `<button class="btn-icon" onclick="deleteSecretRequest('${esc(r.id)}')" title="Delete">🗑️</button>`;
+        let reqKeys = '—';
+        if (r.required_keys) {
+          try {
+            const keys = JSON.parse(r.required_keys);
+            if (keys.length) reqKeys = keys.map(k => `<code style="font-size:11px">${esc(k)}</code>`).join(' ');
+          } catch {}
+        }
         return `<tr>
           <td>${r.description ? esc(r.description) : '<span style="color:#444">—</span>'}</td>
           <td>${r.scope ? `<span class="badge badge-scope">${esc(r.scope)}</span>` : '<span style="color:#444">—</span>'}</td>
+          <td>${r.key_prefix ? `<code style="font-size:11px">${esc(r.key_prefix)}</code>` : '<span style="color:#444">—</span>'}</td>
+          <td>${reqKeys}</td>
           <td><span class="badge badge-${esc(r.status)}">${esc(r.status)}</span></td>
           <td>${esc(r.created_at.slice(0, 16))}</td>
           <td>${r.fulfilled_at ? esc(r.fulfilled_at.slice(0, 16)) : '—'}</td>

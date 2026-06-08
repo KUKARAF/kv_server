@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO faux_approvals (id, owner_id, secret_request_id, message)\n                 VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "8de1abdc265fa81a43c6cd07d4fdebe505018e516f77f76db043d75cbedde90f"
+}

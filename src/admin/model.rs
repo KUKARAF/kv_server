@@ -166,6 +166,8 @@ pub struct ApproveRequest {
 pub struct CreateSecretRequestBody {
     pub description: Option<String>,
     pub scope: Option<String>,
+    pub key_prefix: Option<String>,
+    pub required_keys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -179,6 +181,8 @@ pub struct SecretRequestRow {
     pub owner_label: String,
     pub description: Option<String>,
     pub scope: Option<String>,
+    pub key_prefix: Option<String>,
+    pub required_keys: Option<String>, // raw JSON string
     pub status: String,
     pub created_at: String,
     pub fulfilled_at: Option<String>,
@@ -189,17 +193,34 @@ pub struct SecretRequestPublic {
     pub owner_label: String,
     pub description: Option<String>,
     pub status: String,
+    pub key_prefix: Option<String>,
+    pub required_keys: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SubmitSecretRequestBody {
     pub entries: Vec<SubmitEntry>,
+    pub bypasses: Option<Vec<BypassEntry>>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SubmitEntry {
     pub key: String,
     pub value: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BypassEntry {
+    pub key: String,
+    pub note: String,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct FauxApprovalRow {
+    pub id: String,
+    pub message: String,
+    pub created_at: String,
+    pub secret_request_id: String,
 }
 
 // ── Blocked IPs ──────────────────────────────────────────────────────────────

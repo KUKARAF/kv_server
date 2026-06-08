@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM faux_approvals WHERE id = ? AND owner_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "36d6a9a51a7005962a25302ddc1736a4bc79d5cc802c33fe46e83ede0a194ab1"
+}

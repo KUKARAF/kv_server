@@ -6,6 +6,7 @@ use crate::{
     kv::model::compute_expires_at,
     state::AppState,
 };
+use serde_json;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -759,10 +760,16 @@ pub async fn create_secret_request(
     let email = auth.0.email.as_deref().unwrap_or(owner);
     let id = Uuid::new_v4().to_string();
 
+    let required_keys_json: Option<String> = body
+        .required_keys
+        .as_ref()
+        .filter(|v| !v.is_empty())
+        .map(|v| serde_json::to_string(v).unwrap_or_default());
+
     sqlx::query!(
-        "INSERT INTO secret_requests (id, owner_id, owner_label, description, scope)
-         VALUES (?, ?, ?, ?, ?)",
-        id, owner, email, body.description, body.scope
+        "INSERT INTO secret_requests (id, owner_id, owner_label, description, scope, key_prefix, required_keys)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        id, owner, email, body.description, body.scope, body.key_prefix, required_keys_json
     )
     .execute(&state.pool)
     .await?;
@@ -777,7 +784,7 @@ pub async fn list_secret_requests(
     let owner = &auth.0.oidc_subject;
     let rows = sqlx::query_as!(
         SecretRequestRow,
-        "SELECT id, owner_label, description, scope, status, created_at, fulfilled_at
+        "SELECT id, owner_label, description, scope, key_prefix, required_keys, status, created_at, fulfilled_at
          FROM secret_requests WHERE owner_id = ? ORDER BY created_at DESC",
         owner
     )
@@ -831,17 +838,25 @@ pub async fn get_secret_request_public(
     Path(id): Path<String>,
 ) -> Result<Json<SecretRequestPublic>, AppError> {
     let row = sqlx::query!(
-        "SELECT owner_label, description, status FROM secret_requests WHERE id = ?",
+        "SELECT owner_label, description, status, key_prefix, required_keys FROM secret_requests WHERE id = ?",
         id
     )
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
+    let required_keys: Vec<String> = row
+        .required_keys
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+
     Ok(Json(SecretRequestPublic {
         owner_label: row.owner_label,
         description: row.description,
         status: row.status,
+        key_prefix: row.key_prefix,
+        required_keys,
     }))
 }
 
@@ -855,7 +870,7 @@ pub async fn submit_secret_request(
     let mut tx = state.pool.begin().await?;
 
     let row = sqlx::query!(
-        "SELECT owner_id, scope, status FROM secret_requests WHERE id = ?",
+        "SELECT owner_id, scope, status, key_prefix, required_keys FROM secret_requests WHERE id = ?",
         id
     )
     .fetch_optional(&mut *tx)
@@ -870,26 +885,57 @@ pub async fn submit_secret_request(
 
     let owner_id = row.owner_id;
     let scope = row.scope;
+    let prefix = row.key_prefix.as_deref().unwrap_or("").to_string();
 
-    let keys: Vec<String> = body
+    let required: Vec<String> = row
+        .required_keys
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+
+    let empty_bypasses = vec![];
+    let bypasses = body.bypasses.as_deref().unwrap_or(&empty_bypasses);
+    let bypass_keys: std::collections::HashSet<&str> =
+        bypasses.iter().map(|b| b.key.as_str()).collect();
+
+    // Ensure every required key is either provided with a value or explicitly bypassed.
+    for req in &required {
+        let has_value = body
+            .entries
+            .iter()
+            .any(|e| e.key.trim() == req.as_str() && !e.value.is_empty());
+        if !has_value && !bypass_keys.contains(req.as_str()) {
+            return Err(AppError::Forbidden(format!(
+                "required key '{}' was not provided",
+                req
+            )));
+        }
+    }
+
+    // Build (final_key, value) pairs: apply prefix, skip bypassed keys.
+    let entries_to_insert: Vec<(String, String)> = body
         .entries
         .iter()
-        .map(|e| e.key.trim().to_string())
-        .filter(|k| !k.is_empty())
+        .filter_map(|e| {
+            let bare = e.key.trim().to_string();
+            if bare.is_empty() { return None; }
+            if bypass_keys.contains(bare.as_str()) { return None; }
+            Some((format!("{}{}", prefix, bare), e.value.clone()))
+        })
         .collect();
 
     // Check for existing keys before touching anything.
     let mut conflicts = Vec::new();
-    for key in &keys {
+    for (final_key, _) in &entries_to_insert {
         let exists = sqlx::query_scalar!(
             r#"SELECT 1 as "x: i32" FROM kv_entries WHERE key = ? AND owner_id = ?
              AND (expires_at IS NULL OR expires_at > datetime('now'))"#,
-            key, owner_id
+            final_key, owner_id
         )
         .fetch_optional(&mut *tx)
         .await?;
         if exists.is_some() {
-            conflicts.push(key.clone());
+            conflicts.push(final_key.clone());
         }
     }
     if !conflicts.is_empty() {
@@ -903,21 +949,74 @@ pub async fn submit_secret_request(
     .execute(&mut *tx)
     .await?;
 
-    for key in &keys {
-        let value = body
-            .entries
-            .iter()
-            .find(|e| e.key.trim() == key)
-            .map(|e| e.value.as_str())
-            .unwrap_or("");
+    for (final_key, value) in &entries_to_insert {
         sqlx::query!(
             "INSERT INTO kv_entries (key, owner_id, value, scope) VALUES (?, ?, ?, ?)",
-            key, owner_id, value, scope
+            final_key, owner_id, value, scope
         )
         .execute(&mut *tx)
         .await?;
     }
 
+    // Create faux approval notices for every bypassed required key.
+    for bypass in bypasses {
+        if required.contains(&bypass.key) {
+            let fa_id = Uuid::new_v4().to_string();
+            let msg = if bypass.note.trim().is_empty() {
+                format!("Recipient bypassed required key '{}'", bypass.key)
+            } else {
+                format!(
+                    "Recipient bypassed required key '{}' — note: \"{}\"",
+                    bypass.key,
+                    bypass.note.trim()
+                )
+            };
+            sqlx::query!(
+                "INSERT INTO faux_approvals (id, owner_id, secret_request_id, message)
+                 VALUES (?, ?, ?, ?)",
+                fa_id, owner_id, id, msg
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+
     tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+// ── Faux approvals ──────────────────────────────────────────────────────────
+
+pub async fn list_faux_approvals(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+) -> Result<Json<Vec<FauxApprovalRow>>, AppError> {
+    let owner = &auth.0.oidc_subject;
+    let rows = sqlx::query_as!(
+        FauxApprovalRow,
+        "SELECT id, message, created_at, secret_request_id
+         FROM faux_approvals WHERE owner_id = ? ORDER BY created_at DESC",
+        owner
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+pub async fn dismiss_faux_approval(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
+    let result = sqlx::query!(
+        "DELETE FROM faux_approvals WHERE id = ? AND owner_id = ?",
+        id, owner
+    )
+    .execute(&state.pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
     Ok(StatusCode::NO_CONTENT)
 }

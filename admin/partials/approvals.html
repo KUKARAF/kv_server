@@ -1,3 +1,9 @@
+<section id="notices-section" style="margin-bottom:2rem;">
+  <h2>Notices</h2>
+  <p style="color:#666;font-size:12px;margin-bottom:0.75rem;">Recipients who bypassed a required key when submitting secrets.</p>
+  <div id="faux-approvals-list">Loading...</div>
+</section>
+
 <section>
   <h2>Pending Approvals</h2>
   <p>The requester will tell you 3 emojis. Type their names below to find and select them, then confirm.</p>
@@ -204,4 +210,43 @@
   function esc(s) {
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
+
+  // ── Faux approvals (bypass notices) ────────────────────────────────────
+  async function loadFauxApprovals() {
+    const resp = await fetch('/api/admin/faux-approvals');
+    if (!resp.ok) return;
+    renderFauxApprovals(await resp.json());
+  }
+
+  function renderFauxApprovals(items) {
+    const el = document.getElementById('faux-approvals-list');
+    if (!items.length) {
+      document.getElementById('notices-section').style.display = 'none';
+      return;
+    }
+    document.getElementById('notices-section').style.display = '';
+    el.innerHTML = items.map(a => `
+      <div class="approval-card" id="faux-${esc(a.id)}" style="border-left:3px solid #713f12;">
+        <div class="info">
+          <span>${esc(a.message)}</span>
+          <small>${esc(a.created_at)}</small>
+        </div>
+        <div class="approval-actions-col">
+          <button class="btn-approve" onclick="dismissFauxApproval('${esc(a.id)}')">OK</button>
+        </div>
+      </div>`).join('');
+  }
+
+  async function dismissFauxApproval(id) {
+    const resp = await fetch('/api/admin/faux-approvals/' + encodeURIComponent(id), { method: 'DELETE' });
+    if (resp.ok) {
+      const card = document.getElementById('faux-' + id);
+      if (card) {
+        card.style.opacity = '0.5';
+        setTimeout(() => { card.remove(); loadFauxApprovals(); }, 400);
+      }
+    }
+  }
+
+  loadFauxApprovals();
 </script>

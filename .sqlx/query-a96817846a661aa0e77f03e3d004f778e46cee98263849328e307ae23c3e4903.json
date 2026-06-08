@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, owner_label, description, scope, status, created_at, fulfilled_at\n         FROM secret_requests WHERE owner_id = ? ORDER BY created_at DESC",
+  "query": "SELECT id, owner_label, description, scope, key_prefix, required_keys, status, created_at, fulfilled_at\n         FROM secret_requests WHERE owner_id = ? ORDER BY created_at DESC",
   "describe": {
     "columns": [
       {
@@ -24,18 +24,28 @@
         "type_info": "Text"
       },
       {
-        "name": "status",
+        "name": "key_prefix",
         "ordinal": 4,
         "type_info": "Text"
       },
       {
-        "name": "created_at",
+        "name": "required_keys",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "fulfilled_at",
+        "name": "status",
         "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "fulfilled_at",
+        "ordinal": 8,
         "type_info": "Text"
       }
     ],
@@ -47,10 +57,12 @@
       false,
       true,
       true,
+      true,
+      true,
       false,
       false,
       true
     ]
   },
-  "hash": "93b3b2490c113df11e91c98a4a5c95fa5b843563fb370a29b71176abedcaff1c"
+  "hash": "a96817846a661aa0e77f03e3d004f778e46cee98263849328e307ae23c3e4903"
 }

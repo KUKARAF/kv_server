@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO secret_requests (id, owner_id, owner_label, description, scope, key_prefix, required_keys)\n         VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "b5ac01bd215721b3d780aac7abda81a628bb458557889b36eca126841ca9a062"
+}
