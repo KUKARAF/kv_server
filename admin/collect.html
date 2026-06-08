@@ -21,21 +21,29 @@
     .kv-pairs { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 0.75rem; }
     .kv-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 0.5rem; align-items: center; }
     .kv-row input { margin-top: 0; }
-    .env-upload-label {
-      display: block;
-      font-size: 12px;
-      color: #666;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-bottom: 0.4rem;
-    }
-    .env-area { font-family: monospace; font-size: 12px; min-height: 80px; resize: vertical; }
     .divider { display: flex; align-items: center; gap: 0.75rem; margin: 1rem 0; color: #444; font-size: 12px; }
     .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: #2a2a2a; }
     .submit-row { display: flex; justify-content: flex-end; margin-top: 1rem; }
     .success-box { text-align: center; }
     .success-box .success-icon { font-size: 3rem; margin-bottom: 1rem; }
     .success-box p { color: #86efac; font-size: 14px; }
+    .file-drop-zone {
+      border: 1.5px dashed #3a3a3a;
+      border-radius: 8px;
+      padding: 1.25rem;
+      text-align: center;
+      font-size: 12px;
+      color: #666;
+      cursor: pointer;
+      margin-bottom: 1rem;
+      transition: border-color 0.15s, color 0.15s;
+      user-select: none;
+    }
+    .file-drop-zone:hover, .file-drop-zone.drag-over {
+      border-color: #555;
+      color: #aaa;
+    }
+    .file-drop-zone strong { color: #888; }
   </style>
 </head>
 <body class="login-page">
@@ -56,15 +64,16 @@
       </div>
       <button type="button" class="btn-secondary" onclick="addRow()" style="margin-bottom:1rem;">+ Add row</button>
 
-      <div class="divider">or paste a .env file</div>
+      <div class="divider">or load from file</div>
 
-      <span class="env-upload-label">Paste .env contents</span>
-      <textarea id="env-paste" class="env-area" placeholder="DATABASE_URL=postgres://...&#10;SECRET_KEY=abc123&#10;API_TOKEN=xyz789"></textarea>
+      <div id="file-drop-zone" class="file-drop-zone" onclick="document.getElementById('file-input').click()">
+        <input type="file" id="file-input" accept=".env,.json" style="display:none">
+        <span id="file-drop-label">Click to upload or drag &amp; drop a <strong>.env</strong> or <strong>.json</strong> file</span>
+      </div>
 
       <div class="submit-row">
         <button type="button" class="btn" onclick="submitSecrets()">Submit secrets</button>
       </div>
-      <p id="error-msg" class="share-error hidden"></p>
     </div>
 
     <div id="step-done" class="success-box hidden">
@@ -78,7 +87,69 @@
     </div>
   </div>
 
+  <div id="toast-container"></div>
+
   <script>
+    // ── Toast system ────────────────────────────────────────────────────────
+    const activeToasts = new Map();
+
+    function showToast(msg, { id = null, persistent = false, type = 'info' } = {}) {
+      if (id && activeToasts.has(id)) return activeToasts.get(id);
+      const el = document.createElement('div');
+      el.className = `toast toast-${type}`;
+      el.innerHTML = `<span>${msg}</span>${persistent ? `<button onclick="dismissToast('${id || ''}', this)">✕</button>` : ''}`;
+      document.getElementById('toast-container').appendChild(el);
+      requestAnimationFrame(() => el.classList.add('toast-show'));
+      if (id) activeToasts.set(id, el);
+      if (!persistent) setTimeout(() => removeToast(el, id), 3000);
+      return el;
+    }
+
+    function removeToast(el, id = null) {
+      el.classList.remove('toast-show');
+      el.addEventListener('transitionend', () => el.remove(), { once: true });
+      if (id) activeToasts.delete(id);
+    }
+
+    function dismissToast(id, btn) {
+      if (id && activeToasts.has(id)) {
+        removeToast(activeToasts.get(id), id);
+      } else {
+        removeToast(btn.closest('.toast'));
+      }
+    }
+
+    // ── Utilities ───────────────────────────────────────────────────────────
+    function esc(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    // ── Validation ──────────────────────────────────────────────────────────
+    const KEY_MAX = 255;
+    const VAL_MAX = 65535;
+    const KEY_RE = /^[A-Za-z0-9_-]+$/;
+
+    function validateRow(row) {
+      const key = row.querySelector('.kv-key').value.trim();
+      const val = row.querySelector('.kv-val').value;
+      if (!key) return null;
+      if (!KEY_RE.test(key)) return `Key "${key}" — only letters, numbers, _ and - are allowed.`;
+      if (key.length > KEY_MAX) return `Key "${key.slice(0, 24)}…" exceeds ${KEY_MAX} characters.`;
+      if (val.length > VAL_MAX) return `Value for "${key}" exceeds ${VAL_MAX} characters.`;
+      return null;
+    }
+
+    function attachValidation(row) {
+      row.querySelector('.kv-key').addEventListener('blur', () => {
+        const err = validateRow(row);
+        if (err) showToast(err, { type: 'error' });
+      });
+    }
+
+    // Attach to the initial static row
+    attachValidation(document.querySelector('.kv-row'));
+
+    // ── Request loading ─────────────────────────────────────────────────────
     const id = new URLSearchParams(location.search).get('id');
 
     if (!id) {
@@ -113,6 +184,7 @@
       }
     }
 
+    // ── KV row management ───────────────────────────────────────────────────
     function addRow() {
       const row = document.createElement('div');
       row.className = 'kv-row';
@@ -122,6 +194,8 @@
         <button type="button" class="btn-icon" onclick="removeRow(this)" title="Remove">✕</button>
       `;
       document.getElementById('kv-pairs').appendChild(row);
+      attachValidation(row);
+      row.querySelector('.kv-key').focus();
     }
 
     function removeRow(btn) {
@@ -133,6 +207,7 @@
       btn.closest('.kv-row').remove();
     }
 
+    // ── File parsing ────────────────────────────────────────────────────────
     function parseEnv(text) {
       const entries = [];
       for (const line of text.split('\n')) {
@@ -151,26 +226,99 @@
       return entries;
     }
 
+    function parseJson(text) {
+      let parsed;
+      try { parsed = JSON.parse(text); } catch { return null; }
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter(e => e && typeof e.key === 'string')
+          .map(e => ({ key: e.key.trim(), value: String(e.value ?? '') }));
+      }
+      if (parsed && typeof parsed === 'object') {
+        return Object.entries(parsed).map(([key, value]) => ({ key: key.trim(), value: String(value) }));
+      }
+      return null;
+    }
+
+    function populateRows(entries) {
+      const container = document.getElementById('kv-pairs');
+      const existing = container.querySelectorAll('.kv-row');
+      if (existing.length === 1) {
+        const k = existing[0].querySelector('.kv-key').value.trim();
+        const v = existing[0].querySelector('.kv-val').value.trim();
+        if (!k && !v) container.innerHTML = '';
+      }
+      for (const { key, value } of entries) {
+        const row = document.createElement('div');
+        row.className = 'kv-row';
+        row.innerHTML = `
+          <input placeholder="KEY_NAME" class="kv-key" autocomplete="off" spellcheck="false" value="${esc(key)}">
+          <input placeholder="value" class="kv-val" autocomplete="off" value="${esc(value)}">
+          <button type="button" class="btn-icon" onclick="removeRow(this)" title="Remove">✕</button>
+        `;
+        container.appendChild(row);
+        attachValidation(row);
+      }
+    }
+
+    async function loadFile(file) {
+      const text = await file.text();
+      const ext = file.name.split('.').pop().toLowerCase();
+      let entries;
+      if (ext === 'json') {
+        entries = parseJson(text);
+        if (!entries) {
+          showToast('Unrecognized JSON format. Expected a flat object {"KEY":"value"} or array [{key, value}].', { type: 'error' });
+          return;
+        }
+      } else {
+        entries = parseEnv(text);
+      }
+      if (!entries.length) {
+        showToast('No valid entries found in file.', { type: 'error' });
+        return;
+      }
+      populateRows(entries);
+      document.getElementById('file-drop-label').textContent =
+        `Loaded ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'} from ${file.name}`;
+    }
+
+    // ── File drop zone wiring ───────────────────────────────────────────────
+    document.getElementById('file-input').addEventListener('change', e => {
+      if (e.target.files[0]) loadFile(e.target.files[0]);
+    });
+
+    const dropZone = document.getElementById('file-drop-zone');
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('drag-over');
+      if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]);
+    });
+
+    // ── Submit ──────────────────────────────────────────────────────────────
     async function submitSecrets() {
-      hideError();
+      // Validate all rows first
+      const errors = [];
+      document.querySelectorAll('.kv-row').forEach(row => {
+        const err = validateRow(row);
+        if (err) errors.push(err);
+      });
+      if (errors.length) {
+        errors.forEach(e => showToast(e, { type: 'error' }));
+        return;
+      }
 
       const entries = [];
-
-      // KV rows
       document.querySelectorAll('.kv-row').forEach(row => {
         const key = row.querySelector('.kv-key').value.trim();
         const value = row.querySelector('.kv-val').value;
         if (key) entries.push({ key, value });
       });
 
-      // .env paste
-      const envText = document.getElementById('env-paste').value.trim();
-      if (envText) {
-        entries.push(...parseEnv(envText));
-      }
-
       if (entries.length === 0) {
-        showError('Please add at least one key-value pair.');
+        showToast('Please add at least one key-value pair.', { type: 'error' });
         return;
       }
 
@@ -188,29 +336,19 @@
         if (resp.status === 409) {
           const data = await resp.json();
           const keys = (data.keys || []).join(', ');
-          showError('Key already in use: ' + keys + '. Please use a different name.');
+          showToast('Key conflict: ' + keys + '. Please use a different name.', { type: 'error' });
           return;
         }
         if (!resp.ok) {
-          showError('Submission failed (' + resp.status + '). Please try again.');
+          showToast('Submission failed (' + resp.status + '). Please try again.', { type: 'error' });
           return;
         }
 
         document.getElementById('step-form').classList.add('hidden');
         document.getElementById('step-done').classList.remove('hidden');
       } catch (e) {
-        showError('Could not reach the server. Please check your connection.');
+        showToast('Could not reach the server. Please check your connection.', { type: 'error' });
       }
-    }
-
-    function showError(msg) {
-      const el = document.getElementById('error-msg');
-      el.textContent = msg;
-      el.classList.remove('hidden');
-    }
-
-    function hideError() {
-      document.getElementById('error-msg').classList.add('hidden');
     }
 
     function showInvalid(reason) {
