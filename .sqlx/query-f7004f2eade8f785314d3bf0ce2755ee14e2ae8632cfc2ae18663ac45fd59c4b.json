@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_requests SET status = 'expired'\n         WHERE status = 'pending' AND expires_at <= datetime('now')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "f7004f2eade8f785314d3bf0ce2755ee14e2ae8632cfc2ae18663ac45fd59c4b"
+}

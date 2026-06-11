@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT 1 as \"x: i32\" FROM session_requests\n           WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
+  "describe": {
+    "columns": [
+      {
+        "name": "x: i32",
+        "ordinal": 0,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bf4faeb9ec7db36a805ad6d00a0d767d7df3e384d4f159f6e9f61bd1b89f6565"
+}

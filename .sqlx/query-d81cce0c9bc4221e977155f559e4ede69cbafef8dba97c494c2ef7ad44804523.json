@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_requests\n         SET status = 'delivered', plaintext_token = NULL\n         WHERE id = ? AND status = 'approved'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "d81cce0c9bc4221e977155f559e4ede69cbafef8dba97c494c2ef7ad44804523"
+}

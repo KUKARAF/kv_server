@@ -218,6 +218,41 @@
 
     pollDeviceAuth();
     setInterval(pollDeviceAuth, 30000);
+
+    // ── Session request poller ───────────────────────────────────────────────
+    let knownSessionRequests = new Set();
+
+    async function pollSessionRequests() {
+      let data;
+      try {
+        const resp = await fetch('/api/admin/session-requests');
+        if (!resp.ok) return;
+        data = await resp.json();
+      } catch { return; }
+
+      const currentIds = new Set(data.map(r => r.id));
+
+      for (const r of data) {
+        if (!knownSessionRequests.has(r.id)) {
+          const name = r.label ? `<strong>${esc(r.label)}</strong>` : 'Unknown client';
+          showToast(
+            `🔐 Session request: ${name} — <a href="/admin/session-request.html?id=${esc(r.id)}" style="color:#93c5fd">Approve</a>`,
+            { id: 'session-req-' + r.id, persistent: true, type: 'warning' }
+          );
+        }
+      }
+
+      for (const id of knownSessionRequests) {
+        if (!currentIds.has(id) && activeToasts.has('session-req-' + id)) {
+          removeToast(activeToasts.get('session-req-' + id), 'session-req-' + id);
+        }
+      }
+
+      knownSessionRequests = currentIds;
+    }
+
+    pollSessionRequests();
+    setInterval(pollSessionRequests, 30000);
   </script>
 </body>
 </html>

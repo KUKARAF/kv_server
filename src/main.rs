@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod device_auth;
 mod error;
+mod session_request;
 mod keys;
 mod kv;
 mod middleware;
@@ -83,6 +84,7 @@ async fn main() -> Result<()> {
         .nest("/auth", auth::router())
         .nest("/webauthn", webauthn::router())
         .nest("/api/device-auth", device_auth::public_router())
+        .nest("/api/session-request", session_request::public_router())
         .nest("/api/admin", admin::router())
         .route("/api/collect/:id", get(admin::handlers::get_secret_request_public))
         .route(

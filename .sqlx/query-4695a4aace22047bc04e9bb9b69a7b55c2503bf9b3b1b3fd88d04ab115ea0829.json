@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_requests\n         SET status = 'rejected', rejected_at = datetime('now')\n         WHERE id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4695a4aace22047bc04e9bb9b69a7b55c2503bf9b3b1b3fd88d04ab115ea0829"
+}
