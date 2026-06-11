@@ -53,7 +53,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         let row = sqlx::query!(
             "SELECT owner_id, label
              FROM api_keys
-             WHERE key_hash = ? AND type = 'session' AND status = 'active'
+             WHERE key_hash = ? AND type IN ('session', 'approval') AND status = 'active'
                AND (expires_at IS NULL OR expires_at > datetime('now'))",
             key_hash
         )

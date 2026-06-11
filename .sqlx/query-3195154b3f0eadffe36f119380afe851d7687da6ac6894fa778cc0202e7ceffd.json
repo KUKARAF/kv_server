@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT owner_id, label\n             FROM api_keys\n             WHERE key_hash = ? AND type = 'session' AND status = 'active'\n               AND (expires_at IS NULL OR expires_at > datetime('now'))",
+  "query": "SELECT owner_id, label\n             FROM api_keys\n             WHERE key_hash = ? AND type IN ('session', 'approval') AND status = 'active'\n               AND (expires_at IS NULL OR expires_at > datetime('now'))",
   "describe": {
     "columns": [
       {
@@ -22,5 +22,5 @@
       false
     ]
   },
-  "hash": "3a8f2483f99fc2948ecfeeea789a247e62669231e53fa8803e79d91b58c9402c"
+  "hash": "3195154b3f0eadffe36f119380afe851d7687da6ac6894fa778cc0202e7ceffd"
 }

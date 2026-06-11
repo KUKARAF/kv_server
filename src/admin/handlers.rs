@@ -307,17 +307,8 @@ pub async fn create_device_token(
 
     sqlx::query!(
         "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
-         VALUES (?, ?, 'kv-approver device', 'standard', 'active', datetime('now', '+180 days'), ?)",
+         VALUES (?, ?, 'kv-approver device', 'approval', 'active', datetime('now', '+180 days'), ?)",
         id, key_hash, owner
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    // Full read access to all keys
-    let scope_id = Uuid::new_v4().to_string();
-    sqlx::query!(
-        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny) VALUES (?, ?, '*', 'read,list', 0)",
-        scope_id, id
     )
     .execute(&mut *tx)
     .await?;
