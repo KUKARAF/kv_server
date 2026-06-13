@@ -12,6 +12,8 @@ mod notify;
 mod state;
 mod tasks;
 mod webauthn;
+#[cfg(test)]
+mod tests;
 
 use anyhow::Result;
 use axum::{
