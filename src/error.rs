@@ -6,6 +6,11 @@ use axum::{
 use serde_json::json;
 use thiserror::Error;
 
+/// Placed in response extensions by `AppError::Unauthorized` so that
+/// `rate_limit::layer` can detect auth failures independently of HTTP status.
+#[derive(Clone)]
+pub struct AuthFailed;
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("unauthorized")]
@@ -60,7 +65,9 @@ impl IntoResponse for AppError {
         }
 
         if matches!(self, AppError::Unauthorized) {
-            return Redirect::to("https://static.osmosis.page/osmosis/401.html").into_response();
+            let mut response = Redirect::to("https://static.osmosis.page/osmosis/401.html").into_response();
+            response.extensions_mut().insert(AuthFailed);
+            return response;
         }
 
         if let AppError::KeyConflict(keys) = &self {

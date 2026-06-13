@@ -218,7 +218,10 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
             }
         }
 
-        let raw_key = raw_key.ok_or(AppError::Unauthorized)?;
+        let raw_key = raw_key.ok_or_else(|| {
+            record_failure();
+            AppError::Unauthorized
+        })?;
         let key_hash = crate::keys::generate::hash_key(&raw_key);
 
         let api_key = sqlx::query!(

@@ -2,7 +2,7 @@ use crate::{error::AppError, notify, state::AppState};
 use axum::{
     body::Body,
     extract::{ConnectInfo, State},
-    http::{HeaderMap, Request, StatusCode},
+    http::{HeaderMap, Request},
     middleware::Next,
     response::Response,
 };
@@ -65,7 +65,7 @@ pub async fn layer(
 
     // Only count failed authentication attempts — successful requests (including
     // open-access reads) must not penalise the caller.
-    if response.status() == StatusCode::UNAUTHORIZED {
+    if response.extensions().get::<crate::error::AuthFailed>().is_some() {
         let mut entry = state.rate_counters.entry(ip).or_insert(0);
         *entry += 1;
         let new_count = *entry;
