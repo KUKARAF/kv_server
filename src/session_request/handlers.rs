@@ -32,10 +32,7 @@ pub async fn create_request(
     .execute(&state.pool)
     .await?;
 
-    let url = format!(
-        "{}/admin/session-request.html?id={}",
-        state.config.public_base_url, id
-    );
+    let url = format!("kvapp://session-request?id={}", id);
 
     Ok((
         StatusCode::CREATED,
