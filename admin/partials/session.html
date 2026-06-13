@@ -20,6 +20,9 @@
       <button type="button" class="btn-icon" onclick="document.getElementById('device-token-reveal').classList.add('hidden')">✕</button>
     </div>
     <p class="share-reveal-warn">This token is shown <strong>once</strong>. Store it in the Android app immediately.</p>
+    <div style="display:flex;justify-content:center;margin:0.75rem 0;">
+      <div id="device-token-qr"></div>
+    </div>
     <div class="share-reveal-url">
       <code id="device-token-value" style="word-break:break-all;"></code>
       <button type="button" class="btn-secondary" onclick="copyDeviceToken()">Copy</button>
@@ -52,6 +55,17 @@
     if (!resp.ok) { alert('Failed to generate device token: ' + resp.status); return; }
     const token = await resp.json();
     document.getElementById('device-token-value').textContent = token;
+
+    const qrEl = document.getElementById('device-token-qr');
+    qrEl.innerHTML = '';
+    new QRCode(qrEl, {
+      text: 'kvapp://device-token?key=' + encodeURIComponent(token),
+      width: 200,
+      height: 200,
+      colorDark: '#ffffff',
+      colorLight: '#1a1a1a',
+    });
+
     document.getElementById('device-token-reveal').classList.remove('hidden');
   }
 
