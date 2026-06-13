@@ -59,6 +59,10 @@ impl IntoResponse for AppError {
             return Redirect::to("https://static.osmosis.page/osmosis/429.html").into_response();
         }
 
+        if matches!(self, AppError::Unauthorized) {
+            return Redirect::to("https://static.osmosis.page/osmosis/401.html").into_response();
+        }
+
         if let AppError::KeyConflict(keys) = &self {
             return (
                 StatusCode::CONFLICT,
@@ -75,16 +79,22 @@ impl IntoResponse for AppError {
                 .into_response();
         }
 
+        if matches!(self, AppError::Forbidden(_)) {
+            return Redirect::to("https://static.osmosis.page/osmosis/403.html").into_response();
+        }
+
         let (status, message) = match &self {
-            AppError::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized".to_string()),
-            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
-            AppError::RateLimited => (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded".to_string()),
-            AppError::PendingApproval { .. } | AppError::ZeroTrustRequired | AppError::KeyConflict(_) => unreachable!(),
+            AppError::RateLimited
+            | AppError::Unauthorized
+            | AppError::Forbidden(_)
+            | AppError::PendingApproval { .. }
+            | AppError::ZeroTrustRequired
+            | AppError::KeyConflict(_) => unreachable!(),
             AppError::Internal(e) => {
                 tracing::error!("internal error: {e:#}");
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".to_string())
+                return Redirect::to("https://static.osmosis.page/osmosis/500.html").into_response();
             }
         };
 
