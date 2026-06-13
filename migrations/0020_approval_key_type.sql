@@ -44,7 +44,8 @@ CREATE TABLE api_key_scopes_new (
     id          TEXT NOT NULL PRIMARY KEY,
     api_key_id  TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
     scope       TEXT NOT NULL,
-    ops         TEXT NOT NULL
+    ops         TEXT NOT NULL,
+    deny        INTEGER NOT NULL DEFAULT 0
 );
 INSERT INTO api_key_scopes_new SELECT * FROM api_key_scopes;
 DROP TABLE api_key_scopes;
