@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod db;
 mod device_auth;
+mod devices;
 mod error;
 mod session_request;
 mod keys;
@@ -85,6 +86,7 @@ async fn main() -> Result<()> {
         .nest("/kv", kv::router())
         .nest("/auth", auth::router())
         .nest("/webauthn", webauthn::router())
+        .nest("/api/devices", devices::router())
         .nest("/api/device-auth", device_auth::public_router())
         .nest("/api/session-request", session_request::public_router())
         .nest("/api/admin", admin::router())

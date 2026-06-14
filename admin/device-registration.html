@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Register Device — KV Manager</title>
+  <link rel="stylesheet" href="/admin/style.css">
+  <style>
+    .device-box {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 2.5rem;
+      max-width: 480px;
+      width: 100%;
+    }
+    .device-icon { font-size: 3rem; text-align: center; margin-bottom: 0.75rem; }
+    .device-box h1 { font-size: 1.3rem; text-align: center; margin-bottom: 0.5rem; }
+    .device-meta { color: #888; font-size: 13px; text-align: center; margin-bottom: 1.5rem; }
+    .status-msg { text-align: center; padding: 2rem; }
+    .status-msg .status-icon { font-size: 3rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body class="login-page">
+  <div class="device-box">
+    <div class="share-brand">
+      <img src="https://static.layer55.eu/kv/kv_logo.svg" alt="KV Manager" class="share-brand-logo">
+    </div>
+
+    <div id="checking">
+      <div class="device-icon">⏳</div>
+      <h1>Checking device…</h1>
+    </div>
+
+    <div id="register-view" class="hidden">
+      <div class="device-icon">💻</div>
+      <h1>Register this device</h1>
+      <p class="device-meta">
+        A key pair will be generated in your browser. The private key never leaves this device.
+      </p>
+      <label for="device-name" style="font-size:13px;color:#aaa;">Device name</label>
+      <input id="device-name" type="text" placeholder="e.g. Rafał's laptop"
+             style="width:100%;margin-top:0.35rem;margin-bottom:1.25rem;" autocomplete="off">
+      <button class="btn" style="width:100%;" onclick="registerDevice()">Register this device</button>
+    </div>
+
+    <div id="status-view" class="hidden">
+      <div class="status-msg">
+        <div class="status-icon" id="status-icon"></div>
+        <p id="status-text"></p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ── Auth guard ────────────────────────────────────────────────────────────
+    const _fetch = window.fetch;
+    window.fetch = async (...args) => {
+      const resp = await _fetch(...args);
+      if (resp.status === 401) {
+        window.location.href = '/auth/login?return=' + encodeURIComponent(location.href);
+      }
+      return resp;
+    };
+
+    // ── IndexedDB helpers ─────────────────────────────────────────────────────
+    const DB_NAME = 'kv_manager';
+    const STORE   = 'kv_device';
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, 1);
+        req.onupgradeneeded = e => e.target.result.createObjectStore(STORE);
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror   = e => reject(e.target.error);
+      });
+    }
+
+    function dbGet(db, key) {
+      return new Promise((resolve, reject) => {
+        const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(key);
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror   = e => reject(e.target.error);
+      });
+    }
+
+    function dbPut(db, key, value) {
+      return new Promise((resolve, reject) => {
+        const req = db.transaction(STORE, 'readwrite').objectStore(STORE).put(value, key);
+        req.onsuccess = () => resolve();
+        req.onerror   = e => reject(e.target.error);
+      });
+    }
+
+    // ── Startup: check if this device is already registered ───────────────────
+    (async () => {
+      try {
+        const db     = await openDB();
+        const record = await dbGet(db, 'device');
+        if (record?.deviceId) {
+          // Already registered — go straight to the dashboard.
+          window.location.replace('/admin/');
+          return;
+        }
+      } catch (e) {
+        console.warn('IndexedDB check failed, showing registration form:', e);
+      }
+      document.getElementById('checking').classList.add('hidden');
+      document.getElementById('register-view').classList.remove('hidden');
+      document.getElementById('device-name').focus();
+    })();
+
+    // ── Register ──────────────────────────────────────────────────────────────
+    async function registerDevice() {
+      const name = document.getElementById('device-name').value.trim();
+      if (!name) {
+        document.getElementById('device-name').focus();
+        return;
+      }
+
+      const btn = document.querySelector('#register-view .btn');
+      btn.disabled = true;
+      btn.textContent = 'Generating key…';
+
+      try {
+        // Generate ECDSA P-256 key pair.
+        // private key is non-extractable: key material never readable by JS.
+        const { privateKey, publicKey } = await crypto.subtle.generateKey(
+          { name: 'ECDSA', namedCurve: 'P-256' },
+          false,
+          ['sign', 'verify']
+        );
+
+        // Export public key as SPKI and base64-encode it for transport.
+        const spkiBuffer = await crypto.subtle.exportKey('spki', publicKey);
+        const publicKeyB64 = btoa(String.fromCharCode(...new Uint8Array(spkiBuffer)));
+
+        btn.textContent = 'Registering…';
+
+        const resp = await fetch('/api/devices', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, public_key: publicKeyB64 }),
+        });
+
+        if (!resp.ok) {
+          throw new Error('Server returned ' + resp.status);
+        }
+
+        const { id } = await resp.json();
+
+        // Store device ID + both keys in IndexedDB.
+        // The private CryptoKey object can live here even though extractable=false.
+        const db = await openDB();
+        await dbPut(db, 'device', { deviceId: id, privateKey, publicKey });
+
+        showStatus('✅', 'Device registered! Redirecting…');
+        setTimeout(() => window.location.replace('/admin/'), 1200);
+
+      } catch (e) {
+        console.error(e);
+        btn.disabled = false;
+        btn.textContent = 'Register this device';
+        showStatus('❌', 'Registration failed: ' + e.message);
+      }
+    }
+
+    function showStatus(icon, text) {
+      document.getElementById('checking').classList.add('hidden');
+      document.getElementById('register-view').classList.add('hidden');
+      document.getElementById('status-icon').textContent = icon;
+      document.getElementById('status-text').textContent = text;
+      document.getElementById('status-view').classList.remove('hidden');
+    }
+  </script>
+</body>
+</html>
