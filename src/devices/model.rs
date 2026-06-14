@@ -10,3 +10,11 @@ pub struct RegisterDeviceRequest {
 pub struct RegisterDeviceResponse {
     pub id: String,
 }
+
+#[derive(Debug, Serialize)]
+pub struct DeviceRow {
+    pub id: String,
+    pub name: String,
+    pub created_at: String,
+    pub last_seen_at: Option<String>,
+}

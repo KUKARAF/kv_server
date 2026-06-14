@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM devices WHERE id = ? AND owner_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "251fe62b498b73ef77aab69525d9519158d997cbfdc3ad54d23a4901043d200b"
+}
