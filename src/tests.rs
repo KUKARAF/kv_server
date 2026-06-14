@@ -1,4 +1,4 @@
-use crate::{config::Config, keys::generate::generate_api_key, kv, middleware, state::AppState};
+use crate::{config::Config, devices, keys::generate::generate_api_key, kv, middleware, state::AppState};
 use axum::{
     body::Body,
     extract::connect_info::MockConnectInfo,
@@ -55,6 +55,8 @@ async fn build_test_app() -> (Router, Arc<AppState>) {
 
     let app = Router::new()
         .nest("/kv", kv::router())
+        .nest("/api/devices", devices::router())
+        .nest("/api/admin/devices", devices::admin_router())
         .layer(axum_middleware::from_fn(middleware::security_headers::layer))
         .layer(axum_middleware::from_fn_with_state(
             Arc::clone(&state),
@@ -160,6 +162,21 @@ async fn insert_api_key(
     plaintext
 }
 
+fn req(method: &str, path: &str, bearer: Option<&str>, body: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(path);
+    if let Some(token) = bearer {
+        builder = builder.header("Authorization", format!("Bearer {token}"));
+    }
+    if body.is_some() {
+        builder = builder.header("content-type", "application/json");
+    }
+    let body = match body {
+        Some(s) => Body::from(s.to_string()),
+        None => Body::empty(),
+    };
+    builder.body(body).unwrap()
+}
+
 fn get_req(path: &str, bearer: Option<String>, api_key: Option<String>) -> Request<Body> {
     let mut builder = Request::builder().method("GET").uri(path);
     if let Some(token) = bearer {
@@ -261,5 +278,43 @@ async fn auth_counter_behaviour(
         expect_block_inc,
         "scenario {scenario}: block counter expected {}, got {block}",
         if expect_block_inc { "increment" } else { "no change" }
+    );
+}
+
+/// Verifies that each endpoint enforces authentication correctly.
+///
+/// Unauthenticated requests are redirected (303) to the error page.
+/// Authenticated requests reach the handler and return the expected status.
+#[rstest]
+// ── unauthenticated → 303 redirect ──────────────────────────────────────────
+#[case("POST",   "/api/devices",                   Some(r#"{"name":"t","public_key":"dGVzdA=="}"#), false, 303)]
+#[case("GET",    "/api/admin/devices",             None,                                             false, 303)]
+#[case("DELETE", "/api/admin/devices/nonexistent", None,                                             false, 303)]
+// ── authenticated → handler response ────────────────────────────────────────
+#[case("POST",   "/api/devices",                   Some(r#"{"name":"t","public_key":"dGVzdA=="}"#), true,  201)]
+#[case("GET",    "/api/admin/devices",             None,                                             true,  200)]
+#[case("DELETE", "/api/admin/devices/nonexistent", None,                                             true,  404)]
+#[tokio::test]
+async fn endpoint_auth(
+    #[case] method: &str,
+    #[case] path: &str,
+    #[case] body: Option<&str>,
+    #[case] authenticated: bool,
+    #[case] expected_status: u16,
+) {
+    let (app, state) = build_test_app().await;
+
+    let token = if authenticated {
+        Some(insert_session_key(&state.pool, "active", None).await)
+    } else {
+        None
+    };
+
+    let request = req(method, path, token.as_deref(), body);
+    let resp = app.oneshot(request).await.unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        expected_status,
+        "{method} {path} authenticated={authenticated}"
     );
 }
