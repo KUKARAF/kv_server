@@ -59,11 +59,11 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         let op = Op::from_request(parts);
         let client_ip = parts.extensions.get::<ClientIp>().map(|c| c.0);
 
-        let record_failure = || {
+        let record_failure = |reason: &'static str| {
             if let Some(ip) = client_ip {
                 let pool = state.pool.clone();
                 let threshold = state.config.auth_failure_threshold;
-                tokio::spawn(async move { record_auth_failure(&pool, ip, threshold).await });
+                tokio::spawn(async move { record_auth_failure(&pool, ip, threshold, reason).await });
             }
         };
 
@@ -97,10 +97,10 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                         format!("Auth failure: {} key used ({})", api_key.status, &api_key.id[..8]),
                         "medium",
                     );
-                    record_failure();
+                    record_failure("revoked or used session key");
                     return Err(AppError::Unauthorized);
                 }
-                
+
                 // Check expiry
                 if let Some(ref exp) = api_key.expires_at {
                     let expired: bool = sqlx::query_scalar!(
@@ -116,7 +116,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                             format!("Auth failure: expired session key used ({})", &api_key.id[..8]),
                             "medium",
                         );
-                        record_failure();
+                        record_failure("expired session key");
                         return Err(AppError::Unauthorized);
                     }
                 }
@@ -219,7 +219,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         }
 
         let raw_key = raw_key.ok_or_else(|| {
-            record_failure();
+            record_failure("missing X-Api-Key header");
             AppError::Unauthorized
         })?;
         let key_hash = crate::keys::generate::hash_key(&raw_key);
@@ -232,7 +232,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
         )
         .fetch_optional(&state.pool)
         .await?
-        .ok_or_else(|| { record_failure(); AppError::Unauthorized })?;
+        .ok_or_else(|| { record_failure("unknown API key"); AppError::Unauthorized })?;
 
         // Reject revoked/used keys immediately
         if api_key.status == "revoked" || api_key.status == "used" {
@@ -241,7 +241,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                 format!("Auth failure: {} key used ({})", api_key.status, &api_key.id[..8]),
                 "medium",
             );
-            record_failure();
+            record_failure("revoked or used API key");
             return Err(AppError::Unauthorized);
         }
 
@@ -260,7 +260,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     format!("Auth failure: expired key used ({})", &api_key.id[..8]),
                     "medium",
                 );
-                record_failure();
+                record_failure("expired API key");
                 return Err(AppError::Unauthorized);
             }
         }

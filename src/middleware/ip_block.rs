@@ -48,9 +48,11 @@ pub async fn layer(
     next.run(request).await
 }
 
-pub async fn record_auth_failure(pool: &SqlitePool, ip: IpAddr, threshold: u32) {
+pub async fn record_auth_failure(pool: &SqlitePool, ip: IpAddr, threshold: u32, reason: &str) {
     let ip_str = ip.to_string();
     let threshold_i64 = threshold as i64;
+
+    tracing::warn!(ip = %ip, %reason, "auth failure recorded — blocked_ips counter incremented");
 
     if let Err(e) = sqlx::query!(
         "INSERT INTO blocked_ips (ip, failed_count, last_failure)

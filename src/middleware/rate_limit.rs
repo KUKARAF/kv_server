@@ -61,6 +61,9 @@ pub async fn layer(
         return Err(AppError::RateLimited);
     }
 
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+
     let response = next.run(request).await;
 
     // Only count failed authentication attempts — successful requests (including
@@ -70,6 +73,8 @@ pub async fn layer(
         *entry += 1;
         let new_count = *entry;
         drop(entry);
+
+        tracing::warn!(ip = %ip, count = new_count, limit, method = %method, path = %path, "rate limit counter incremented");
 
         if new_count == limit {
             tracing::warn!(ip = %ip, count = new_count, limit, "rate limit reached");
