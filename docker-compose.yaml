@@ -10,6 +10,7 @@ services:
     environment:
       DATABASE_URL: /app/data/kv.db
       PORT: "3000"
+      PUBLIC_BASE_URL: "https://kv.osmosis.page"
     logging:
       driver: loki
       options:
