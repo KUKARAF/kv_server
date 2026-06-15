@@ -283,13 +283,13 @@ async fn auth_counter_behaviour(
 
 /// Verifies that each endpoint enforces authentication correctly.
 ///
-/// Unauthenticated requests are redirected (303) to the error page.
+/// Unauthenticated requests return 401 JSON.
 /// Authenticated requests reach the handler and return the expected status.
 #[rstest]
-// ── unauthenticated → 303 redirect ──────────────────────────────────────────
-#[case("POST",   "/api/devices",                   Some(r#"{"name":"t","public_key":"dGVzdA=="}"#), false, 303)]
-#[case("GET",    "/api/admin/devices",             None,                                             false, 303)]
-#[case("DELETE", "/api/admin/devices/nonexistent", None,                                             false, 303)]
+// ── unauthenticated → 401 ───────────────────────────────────────────────────
+#[case("POST",   "/api/devices",                   Some(r#"{"name":"t","public_key":"dGVzdA=="}"#), false, 401)]
+#[case("GET",    "/api/admin/devices",             None,                                             false, 401)]
+#[case("DELETE", "/api/admin/devices/nonexistent", None,                                             false, 401)]
 // ── authenticated → handler response ────────────────────────────────────────
 #[case("POST",   "/api/devices",                   Some(r#"{"name":"t","public_key":"dGVzdA=="}"#), true,  201)]
 #[case("GET",    "/api/admin/devices",             None,                                             true,  200)]

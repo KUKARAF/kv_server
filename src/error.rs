@@ -61,11 +61,11 @@ impl IntoResponse for AppError {
         }
 
         if matches!(self, AppError::RateLimited) {
-            return Redirect::to("https://static.osmosis.page/osmosis/429.html").into_response();
+            return (StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate limit exceeded" }))).into_response();
         }
 
         if matches!(self, AppError::Unauthorized) {
-            let mut response = Redirect::to("https://static.osmosis.page/osmosis/401.html").into_response();
+            let mut response = (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
             response.extensions_mut().insert(AuthFailed);
             return response;
         }
@@ -86,8 +86,8 @@ impl IntoResponse for AppError {
                 .into_response();
         }
 
-        if matches!(self, AppError::Forbidden(_)) {
-            return Redirect::to("https://static.osmosis.page/osmosis/403.html").into_response();
+        if let AppError::Forbidden(msg) = &self {
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": msg }))).into_response();
         }
 
         let (status, message) = match &self {
