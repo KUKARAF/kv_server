@@ -1,4 +1,4 @@
-use crate::{error::AppError, keys::scope::{check_scope, ScopeRule}, middleware::ip_block::{record_auth_failure, ClientIp}, notify, state::AppState};
+use crate::{error::AppError, keys::scope::{check_scope, ScopeRule}, middleware::ip_block::{record_auth_failure, reset_failures_on_success, ClientIp}, notify, state::AppState};
 use axum::{
     async_trait,
     extract::FromRequestParts,
@@ -111,12 +111,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     .await? != 0;
 
                     if expired {
-                        notify::send(
-                            state.pool.clone(),
-                            format!("Auth failure: expired session key used ({})", &api_key.id[..8]),
-                            "medium",
-                        );
-                        record_failure("expired session key");
+                        tracing::debug!(key_id = %api_key.id, "session key expired — triggering re-auth");
                         return Err(AppError::Unauthorized);
                     }
                 }
@@ -167,9 +162,10 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     }
                 }
 
-                // Update last_used_at (fire and forget)
+                // Update last_used_at and reset any accumulated failure debt (fix 4)
                 let id = api_key.id.clone();
                 let pool = state.pool.clone();
+                let ip_for_reset = client_ip;
                 tokio::spawn(async move {
                     let _ = sqlx::query!(
                         "UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?",
@@ -177,6 +173,9 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     )
                     .execute(&pool)
                     .await;
+                    if let Some(ip) = ip_for_reset {
+                        reset_failures_on_success(&pool, ip).await;
+                    }
                 });
 
                 return Ok(ApiKeyAuth {
@@ -186,6 +185,11 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     allowed_scopes: scopes,
                 });
             }
+
+            // Bearer was provided but not recognised as a session key — return 401
+            // without recording a failure. Not an attack; most likely an old/expired
+            // token that was already deleted, or a token from a different context.
+            return Err(AppError::Unauthorized);
         }
 
         // axum nest strips "/kv" so the path is e.g. "/my-key"; strip the slash.

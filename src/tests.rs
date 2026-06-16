@@ -232,9 +232,9 @@ async fn resolve_cred(cred: Cred, pool: &SqlitePool) -> (Option<String>, Option<
 /// whether the rate counter should increment, whether the block counter should increment.
 #[rstest]
 #[case(1,  "/kv/protected-key", Cred::None,           true,  true )]
-#[case(2,  "/kv/protected-key", Cred::BearerUnknown,  false, true )]
+#[case(2,  "/kv/protected-key", Cred::BearerUnknown,  false, false)]
 #[case(3,  "/kv/protected-key", Cred::BearerValid,    false, false)]
-#[case(4,  "/kv/protected-key", Cred::BearerExpired,  false, true )]
+#[case(4,  "/kv/protected-key", Cred::BearerExpired,  false, false)]
 #[case(5,  "/kv/protected-key", Cred::BearerRevoked,  false, true )]
 #[case(6,  "/kv/protected-key", Cred::ApiKeyUnknown,  false, true )]
 #[case(7,  "/kv/protected-key", Cred::ApiKeyValid,    false, false)]

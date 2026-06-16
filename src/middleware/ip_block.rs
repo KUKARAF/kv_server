@@ -48,6 +48,22 @@ pub async fn layer(
     next.run(request).await
 }
 
+/// Clears accumulated failure debt for an IP after a successful authentication.
+/// Never touches `blocked_at` — IPs that reached the threshold stay blocked.
+pub async fn reset_failures_on_success(pool: &SqlitePool, ip: IpAddr) {
+    let ip_str = ip.to_string();
+    if let Err(e) = sqlx::query!(
+        "UPDATE blocked_ips SET failed_count = 0
+         WHERE ip = ? AND failed_count > 0 AND blocked_at IS NULL",
+        ip_str
+    )
+    .execute(pool)
+    .await
+    {
+        tracing::error!("failed to reset failure count for {ip}: {e}");
+    }
+}
+
 pub async fn record_auth_failure(pool: &SqlitePool, ip: IpAddr, threshold: u32, reason: &str) {
     let ip_str = ip.to_string();
     let threshold_i64 = threshold as i64;

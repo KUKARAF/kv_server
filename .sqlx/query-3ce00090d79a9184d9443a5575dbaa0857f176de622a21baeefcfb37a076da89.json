@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE blocked_ips SET failed_count = 0\n         WHERE ip = ? AND failed_count > 0 AND blocked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "3ce00090d79a9184d9443a5575dbaa0857f176de622a21baeefcfb37a076da89"
+}
