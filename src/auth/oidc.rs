@@ -139,9 +139,10 @@ async fn create_session_key(
     use crate::keys::generate::generate_api_key;
     use uuid::Uuid;
 
+    // Only revoke the previous web session (label = email), not CLI sessions (label = 'session')
     sqlx::query!(
-        "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active'",
-        owner_id
+        "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active' AND label = ?",
+        owner_id, email
     )
     .execute(pool)
     .await?;

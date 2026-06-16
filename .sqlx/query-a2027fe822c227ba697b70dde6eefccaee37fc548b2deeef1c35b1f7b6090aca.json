@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active' AND label = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a2027fe822c227ba697b70dde6eefccaee37fc548b2deeef1c35b1f7b6090aca"
+}

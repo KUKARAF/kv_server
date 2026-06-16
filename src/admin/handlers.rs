@@ -176,14 +176,14 @@ pub async fn create_session_key(
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
     let owner = &auth.0.oidc_subject;
     
-    // Auto-revoke any existing active session key for this owner
+    // Only revoke previous CLI session tokens (label = 'session'), not the web session
     sqlx::query!(
-        "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active'",
+        "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active' AND label = 'session'",
         owner
     )
     .execute(&state.pool)
     .await?;
-    
+
     // Create new session key with 15 hour TTL
     let (plaintext, key_hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();
