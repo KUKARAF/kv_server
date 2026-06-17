@@ -146,6 +146,20 @@ pub async fn revoke_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn delete_revoked_sessions(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let owner = &auth.0.oidc_subject;
+    let result = sqlx::query!(
+        "DELETE FROM api_keys WHERE owner_id = ? AND type = 'session' AND status = 'revoked'",
+        owner
+    )
+    .execute(&state.pool)
+    .await?;
+    Ok((StatusCode::OK, Json(serde_json::json!({ "deleted": result.rows_affected() }))))
+}
+
 pub async fn delete_key(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,

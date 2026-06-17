@@ -23,6 +23,7 @@
     <button onclick="showTab('rate-limits')" class="tab-btn" id="tab-rate-limits">Rate Limits</button>
     <button onclick="showTab('session')" class="tab-btn" id="tab-session">Session</button>
     <button onclick="copySession()" class="tab-btn" title="Copy session token">📋</button>
+    <button onclick="deleteRevokedSessions()" class="tab-btn btn-danger" title="Delete all revoked session keys">Purge revoked</button>
     <span class="nav-spacer"></span>
     <span id="nav-user" class="nav-user"></span>
     <button onclick="logout()" class="tab-btn nav-logout">Logout</button>
@@ -132,6 +133,15 @@
     async function logout() {
       await fetch('/api/admin/session/logout', { method: 'POST' });
       window.location.href = '/auth/login';
+    }
+
+    // ── Purge revoked session keys ──────────────────────────────────────────
+    async function deleteRevokedSessions() {
+      if (!confirm('Delete all revoked session keys?')) return;
+      const resp = await fetch('/api/admin/keys/revoked-sessions', { method: 'DELETE' });
+      if (!resp.ok) { showToast('Failed to purge revoked sessions', { type: 'error' }); return; }
+      const data = await resp.json();
+      showToast(`Purged ${data.deleted} revoked session key(s)`, { type: 'success' });
     }
 
     // ── Copy session token ──────────────────────────────────────────────────

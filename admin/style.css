@@ -67,16 +67,16 @@ body::after {
 nav {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.6rem 1.25rem;
+  gap: 0.5rem;
+  padding: 1rem 1.5rem;
   background: var(--panel);
   border-bottom: 1px solid var(--faint);
   font-family: 'Press Start 2P', monospace;
 }
 .brand { margin-right: 0.75rem; text-decoration: none; }
-.brand-logo { height: 28px; width: auto; display: block; }
+.brand-logo { height: 36px; width: auto; display: block; }
 .nav-spacer { flex: 1; }
-.nav-user { color: var(--dim); font-family: 'VT323', monospace; font-size: 15px; }
+.nav-user { color: var(--dim); font-family: 'VT323', monospace; font-size: 17px; }
 .nav-logout {
   color: var(--danger) !important;
   border-color: var(--danger) !important;
@@ -88,10 +88,10 @@ nav {
   border: 1px solid transparent;
   color: var(--dim);
   cursor: pointer;
-  padding: 0.35rem 0.65rem;
+  padding: 0.5rem 0.85rem;
   border-radius: 2px;
   font-family: 'Press Start 2P', monospace;
-  font-size: 7px;
+  font-size: 9px;
   letter-spacing: .04em;
   transition: color .15s, border-color .15s;
 }

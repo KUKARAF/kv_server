@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/keys", get(handlers::list_keys).post(handlers::create_key))
+        .route("/keys/revoked-sessions", delete(handlers::delete_revoked_sessions))
         .route("/keys/:id/revoke", post(handlers::revoke_key))
         .route("/keys/:id", delete(handlers::delete_key))
         .route("/keys/:id/request-approval", post(handlers::request_approval))
