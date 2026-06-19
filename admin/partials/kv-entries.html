@@ -17,7 +17,14 @@
       <label class="label-check"><input name="one_time" type="checkbox" onchange="toggleOneTime(this)"> One-time</label>
       <label class="label-check"><input name="approval_required" type="checkbox" onchange="toggleApprovalRequired(this)"> Approval required</label>
       <label class="label-check"><input name="zero_trust" type="checkbox" onchange="toggleZeroTrust(this)"> Zero Trust</label>
+      <label class="label-check"><input name="device_encrypted" type="checkbox" onchange="toggleDeviceEncrypted(this)"> Device Encrypted</label>
       <button type="submit">Save</button>
+    </div>
+    <div id="device-picker-panel" class="hidden" style="margin-top:0.75rem;padding:0.75rem;border:1px solid #2a2a2a;border-radius:8px;">
+      <div style="font-size:12px;color:#888;margin-bottom:0.5rem;">Encrypt for devices:</div>
+      <div id="device-picker-checkboxes" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">
+        <span style="color:#555;font-size:12px">Loading…</span>
+      </div>
     </div>
   </form>
 
@@ -99,6 +106,24 @@
   </div>
 
   <div id="entries-list">Loading…</div>
+
+  <!-- Re-encrypt / manage device access modal -->
+  <div id="reencrypt-modal" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;display:flex;align-items:center;justify-content:center;">
+    <div style="background:#1a1a1a;border:1px solid #2a2a2a;border-radius:12px;padding:2rem;max-width:440px;width:90%;max-height:80vh;overflow-y:auto;">
+      <h3 style="margin-top:0">Manage device access</h3>
+      <p style="color:#888;font-size:12px;margin:0 0 0.25rem">Key: <code id="reencrypt-key-label" style="color:#ccc"></code></p>
+      <p style="color:#888;font-size:12px;margin:0 0 1rem">
+        Select which devices can decrypt this entry.
+        <strong style="color:#f87171">Unchecking a device revokes its access.</strong>
+        The browser decrypts your copy and re-encrypts to the selected set.
+      </p>
+      <div id="reencrypt-device-list" style="display:flex;flex-direction:column;gap:0.5rem;"></div>
+      <div style="display:flex;gap:0.75rem;justify-content:flex-end;margin-top:1.25rem;">
+        <button class="btn-secondary" onclick="closeReEncryptModal()">Cancel</button>
+        <button class="btn" onclick="confirmReEncrypt()">Re-encrypt</button>
+      </div>
+    </div>
+  </div>
 </section>
 
 <script>
@@ -136,7 +161,7 @@
 
   function toggleZeroTrust(cb) {
     const form = cb.closest('form');
-    const others = ['open_access', 'ttl_sliding', 'one_time', 'approval_required'];
+    const others = ['open_access', 'ttl_sliding', 'one_time', 'approval_required', 'device_encrypted'];
     if (cb.checked) {
       others.forEach(n => {
         form.querySelector('[name=' + n + ']').checked = false;
@@ -145,6 +170,38 @@
     } else {
       others.forEach(n => { form.querySelector('[name=' + n + ']').disabled = false; });
     }
+  }
+
+  function toggleDeviceEncrypted(cb) {
+    const form = cb.closest('form');
+    const others = ['open_access', 'ttl_sliding', 'one_time', 'approval_required', 'zero_trust'];
+    if (cb.checked) {
+      others.forEach(n => {
+        form.querySelector('[name=' + n + ']').checked = false;
+        form.querySelector('[name=' + n + ']').disabled = true;
+      });
+      document.getElementById('device-picker-panel').classList.remove('hidden');
+      populateDevicePicker();
+    } else {
+      others.forEach(n => { form.querySelector('[name=' + n + ']').disabled = false; });
+      document.getElementById('device-picker-panel').classList.add('hidden');
+    }
+  }
+
+  async function populateDevicePicker(preSelectedIds = null) {
+    const devices = await loadDevicesOnce();
+    const container = document.getElementById('device-picker-checkboxes');
+    if (!devices.length) {
+      container.innerHTML = '<span style="color:#f87171;font-size:12px">No devices registered.</span>';
+      return;
+    }
+    container.innerHTML = devices.map(d => {
+      const checked = preSelectedIds === null || preSelectedIds.includes(d.id) ? 'checked' : '';
+      return `<label class="label-check">
+        <input type="checkbox" value="${esc(d.id)}" ${checked}>
+        ${esc(d.name)} <span style="color:#555;font-size:10px">(${esc(d.key_type)})</span>
+      </label>`;
+    }).join('');
   }
 
   async function loadScopes() {
@@ -164,6 +221,12 @@
     const oneTime = form.one_time.checked;
     const approvalRequired = form.approval_required.checked;
     const zeroTrust = form.zero_trust.checked;
+    const deviceEncrypted = form.device_encrypted.checked;
+
+    if (deviceEncrypted) {
+      await encryptToDevices(form, key);
+      return false;
+    }
 
     if (zeroTrust) {
       // Generate a fresh PRF salt client-side
@@ -388,29 +451,57 @@
     loadScopes();
   }
 
-  document.addEventListener('htmx:afterRequest', function(e) {
+  // ── Device list cache ────────────────────────────────────────────────────
+  let _devicesCache = null;
+  async function loadDevicesOnce() {
+    if (_devicesCache) return _devicesCache;
+    const r = await fetch('/api/admin/devices');
+    _devicesCache = r.ok ? await r.json() : [];
+    return _devicesCache;
+  }
+  function invalidateDeviceCache() { _devicesCache = null; }
+
+  document.addEventListener('htmx:afterRequest', async function(e) {
     if (e.detail.pathInfo?.requestPath?.startsWith('/api/admin/kv')) {
-      try { renderEntries(e.detail.xhr.response); } catch {}
+      try {
+        const devices = await loadDevicesOnce();
+        renderEntries(e.detail.xhr.response, devices);
+      } catch {}
     }
   });
 
-  function renderEntries(json) {
+  function renderEntries(json, devices = []) {
     const entries = JSON.parse(json);
     const el = document.getElementById('entries-list');
     if (!entries.length) { el.innerHTML = '<p>No entries found.</p>'; return; }
     el.innerHTML = `<table>
       <thead><tr><th>Key</th><th>Scope</th><th>TTL (h)</th><th>Sliding</th><th>Open</th><th>Expires</th><th>Created</th><th></th></tr></thead>
-      <tbody>${entries.map(e => `
+      <tbody>${entries.map(e => {
+        const recipIds   = e.recipient_device_ids ?? [];
+        const recipCount = recipIds.length;
+        const totalDev   = devices.length;
+        const names      = recipIds.map(id => deviceName(id, devices)).join(', ') || 'none';
+        const devBadge   = e.device_encrypted
+          ? ` <span class="badge" style="background:#7c3aed;color:#fff;font-size:10px;vertical-align:middle;cursor:default" title="Devices with access: ${esc(names)}">device ${recipCount}/${totalDev}</span>`
+          : '';
+        const recipJson  = esc(JSON.stringify(recipIds));
+        const actions = `${e.device_encrypted
+          ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="decryptEntry('${esc(e.key)}')">Decrypt</button>`
+          : ''}${e.device_encrypted
+          ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="openReEncryptModal('${esc(e.key)}','${esc(e.scope ?? '')}',JSON.parse(this.dataset.ids))" data-ids="${recipJson}">Devices</button>`
+          : ''}<button class="btn-icon" onclick="deleteEntry('${esc(e.key)}')" title="Delete">🗑️</button>`;
+        return `
         <tr>
-          <td><code>${esc(e.key)}</code></td>
+          <td><code>${esc(e.key)}</code>${devBadge}</td>
           <td><span class="scope-cell" data-key="${esc(e.key)}" onclick="editScope(this)">${e.scope ? `<span class="badge badge-scope">${esc(e.scope)}</span>` : '<span class="scope-empty">+ scope</span>'}</span></td>
           <td>${e.ttl_hours ?? '—'}</td>
           <td>${e.ttl_sliding ? '✓' : '—'}</td>
           <td>${e.open_access ? '✓' : '—'}</td>
           <td>${e.expires_at ? esc(e.expires_at) : '—'}</td>
           <td>${esc(e.created_at)}</td>
-          <td><button class="btn-icon" onclick="deleteEntry('${esc(e.key)}')" title="Delete">🗑️</button></td>
-        </tr>`).join('')}
+          <td style="white-space:nowrap">${actions}</td>
+        </tr>`;
+      }).join('')}
       </tbody></table>`;
   }
 
@@ -539,6 +630,269 @@
     const buf = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
     return buf.buffer;
+  }
+
+  /** Encode Uint8Array or ArrayBuffer to standard base64 */
+  function b64Encode(buf) {
+    const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin);
+  }
+
+  /** Decode standard base64 string to ArrayBuffer */
+  function b64Decode(s) {
+    const bin = atob(s);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+  }
+
+  // ── IndexedDB helpers (shared with device-registration.html) ─────────────
+  const _IDB_NAME  = 'kv_manager';
+  const _IDB_STORE = 'kv_device';
+
+  function _openAdminDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(_IDB_NAME, 1);
+      req.onupgradeneeded = e => e.target.result.createObjectStore(_IDB_STORE);
+      req.onsuccess = e => resolve(e.target.result);
+      req.onerror   = e => reject(e.target.error);
+    });
+  }
+
+  function _dbGet(db, key) {
+    return new Promise((resolve, reject) => {
+      const req = db.transaction(_IDB_STORE, 'readonly').objectStore(_IDB_STORE).get(key);
+      req.onsuccess = e => resolve(e.target.result);
+      req.onerror   = e => reject(e.target.error);
+    });
+  }
+
+  // Core P-256 ECDH decrypt — takes server payload + private CryptoKey, returns plaintext string
+  async function decryptDeviceKvPayload(payload, privateKey) {
+    const encoder = new TextEncoder();
+
+    const ephPub = await crypto.subtle.importKey(
+      'raw', b64Decode(payload.recipient.ephemeral_pub),
+      { name: 'ECDH', namedCurve: 'P-256' }, false, []
+    );
+    const sharedBits = await crypto.subtle.deriveBits(
+      { name: 'ECDH', public: ephPub }, privateKey, 256
+    );
+    const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+    const wrapKey = await crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: encoder.encode('kv-device-wrap') },
+      hkdfKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+    );
+    const dek = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(b64Decode(payload.recipient.dek_nonce)) },
+      wrapKey, b64Decode(payload.recipient.encrypted_dek)
+    );
+    const dekKey = await crypto.subtle.importKey('raw', dek, { name: 'AES-GCM' }, false, ['decrypt']);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(b64Decode(payload.nonce)), additionalData: new Uint8Array(b64Decode(payload.aad)) },
+      dekKey, b64Decode(payload.ciphertext)
+    );
+    return new TextDecoder().decode(plaintext);
+  }
+
+  async function _loadBrowserDevice() {
+    const db     = await _openAdminDB();
+    const record = await _dbGet(db, 'device');
+    if (!record?.deviceId || !record?.privateKey?.usages?.includes('deriveBits')) return null;
+    return record;
+  }
+
+  async function decryptEntry(key) {
+    const record = await _loadBrowserDevice();
+    if (!record) {
+      alert('This browser has no valid device key.\nGo to Admin → Device Registration to register first.');
+      return;
+    }
+    const resp = await fetch(
+      '/api/admin/devices/' + encodeURIComponent(record.deviceId) + '/kv/' + encodeURIComponent(key)
+    );
+    if (!resp.ok) { alert('Failed to fetch encrypted payload: ' + resp.status); return; }
+    const payload = await resp.json();
+    try {
+      alert(await decryptDeviceKvPayload(payload, record.privateKey));
+    } catch (err) {
+      alert('Decryption failed: ' + err.message);
+    }
+  }
+
+  // ── Re-encrypt / manage device access modal ──────────────────────────────
+  let _reEncryptKey = null, _reEncryptScope = null, _reEncryptRecipientIds = [];
+
+  function deviceName(id, devList) {
+    return devList.find(d => d.id === id)?.name ?? id.slice(0, 8) + '…';
+  }
+
+  async function openReEncryptModal(key, scope, recipientDeviceIds) {
+    _reEncryptKey = key;
+    _reEncryptScope = scope || null;
+    _reEncryptRecipientIds = recipientDeviceIds;
+
+    document.getElementById('reencrypt-key-label').textContent = key;
+    const list = document.getElementById('reencrypt-device-list');
+    list.innerHTML = '<span style="color:#555;font-size:12px">Loading…</span>';
+    document.getElementById('reencrypt-modal').classList.remove('hidden');
+
+    const devices = await loadDevicesOnce();
+    if (!devices.length) {
+      list.innerHTML = '<span style="color:#f87171;font-size:12px">No devices registered.</span>';
+      return;
+    }
+    list.innerHTML = devices.map(d => {
+      const checked = recipientDeviceIds.includes(d.id) ? 'checked' : '';
+      return `<label class="label-check">
+        <input type="checkbox" value="${esc(d.id)}" ${checked}>
+        ${esc(d.name)} <span style="color:#555;font-size:10px">(${esc(d.key_type)})</span>
+      </label>`;
+    }).join('');
+  }
+
+  function closeReEncryptModal() {
+    document.getElementById('reencrypt-modal').classList.add('hidden');
+    _reEncryptKey = null; _reEncryptScope = null; _reEncryptRecipientIds = [];
+  }
+
+  async function confirmReEncrypt() {
+    const selectedIds = [...document.querySelectorAll('#reencrypt-device-list input:checked')].map(i => i.value);
+    if (!selectedIds.length) { alert('Select at least one device.'); return; }
+
+    const record = await _loadBrowserDevice();
+    if (!record) {
+      alert('Register this browser as a device first (Admin → Device Registration).');
+      return;
+    }
+    if (!_reEncryptRecipientIds.includes(record.deviceId)) {
+      alert('This browser has no copy of this entry.\nAnother registered device (Android or CLI) must manage access.');
+      return;
+    }
+
+    const resp = await fetch(
+      '/api/admin/devices/' + encodeURIComponent(record.deviceId) + '/kv/' + encodeURIComponent(_reEncryptKey)
+    );
+    if (!resp.ok) { alert('Failed to fetch payload: ' + resp.status); return; }
+    const payload = await resp.json();
+    let plaintext;
+    try {
+      plaintext = await decryptDeviceKvPayload(payload, record.privateKey);
+    } catch (err) {
+      alert('Decryption failed: ' + err.message);
+      return;
+    }
+
+    const allDevices = await loadDevicesOnce();
+    const selectedDevices = allDevices.filter(d => selectedIds.includes(d.id));
+    try {
+      await encryptValueToDevices(plaintext, _reEncryptKey, _reEncryptScope, selectedDevices);
+    } catch (err) {
+      alert('Re-encryption failed: ' + err.message);
+      return;
+    }
+
+    closeReEncryptModal();
+    invalidateDeviceCache();
+    htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
+  }
+
+  // Core: encrypt `value` to all `devices` under key `key` and POST to server
+  async function encryptValueToDevices(value, key, scope, devices) {
+    const encoder = new TextEncoder();
+
+    const dekKey = await crypto.subtle.generateKey({name: 'AES-GCM', length: 256}, true, ['encrypt']);
+    const rawDek = await crypto.subtle.exportKey('raw', dekKey);
+
+    const aadBytes  = encoder.encode('device-kv:' + key);
+    const bodyNonce = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt(
+      {name: 'AES-GCM', iv: bodyNonce, additionalData: aadBytes},
+      dekKey, encoder.encode(value)
+    );
+
+    const salt32  = new Uint8Array(32);
+    const hkdfInfo = encoder.encode('kv-device-wrap');
+    const recipients = [];
+
+    for (const device of devices) {
+      try {
+        let ephPubB64, dekNonceB64, encryptedDekB64;
+
+        if (device.key_type === 'x25519') {
+          const devicePub = await crypto.subtle.importKey('raw', b64Decode(device.public_key), {name: 'X25519'}, false, []);
+          const ephemeral = await crypto.subtle.generateKey({name: 'X25519'}, true, ['deriveBits']);
+          const sharedBits = await crypto.subtle.deriveBits({name: 'X25519', public: devicePub}, ephemeral.privateKey, 256);
+          ephPubB64 = b64Encode(await crypto.subtle.exportKey('raw', ephemeral.publicKey));
+          const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+          const wrapKey = await crypto.subtle.deriveKey(
+            {name: 'HKDF', hash: 'SHA-256', salt: salt32, info: hkdfInfo},
+            hkdfKey, {name: 'AES-GCM', length: 256}, false, ['encrypt']
+          );
+          const dekNonce = crypto.getRandomValues(new Uint8Array(12));
+          const encDek = await crypto.subtle.encrypt({name: 'AES-GCM', iv: dekNonce}, wrapKey, rawDek);
+          dekNonceB64 = b64Encode(dekNonce);
+          encryptedDekB64 = b64Encode(encDek);
+
+        } else if (device.key_type === 'p256') {
+          const devicePub = await crypto.subtle.importKey('spki', b64Decode(device.public_key), {name: 'ECDH', namedCurve: 'P-256'}, false, []);
+          const ephemeral = await crypto.subtle.generateKey({name: 'ECDH', namedCurve: 'P-256'}, true, ['deriveBits']);
+          const sharedBits = await crypto.subtle.deriveBits({name: 'ECDH', public: devicePub}, ephemeral.privateKey, 256);
+          ephPubB64 = b64Encode(await crypto.subtle.exportKey('raw', ephemeral.publicKey));
+          const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+          const wrapKey = await crypto.subtle.deriveKey(
+            {name: 'HKDF', hash: 'SHA-256', salt: salt32, info: hkdfInfo},
+            hkdfKey, {name: 'AES-GCM', length: 256}, false, ['encrypt']
+          );
+          const dekNonce = crypto.getRandomValues(new Uint8Array(12));
+          const encDek = await crypto.subtle.encrypt({name: 'AES-GCM', iv: dekNonce}, wrapKey, rawDek);
+          dekNonceB64 = b64Encode(dekNonce);
+          encryptedDekB64 = b64Encode(encDek);
+
+        } else {
+          console.warn('Skipping device with unknown key_type:', device.id, device.key_type);
+          continue;
+        }
+
+        recipients.push({ device_id: device.id, key_type: device.key_type, ephemeral_pub: ephPubB64, dek_nonce: dekNonceB64, encrypted_dek: encryptedDekB64 });
+      } catch (err) {
+        console.warn('Failed to encrypt for device', device.id, err);
+      }
+    }
+
+    if (!recipients.length) throw new Error('Failed to encrypt for any registered device.');
+
+    const resp = await fetch('/api/admin/kv/device', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ key, scope, nonce: b64Encode(bodyNonce), ciphertext: b64Encode(ciphertext), aad: b64Encode(aadBytes), recipients }),
+    });
+    if (!resp.ok) throw new Error('Server error: ' + resp.status);
+  }
+
+  async function encryptToDevices(form, key) {
+    const allDevices = await loadDevicesOnce();
+    const checkedIds = new Set(
+      [...document.querySelectorAll('#device-picker-checkboxes input:checked')].map(i => i.value)
+    );
+    const selectedDevices = allDevices.filter(d => checkedIds.has(d.id));
+    if (!selectedDevices.length) { alert('Select at least one device to encrypt for.'); return; }
+    try {
+      await encryptValueToDevices(form.value.value, key, form.scope.value.trim() || null, selectedDevices);
+    } catch (err) {
+      alert('Error saving device-encrypted entry: ' + err.message);
+      return;
+    }
+    invalidateDeviceCache();
+    form.reset();
+    ['open_access', 'ttl_sliding', 'one_time', 'approval_required', 'zero_trust', 'device_encrypted'].forEach(n => {
+      form.querySelector('[name=' + n + ']').disabled = false;
+    });
+    document.getElementById('device-picker-panel').classList.add('hidden');
+    loadScopes();
+    htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
   }
 
   /** Decode WebAuthn get options: convert base64url fields to ArrayBuffer */

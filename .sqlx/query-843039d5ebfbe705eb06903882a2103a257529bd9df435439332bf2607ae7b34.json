@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT k.key, k.scope, k.ttl_hours, k.ttl_sliding as \"ttl_sliding: bool\",\n                        k.expires_at, k.open_access as \"open_access: bool\", k.created_at,\n                        k.device_encrypted as \"device_encrypted: bool\",\n                        (SELECT json_group_array(dr.device_id)\n                         FROM device_kv_recipients dr\n                         WHERE dr.kv_key = k.key AND dr.owner_id = k.owner_id\n                        ) as \"recipient_device_ids_json: String\"\n                 FROM kv_entries k\n                 WHERE k.key LIKE ? AND k.owner_id = ?\n                   AND (k.expires_at IS NULL OR k.expires_at > datetime('now'))\n                 ORDER BY k.key",
+  "describe": {
+    "columns": [
+      {
+        "name": "key",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "scope",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "ttl_hours",
+        "ordinal": 2,
+        "type_info": "Float"
+      },
+      {
+        "name": "ttl_sliding: bool",
+        "ordinal": 3,
+        "type_info": "Int64"
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "open_access: bool",
+        "ordinal": 5,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_encrypted: bool",
+        "ordinal": 7,
+        "type_info": "Int64"
+      },
+      {
+        "name": "recipient_device_ids_json: String",
+        "ordinal": 8,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "843039d5ebfbe705eb06903882a2103a257529bd9df435439332bf2607ae7b34"
+}

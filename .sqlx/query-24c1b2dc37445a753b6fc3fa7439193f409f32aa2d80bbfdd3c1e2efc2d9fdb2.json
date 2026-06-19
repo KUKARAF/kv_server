@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO device_kv_bodies (kv_key, owner_id, nonce, ciphertext, aad)\n         VALUES (?, ?, ?, ?, ?)\n         ON CONFLICT(kv_key, owner_id) DO UPDATE SET\n             nonce      = excluded.nonce,\n             ciphertext = excluded.ciphertext,\n             aad        = excluded.aad,\n             created_at = datetime('now')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "24c1b2dc37445a753b6fc3fa7439193f409f32aa2d80bbfdd3c1e2efc2d9fdb2"
+}

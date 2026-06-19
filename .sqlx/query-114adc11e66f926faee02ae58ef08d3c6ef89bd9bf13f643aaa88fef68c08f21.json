@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO kv_entries (key, owner_id, value, scope, device_encrypted)\n         VALUES (?, ?, '', ?, 1)\n         ON CONFLICT(key, owner_id) DO UPDATE SET\n             device_encrypted = 1,\n             scope = excluded.scope",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "114adc11e66f926faee02ae58ef08d3c6ef89bd9bf13f643aaa88fef68c08f21"
+}

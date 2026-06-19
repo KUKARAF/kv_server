@@ -1,38 +1,38 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, name, created_at, last_seen_at FROM devices WHERE owner_id = ? ORDER BY created_at DESC",
+  "query": "SELECT key_type, ephemeral_pub, dek_nonce, encrypted_dek\n         FROM device_kv_recipients\n         WHERE device_id = ? AND kv_key = ? AND owner_id = ?",
   "describe": {
     "columns": [
       {
-        "name": "id",
+        "name": "key_type",
         "ordinal": 0,
         "type_info": "Text"
       },
       {
-        "name": "name",
+        "name": "ephemeral_pub",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "created_at",
+        "name": "dek_nonce",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "last_seen_at",
+        "name": "encrypted_dek",
         "ordinal": 3,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 3
     },
     "nullable": [
-      true,
       false,
       false,
-      true
+      false,
+      false
     ]
   },
-  "hash": "313522a3125a0706514e59401bd26b26b78da08b314ecced0e2a35ab97054b3a"
+  "hash": "7071c3088cb462fa3597d267450bbe30db125f0d26dd1071f9a20251efebd939"
 }

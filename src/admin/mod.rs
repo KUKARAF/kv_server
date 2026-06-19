@@ -37,6 +37,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/session/logout", post(handlers::logout))
         .route("/session/device-token", post(handlers::create_device_token))
         .route("/kv", get(handlers::list_kv_entries).put(handlers::admin_write_kv))
+        .route("/kv/device", post(crate::kv::handlers::write_device_kv))
         .route("/blocked-ips", get(handlers::list_blocked_ips))
         .route("/blocked-ips/:ip", delete(handlers::unblock_ip))
         .route("/rate-limits", get(handlers::list_rate_counters))
@@ -47,6 +48,5 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/faux-approvals/:id", delete(handlers::dismiss_faux_approval))
         .route("/kv/:key", patch(handlers::admin_patch_kv).delete(handlers::admin_delete_kv))
         .nest("/webauthn", webauthn::admin_router())
-        .nest("/device-auth", crate::device_auth::admin_router())
         .nest("/session-requests", crate::session_request::admin_router())
 }

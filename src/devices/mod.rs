@@ -13,4 +13,5 @@ pub fn admin_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(handlers::list))
         .route("/:id", delete(handlers::delete))
+        .route("/:device_id/kv/:kv_key", get(handlers::get_device_kv))
 }

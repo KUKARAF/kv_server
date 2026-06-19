@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM device_kv_recipients WHERE kv_key = ? AND owner_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3edd22f6c2fb36179491fdb194a96f47e5aacda77d5b2e1dac1660c860d849c0"
+}

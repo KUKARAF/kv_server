@@ -100,8 +100,8 @@
       try {
         const db     = await openDB();
         const record = await dbGet(db, 'device');
-        if (record?.deviceId) {
-          // Already registered — go straight to the dashboard.
+        if (record?.deviceId && record?.privateKey?.usages?.includes('deriveBits')) {
+          // Already registered with a valid ECDH key — go straight to the dashboard.
           window.location.replace('/admin/');
           return;
         }
@@ -126,12 +126,12 @@
       btn.textContent = 'Generating key…';
 
       try {
-        // Generate ECDSA P-256 key pair.
+        // Generate ECDH P-256 key pair for device encryption.
         // private key is non-extractable: key material never readable by JS.
         const { privateKey, publicKey } = await crypto.subtle.generateKey(
-          { name: 'ECDSA', namedCurve: 'P-256' },
+          { name: 'ECDH', namedCurve: 'P-256' },
           false,
-          ['sign', 'verify']
+          ['deriveBits']
         );
 
         // Export public key as SPKI and base64-encode it for transport.
@@ -143,7 +143,7 @@
         const resp = await fetch('/api/devices', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, public_key: publicKeyB64 }),
+          body: JSON.stringify({ name, public_key: publicKeyB64, key_type: 'p256' }),
         });
 
         if (!resp.ok) {

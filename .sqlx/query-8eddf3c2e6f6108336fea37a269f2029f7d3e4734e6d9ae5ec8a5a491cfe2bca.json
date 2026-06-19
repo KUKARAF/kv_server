@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext\n             FROM kv_entries\n             WHERE key = ? AND open_access = 1\n               AND (expires_at IS NULL OR expires_at > datetime('now'))\n             LIMIT 1",
+  "query": "SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext,\n                      device_encrypted as \"device_encrypted: bool\"\n               FROM kv_entries\n               WHERE key = ? AND owner_id = ?\n                 AND (expires_at IS NULL OR expires_at > datetime('now'))",
   "describe": {
     "columns": [
       {
@@ -27,18 +27,24 @@
         "name": "zt_ciphertext",
         "ordinal": 4,
         "type_info": "Text"
+      },
+      {
+        "name": "device_encrypted: bool",
+        "ordinal": 5,
+        "type_info": "Int64"
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       false,
       true,
       false,
       true,
-      true
+      true,
+      false
     ]
   },
-  "hash": "2cc64894e0bab3a8da4b8b98fd2dc1d04e86f074b370ad410057644e782f1efb"
+  "hash": "8eddf3c2e6f6108336fea37a269f2029f7d3e4734e6d9ae5ec8a5a491cfe2bca"
 }

@@ -130,6 +130,44 @@
     }
     loadNavUser();
 
+    // ── IndexedDB helpers (shared with device-registration.html) ─────────────
+    const _IDB_NAME  = 'kv_manager';
+    const _IDB_STORE = 'kv_device';
+
+    function _openAdminDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(_IDB_NAME, 1);
+        req.onupgradeneeded = e => e.target.result.createObjectStore(_IDB_STORE);
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror   = e => reject(e.target.error);
+      });
+    }
+
+    function _dbGet(db, key) {
+      return new Promise((resolve, reject) => {
+        const req = db.transaction(_IDB_STORE, 'readonly').objectStore(_IDB_STORE).get(key);
+        req.onsuccess = e => resolve(e.target.result);
+        req.onerror   = e => reject(e.target.error);
+      });
+    }
+
+    async function checkDeviceRegistration() {
+      try {
+        const db     = await _openAdminDB();
+        const record = await _dbGet(db, 'device');
+        const valid  = record?.deviceId && record?.privateKey?.usages?.includes('deriveBits');
+        if (!valid) {
+          showToast(
+            'This browser is not registered as a device. ' +
+            '<a href="/admin/device-registration.html" style="color:#fff;text-decoration:underline">Register now</a> ' +
+            'to decrypt device-encrypted secrets.',
+            { id: 'device-reg', type: 'info', persistent: true }
+          );
+        }
+      } catch { /* IndexedDB unavailable — skip silently */ }
+    }
+    checkDeviceRegistration();
+
     async function logout() {
       await fetch('/api/admin/session/logout', { method: 'POST' });
       window.location.href = '/auth/login';

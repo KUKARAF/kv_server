@@ -464,32 +464,76 @@ pub async fn list_kv_entries(
     let rows = match q.prefix {
         Some(prefix) => {
             let pattern = format!("{}%", prefix);
-            sqlx::query_as!(
-                crate::kv::model::KvMetaResponse,
-                r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
-                        expires_at, open_access as "open_access: bool", created_at
-                 FROM kv_entries
-                 WHERE key LIKE ? AND owner_id = ?
-                   AND (expires_at IS NULL OR expires_at > datetime('now'))
-                 ORDER BY key"#,
+            sqlx::query!(
+                r#"SELECT k.key, k.scope, k.ttl_hours, k.ttl_sliding as "ttl_sliding: bool",
+                        k.expires_at, k.open_access as "open_access: bool", k.created_at,
+                        k.device_encrypted as "device_encrypted: bool",
+                        (SELECT json_group_array(dr.device_id)
+                         FROM device_kv_recipients dr
+                         WHERE dr.kv_key = k.key AND dr.owner_id = k.owner_id
+                        ) as "recipient_device_ids_json: String"
+                 FROM kv_entries k
+                 WHERE k.key LIKE ? AND k.owner_id = ?
+                   AND (k.expires_at IS NULL OR k.expires_at > datetime('now'))
+                 ORDER BY k.key"#,
                 pattern, owner
             )
             .fetch_all(&state.pool)
             .await?
+            .into_iter()
+            .map(|r| crate::kv::model::KvMetaResponse {
+                key: r.key,
+                scope: r.scope,
+                ttl_hours: r.ttl_hours,
+                ttl_sliding: r.ttl_sliding,
+                expires_at: r.expires_at,
+                open_access: r.open_access,
+                created_at: r.created_at,
+                device_encrypted: Some(r.device_encrypted),
+                recipient_device_ids: if r.device_encrypted {
+                    r.recipient_device_ids_json.as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                } else {
+                    None
+                },
+            })
+            .collect()
         }
         None => {
-            sqlx::query_as!(
-                crate::kv::model::KvMetaResponse,
-                r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
-                        expires_at, open_access as "open_access: bool", created_at
-                 FROM kv_entries
-                 WHERE owner_id = ?
-                   AND (expires_at IS NULL OR expires_at > datetime('now'))
-                 ORDER BY key"#,
+            sqlx::query!(
+                r#"SELECT k.key, k.scope, k.ttl_hours, k.ttl_sliding as "ttl_sliding: bool",
+                        k.expires_at, k.open_access as "open_access: bool", k.created_at,
+                        k.device_encrypted as "device_encrypted: bool",
+                        (SELECT json_group_array(dr.device_id)
+                         FROM device_kv_recipients dr
+                         WHERE dr.kv_key = k.key AND dr.owner_id = k.owner_id
+                        ) as "recipient_device_ids_json: String"
+                 FROM kv_entries k
+                 WHERE k.owner_id = ?
+                   AND (k.expires_at IS NULL OR k.expires_at > datetime('now'))
+                 ORDER BY k.key"#,
                 owner
             )
             .fetch_all(&state.pool)
             .await?
+            .into_iter()
+            .map(|r| crate::kv::model::KvMetaResponse {
+                key: r.key,
+                scope: r.scope,
+                ttl_hours: r.ttl_hours,
+                ttl_sliding: r.ttl_sliding,
+                expires_at: r.expires_at,
+                open_access: r.open_access,
+                created_at: r.created_at,
+                device_encrypted: Some(r.device_encrypted),
+                recipient_device_ids: if r.device_encrypted {
+                    r.recipient_device_ids_json.as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                } else {
+                    None
+                },
+            })
+            .collect()
         }
     };
     Ok(Json(rows))

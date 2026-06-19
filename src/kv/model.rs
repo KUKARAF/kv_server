@@ -40,6 +40,10 @@ pub struct KvMetaResponse {
     pub expires_at: Option<String>,
     pub open_access: bool,
     pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_encrypted: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recipient_device_ids: Option<Vec<String>>,
 }
 
 pub fn compute_expires_at(ttl_hours: Option<f64>) -> Option<String> {
@@ -61,4 +65,25 @@ pub fn is_expired(expires_at: &Option<String>) -> bool {
                 .unwrap_or(false)
         }
     }
+}
+
+// ── Device-encrypted KV ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct DeviceKvRecipient {
+    pub device_id: String,
+    pub key_type: String,
+    pub ephemeral_pub: String,
+    pub dek_nonce: String,
+    pub encrypted_dek: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeviceKvWriteRequest {
+    pub key: String,
+    pub scope: Option<String>,
+    pub nonce: String,
+    pub ciphertext: String,
+    pub aad: String,
+    pub recipients: Vec<DeviceKvRecipient>,
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, label, status, requested_at, expires_at\n         FROM device_auth_requests WHERE id = ?",
+  "query": "SELECT id, name, key_type, public_key, created_at, last_seen_at FROM devices WHERE owner_id = ? ORDER BY created_at DESC",
   "describe": {
     "columns": [
       {
@@ -9,23 +9,28 @@
         "type_info": "Text"
       },
       {
-        "name": "label",
+        "name": "name",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "status",
+        "name": "key_type",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "requested_at",
+        "name": "public_key",
         "ordinal": 3,
         "type_info": "Text"
       },
       {
-        "name": "expires_at",
+        "name": "created_at",
         "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "last_seen_at",
+        "ordinal": 5,
         "type_info": "Text"
       }
     ],
@@ -33,12 +38,13 @@
       "Right": 1
     },
     "nullable": [
-      false,
       true,
       false,
       false,
-      false
+      false,
+      false,
+      true
     ]
   },
-  "hash": "2c75a1a0e0add39756acd832fb8f5019d3b484e1d0bcac8166b44384308c9fbf"
+  "hash": "1774ba5b43eb8d6ca11420eedcbb0ce4e3a867e32a80d2c543126a39620a9fcd"
 }
