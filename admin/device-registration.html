@@ -147,6 +147,9 @@
         });
 
         if (!resp.ok) {
+          if (resp.status === 409) {
+            throw new Error(`A device named "${name}" is already registered. Choose a different name or delete the existing device from the admin panel first.`);
+          }
           throw new Error('Server returned ' + resp.status);
         }
 
