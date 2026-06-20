@@ -21,6 +21,18 @@
     .device-box h1 { font-size: 1.3rem; text-align: center; margin-bottom: 0.5rem; }
     .device-meta { color: #888; font-size: 12px; text-align: center; margin-bottom: 1.5rem; }
     .countdown { color: #f59e0b; font-weight: 600; }
+    .duration-row { margin-top: 1.25rem; }
+    .duration-row label { display: block; color: #888; font-size: 12px; margin-bottom: 0.4rem; }
+    .duration-row select {
+      width: 100%;
+      background: #0d0d0d;
+      border: 1px solid #333;
+      color: #e0e0e0;
+      padding: 0.4rem 0.6rem;
+      border-radius: 5px;
+      font-size: 13px;
+    }
+    .duration-hint { color: #555; font-size: 11px; margin-top: 0.3rem; }
     .action-row { display: flex; gap: 0.75rem; margin-top: 1.5rem; justify-content: flex-end; }
     .btn-danger { background: #dc2626; color: #fff; padding: 0.4rem 1rem; border-radius: 5px; border: none; cursor: pointer; font-size: 13px; }
     .btn-danger:hover { background: #b91c1c; }
@@ -54,9 +66,19 @@
         Expires in <span id="countdown" class="countdown"></span>
       </p>
 
-      <p style="color:#888;font-size:13px;line-height:1.5;">
-        Approving will create a 15-hour session token for this client.
-      </p>
+      <div class="duration-row">
+        <label for="duration">Session duration</label>
+        <select id="duration">
+          <option value="8">8 hours</option>
+          <option value="24">24 hours</option>
+          <option value="168">7 days</option>
+          <option value="720">30 days</option>
+          <option value="2160">90 days</option>
+          <option value="4320">180 days</option>
+          <option value="8760">365 days</option>
+        </select>
+        <p id="duration-hint" class="duration-hint"></p>
+      </div>
 
       <div class="action-row">
         <button class="btn-danger" onclick="rejectRequest()">Reject</button>
@@ -84,6 +106,13 @@
       loadRequest();
     }
 
+    const DURATION_OPTIONS = [8, 24, 168, 720, 2160, 4320, 8760];
+
+    function closestDuration(hours) {
+      if (!hours) return 24;
+      return DURATION_OPTIONS.reduce((a, b) => Math.abs(b - hours) < Math.abs(a - hours) ? b : a);
+    }
+
     async function loadRequest() {
       const resp = await fetch('/api/admin/session-requests/' + requestId);
       if (resp.status === 404) { showStatus('❌', 'Request not found.'); return; }
@@ -109,6 +138,14 @@
       document.getElementById('requested-at').textContent = data.requested_at;
       startCountdown(data.expires_at);
 
+      const sel = document.getElementById('duration');
+      const requested = data.requested_duration_hours;
+      sel.value = String(closestDuration(requested));
+      if (requested) {
+        document.getElementById('duration-hint').textContent =
+          'Client requested ' + formatHours(requested);
+      }
+
       document.getElementById('loading').classList.add('hidden');
       document.getElementById('approve-view').classList.remove('hidden');
 
@@ -118,6 +155,13 @@
       appLink.className = 'open-in-app';
       appLink.textContent = 'Open in KV Approver app →';
       document.getElementById('approve-view').appendChild(appLink);
+    }
+
+    function formatHours(h) {
+      if (h >= 8760 && h % 8760 === 0) return (h / 8760) + ' year' + (h / 8760 !== 1 ? 's' : '');
+      if (h >= 720 && h % 720 === 0) return (h / 720) + ' month' + (h / 720 !== 1 ? 's' : '');
+      if (h >= 24 && h % 24 === 0) return (h / 24) + ' day' + (h / 24 !== 1 ? 's' : '');
+      return h + ' hour' + (h !== 1 ? 's' : '');
     }
 
     function showStatus(icon, text) {
@@ -143,11 +187,14 @@
 
     // ── Approve / Reject ──────────────────────────────────────────────────────
     async function approveRequest() {
+      const hours = parseInt(document.getElementById('duration').value, 10);
       const resp = await fetch('/api/admin/session-requests/' + requestId + '/approve', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved_duration_hours: hours }),
       });
       if (resp.ok) {
-        showStatus('✅', 'Approved! The session token has been sent to the client.');
+        showStatus('✅', 'Approved! Session token valid for ' + formatHours(hours) + '.');
       } else {
         showStatus('❌', 'Approval failed (' + resp.status + ').');
       }
@@ -160,10 +207,6 @@
       } else {
         showStatus('❌', 'Rejection failed (' + resp.status + ').');
       }
-    }
-
-    function esc(s) {
-      return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
   </script>
 </body>

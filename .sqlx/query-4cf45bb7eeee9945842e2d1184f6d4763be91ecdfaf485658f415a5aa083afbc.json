@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, label, status, requested_at, expires_at\n         FROM session_requests WHERE id = ?",
+  "query": "SELECT id, label, status, requested_at, expires_at, requested_duration_hours\n         FROM session_requests WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -27,6 +27,11 @@
         "name": "expires_at",
         "ordinal": 4,
         "type_info": "Text"
+      },
+      {
+        "name": "requested_duration_hours",
+        "ordinal": 5,
+        "type_info": "Int64"
       }
     ],
     "parameters": {
@@ -37,8 +42,9 @@
       true,
       false,
       false,
-      false
+      false,
+      true
     ]
   },
-  "hash": "1fcbbe79026d949630299478d33f57fa20b6e303f0422a5bf3bc43f930cb879d"
+  "hash": "4cf45bb7eeee9945842e2d1184f6d4763be91ecdfaf485658f415a5aa083afbc"
 }

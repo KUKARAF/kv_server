@@ -24,10 +24,11 @@ pub async fn create_request(
         .unwrap_or_default();
 
     sqlx::query!(
-        "INSERT INTO session_requests (id, label, expires_at) VALUES (?, ?, ?)",
+        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours) VALUES (?, ?, ?, ?)",
         id,
         body.label,
-        expires_at
+        expires_at,
+        body.requested_duration_hours
     )
     .execute(&state.pool)
     .await?;
@@ -89,7 +90,7 @@ pub async fn list_pending(
 ) -> Result<Json<Vec<SessionRequestRow>>, AppError> {
     let rows = sqlx::query_as!(
         SessionRequestRow,
-        "SELECT id, label, status, requested_at, expires_at
+        "SELECT id, label, status, requested_at, expires_at, requested_duration_hours
          FROM session_requests
          WHERE status = 'pending' AND expires_at > datetime('now')
          ORDER BY requested_at DESC"
@@ -107,7 +108,7 @@ pub async fn get_request(
 ) -> Result<Json<SessionRequestRow>, AppError> {
     let row = sqlx::query_as!(
         SessionRequestRow,
-        "SELECT id, label, status, requested_at, expires_at
+        "SELECT id, label, status, requested_at, expires_at, requested_duration_hours
          FROM session_requests WHERE id = ?",
         id
     )
@@ -122,10 +123,12 @@ pub async fn approve(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
     Path(id): Path<String>,
+    Json(body): Json<ApproveSessionRequestBody>,
 ) -> Result<StatusCode, AppError> {
     let owner = &auth.0.oidc_subject;
     let (plaintext, key_hash) = generate_api_key();
     let key_id = Uuid::new_v4().to_string();
+    let duration_hours = body.approved_duration_hours.unwrap_or(24);
 
     let mut tx = state.pool.begin().await?;
 
@@ -141,11 +144,13 @@ pub async fn approve(
         return Err(AppError::NotFound);
     }
 
+    let expires_offset = format!("+{} hours", duration_hours);
     sqlx::query!(
         "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
-         VALUES (?, ?, 'session', 'session', 'active', datetime('now', '+15 hours'), ?)",
+         VALUES (?, ?, 'session', 'session', 'active', datetime('now', ?), ?)",
         key_id,
         key_hash,
+        expires_offset,
         owner
     )
     .execute(&mut *tx)

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "a1bfca3bca93aae489f292275b2c5b95879a371a854c03bdab406034d24013e0"
+}

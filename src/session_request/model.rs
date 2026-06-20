@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 pub struct CreateSessionRequestBody {
     pub label: Option<String>,
+    pub requested_duration_hours: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -25,4 +26,10 @@ pub struct SessionRequestRow {
     pub status: String,
     pub requested_at: String,
     pub expires_at: String,
+    pub requested_duration_hours: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApproveSessionRequestBody {
+    pub approved_duration_hours: Option<i64>,
 }
