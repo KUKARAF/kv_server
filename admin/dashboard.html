@@ -230,45 +230,9 @@
     pollApprovals();
     setInterval(pollApprovals, 30000);
 
-    // ── Device auth poller ──────────────────────────────────────────────────
-    let knownDeviceRequests = new Set();
-
-    async function pollDeviceAuth() {
-      let data;
-      try {
-        const resp = await fetch('/api/admin/device-auth');
-        if (!resp.ok) return;
-        data = await resp.json();
-      } catch { return; }
-
-      const currentIds = new Set(data.map(r => r.id));
-
-      for (const r of data) {
-        if (!knownDeviceRequests.has(r.id)) {
-          const name = r.label ? `<strong>${esc(r.label)}</strong>` : 'Unknown device';
-          showToast(
-            `💻 Device auth: ${name} — <a href="/admin/device-auth.html?id=${esc(r.id)}" style="color:#93c5fd">Review</a>`,
-            { id: 'device-auth-' + r.id, persistent: true, type: 'warning' }
-          );
-        }
-      }
-
-      for (const id of knownDeviceRequests) {
-        if (!currentIds.has(id) && activeToasts.has('device-auth-' + id)) {
-          removeToast(activeToasts.get('device-auth-' + id), 'device-auth-' + id);
-        }
-      }
-
-      knownDeviceRequests = currentIds;
-      document.getElementById('tab-devices').classList.toggle('tab-pulse', data.length > 0);
-    }
-
     function esc(s) {
       return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     }
-
-    pollDeviceAuth();
-    setInterval(pollDeviceAuth, 30000);
 
     // ── Session request poller ───────────────────────────────────────────────
     let knownSessionRequests = new Set();
