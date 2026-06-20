@@ -1,9 +1,23 @@
 <div id="devices-root">
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
     <h2 style="font-size:1rem;font-weight:600;margin:0;">Registered Devices</h2>
-    <button class="btn-secondary" style="font-size:0.8em;" onclick="loadDevices()">Refresh</button>
+    <div style="display:flex;gap:0.5rem;">
+      <button class="btn-secondary" style="font-size:0.8em;" onclick="addPhone()">Add phone</button>
+      <button class="btn-secondary" style="font-size:0.8em;" onclick="loadDevices()">Refresh</button>
+    </div>
   </div>
   <div id="devices-table-wrap"></div>
+
+  <div id="phone-qr-reveal" class="share-reveal hidden" style="margin-top:1rem;">
+    <div class="share-reveal-header">
+      <span>📱 Scan with KV Approver app</span>
+      <button type="button" class="btn-icon" onclick="closePhoneQr()">✕</button>
+    </div>
+    <p class="share-reveal-warn">Valid for <strong>180 days</strong>. Scan once — navigating away loses the code.</p>
+    <div style="display:flex;justify-content:center;padding:1rem;">
+      <div id="phone-qr-canvas" style="background:#fff;padding:12px;display:inline-block;"></div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -40,7 +54,7 @@
         + '<td style="padding:8px;">' + esc(d.name) + '</td>'
         + '<td style="padding:8px;color:var(--muted);font-size:12px;">' + esc(d.created_at) + '</td>'
         + '<td style="padding:8px;text-align:right;">'
-        + '<button class="btn-secondary" style="font-size:0.8em;color:var(--danger);" onclick="deleteDevice(' + JSON.stringify(d.id) + ', this)">Delete</button>'
+        + '<button class="btn-secondary" style="font-size:0.8em;color:var(--danger);" data-id="' + esc(d.id) + '" onclick="deleteDevice(this.dataset.id, this)">Delete</button>'
         + '</td>'
         + '</tr>';
     }
@@ -59,6 +73,20 @@
       showToast('Failed to remove device (' + resp.status + ').', { type: 'error' });
       btn.disabled = false;
     }
+  }
+
+  async function addPhone() {
+    const resp = await fetch('/api/admin/session/device-token', { method: 'POST' });
+    if (!resp.ok) { showToast('Failed to generate token: ' + resp.status, { type: 'error' }); return; }
+    const token = await resp.json();
+    const container = document.getElementById('phone-qr-canvas');
+    container.innerHTML = '';
+    new QRCode(container, { text: token, width: 256, height: 256, correctLevel: QRCode.CorrectLevel.M });
+    document.getElementById('phone-qr-reveal').classList.remove('hidden');
+  }
+
+  function closePhoneQr() {
+    document.getElementById('phone-qr-reveal').classList.add('hidden');
   }
 
   loadDevices();
