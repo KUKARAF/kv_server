@@ -36,6 +36,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/session/token", get(handlers::get_session_token))
         .route("/session/logout", post(handlers::logout))
         .route("/session/device-token", post(handlers::create_device_token))
+        .route("/session/cli-token", post(handlers::create_cli_token))
         .route("/kv", get(handlers::list_kv_entries).put(handlers::admin_write_kv))
         .route("/kv/device", post(crate::kv::handlers::write_device_kv))
         .route("/blocked-ips", get(handlers::list_blocked_ips))

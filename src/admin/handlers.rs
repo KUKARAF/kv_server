@@ -308,6 +308,31 @@ pub async fn get_session_token(
     Ok(Json(token))
 }
 
+/// POST /api/admin/session/cli-token — creates a short-lived (1–7 day) token for CLI use.
+pub async fn create_cli_token(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<String>, AppError> {
+    let days = body["days"].as_i64().unwrap_or(1).clamp(1, 7);
+    let owner = &auth.0.oidc_subject;
+    let (plaintext, key_hash) = generate_api_key();
+    let id = Uuid::new_v4().to_string();
+    let expires_at = (chrono::Utc::now() + chrono::Duration::days(days))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+
+    sqlx::query!(
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
+         VALUES (?, ?, 'kv-cli', 'approval', 'active', ?, ?)",
+        id, key_hash, expires_at, owner
+    )
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Json(plaintext))
+}
+
 /// POST /api/admin/session/device-token — creates a 180-day api_key for the KV Approver app.
 pub async fn create_device_token(
     State(state): State<Arc<AppState>>,

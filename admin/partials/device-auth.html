@@ -3,10 +3,31 @@
     <h2 style="font-size:1rem;font-weight:600;margin:0;">Registered Devices</h2>
     <div style="display:flex;gap:0.5rem;">
       <button class="btn-secondary" style="font-size:0.8em;" onclick="addPhone()">Add phone</button>
+      <button class="btn-secondary" style="font-size:0.8em;" onclick="toggleCliPanel()">Add CLI</button>
       <button class="btn-secondary" style="font-size:0.8em;" onclick="loadDevices()">Refresh</button>
     </div>
   </div>
   <div id="devices-table-wrap"></div>
+
+  <div id="cli-token-reveal" class="share-reveal hidden" style="margin-top:1rem;">
+    <div class="share-reveal-header">
+      <span>⌨️ CLI token</span>
+      <button type="button" class="btn-icon" onclick="closeCliPanel()">✕</button>
+    </div>
+    <div style="padding:1rem 1.25rem;">
+      <label style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;font-size:13px;color:var(--muted);">
+        Valid for <strong id="cli-days-label" style="color:var(--fg);min-width:3ch;text-align:right;">1</strong> day(s)
+        <input id="cli-days-slider" type="range" min="1" max="7" value="1"
+               oninput="document.getElementById('cli-days-label').textContent=this.value"
+               style="flex:1;accent-color:var(--accent);">
+      </label>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <button class="btn-secondary" style="font-size:0.85em;" onclick="generateCliToken()">Generate</button>
+        <code id="cli-token-value" style="flex:1;word-break:break-all;font-size:12px;color:var(--accent);display:none;"></code>
+        <button id="cli-copy-btn" class="btn-secondary" style="font-size:0.85em;display:none;" onclick="copyCliToken()">Copy</button>
+      </div>
+    </div>
+  </div>
 
   <div id="phone-qr-reveal" class="share-reveal hidden" style="margin-top:1rem;">
     <div class="share-reveal-header">
@@ -73,6 +94,41 @@
       showToast('Failed to remove device (' + resp.status + ').', { type: 'error' });
       btn.disabled = false;
     }
+  }
+
+  function toggleCliPanel() {
+    const el = document.getElementById('cli-token-reveal');
+    el.classList.toggle('hidden');
+    if (!el.classList.contains('hidden')) {
+      document.getElementById('cli-token-value').style.display = 'none';
+      document.getElementById('cli-copy-btn').style.display = 'none';
+      document.getElementById('cli-days-slider').value = 1;
+      document.getElementById('cli-days-label').textContent = '1';
+    }
+  }
+
+  function closeCliPanel() {
+    document.getElementById('cli-token-reveal').classList.add('hidden');
+  }
+
+  async function generateCliToken() {
+    const days = parseInt(document.getElementById('cli-days-slider').value, 10);
+    const resp = await fetch('/api/admin/session/cli-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days }),
+    });
+    if (!resp.ok) { showToast('Failed to generate token: ' + resp.status, { type: 'error' }); return; }
+    const token = await resp.json();
+    const el = document.getElementById('cli-token-value');
+    el.textContent = token;
+    el.style.display = '';
+    document.getElementById('cli-copy-btn').style.display = '';
+  }
+
+  function copyCliToken() {
+    navigator.clipboard.writeText(document.getElementById('cli-token-value').textContent);
+    showToast('Token copied', { type: 'success' });
   }
 
   async function addPhone() {
