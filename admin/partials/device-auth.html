@@ -4,6 +4,7 @@
     <div style="display:flex;gap:0.5rem;">
       <button class="btn-secondary" style="font-size:0.8em;" onclick="addPhone()">Add phone</button>
       <button class="btn-secondary" style="font-size:0.8em;" onclick="toggleCliPanel()">Add CLI</button>
+      <button class="btn-secondary" style="font-size:0.8em;" onclick="addWeb()">Add web</button>
       <button class="btn-secondary" style="font-size:0.8em;" onclick="loadDevices()">Refresh</button>
     </div>
   </div>
@@ -129,6 +130,10 @@
   function copyCliToken() {
     navigator.clipboard.writeText(document.getElementById('cli-token-value').textContent);
     showToast('Token copied', { type: 'success' });
+  }
+
+  function addWeb() {
+    window.location.href = '/admin/device-registration.html';
   }
 
   async function addPhone() {
