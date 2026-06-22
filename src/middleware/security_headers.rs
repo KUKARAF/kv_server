@@ -16,7 +16,7 @@ pub async fn layer(request: Request<Body>, next: Next) -> Response {
     );
     headers.insert(
         "content-security-policy",
-        "default-src 'self'; script-src 'self' https://unpkg.com https://analytics.osmosis.page 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://static.layer55.eu; connect-src 'self' https://analytics.osmosis.page; frame-ancestors 'none'"
+        "default-src 'self'; script-src 'self' https://unpkg.com https://analytics.osmosis.page 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://static.layer55.eu https://static.osmosis.page; connect-src 'self' https://analytics.osmosis.page; frame-ancestors 'none'"
             .parse()
             .unwrap(),
     );

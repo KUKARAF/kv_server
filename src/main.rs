@@ -94,6 +94,7 @@ async fn main() -> Result<()> {
             "/api/collect/:id/submit",
             post(admin::handlers::submit_secret_request),
         )
+        .route("/favicon.ico", get(serve_favicon))
         .route("/admin/", get(serve_dashboard))
         .route("/admin/*path", get(serve_admin_static))
         .route("/share", get(serve_share))
@@ -148,6 +149,14 @@ async fn healthz(
 
 async fn version() -> &'static str {
     env!("APP_VERSION")
+}
+
+async fn serve_favicon() -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::MOVED_PERMANENTLY)
+        .header("location", "https://static.osmosis.page/kv/kv_logo.svg")
+        .body(Body::empty())
+        .unwrap()
 }
 
 async fn serve_index() -> Response<Body> {
