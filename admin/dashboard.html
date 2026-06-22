@@ -151,6 +151,80 @@
       });
     }
 
+    async function _dbPut(db, key, value) {
+      return new Promise((resolve, reject) => {
+        const req = db.transaction(_IDB_STORE, 'readwrite').objectStore(_IDB_STORE).put(value, key);
+        req.onsuccess = () => resolve();
+        req.onerror   = e => reject(e.target.error);
+      });
+    }
+
+    async function _dbClear(db) {
+      return new Promise((resolve, reject) => {
+        const req = db.transaction(_IDB_STORE, 'readwrite').objectStore(_IDB_STORE).clear();
+        req.onsuccess = () => resolve();
+        req.onerror   = e => reject(e.target.error);
+      });
+    }
+
+    function _showStaleDeviceModal(db, record) {
+      const overlay = document.createElement('div');
+      overlay.id = 'stale-device-overlay';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+      overlay.innerHTML = `
+        <div style="background:#1a1a2e;border:2px solid #ff6b35;padding:2rem;max-width:480px;width:90%;font-family:var(--font-mono,monospace)">
+          <h2 style="color:#ff6b35;margin:0 0 1rem;font-size:1rem">⚠ Stale Device Registration</h2>
+          <p style="color:#ccc;font-size:.85rem;margin:0 0 1.5rem">
+            This browser has a saved device key, but that device is no longer registered on the server
+            (it may have been deleted or registered from another browser).
+          </p>
+          <p style="color:#ccc;font-size:.85rem;margin:0 0 1.5rem">Choose how to proceed:</p>
+          <div style="display:flex;flex-direction:column;gap:.75rem">
+            <div style="display:flex;flex-direction:column;gap:.4rem">
+              <label style="color:#aaa;font-size:.75rem">Device name (for re-enroll)</label>
+              <input id="stale-device-name" type="text" placeholder="e.g. Rafał's browser"
+                style="padding:.4rem .6rem;background:#0a0a1a;color:#fff;border:1px solid #4a9eff;font-size:.8rem;width:100%;box-sizing:border-box">
+            </div>
+            <button id="stale-reenroll" style="padding:.6rem 1rem;background:#0f3460;color:#fff;border:1px solid #4a9eff;cursor:pointer;font-size:.8rem">
+              Re-enroll existing key — keep this browser's private key, re-register it on the server
+            </button>
+            <button id="stale-reregister" style="padding:.6rem 1rem;background:#2d1b1b;color:#fff;border:1px solid #ff6b35;cursor:pointer;font-size:.8rem">
+              Delete &amp; re-register — generate a fresh key pair
+            </button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      document.getElementById('stale-reregister').onclick = async () => {
+        await _dbClear(db);
+        window.location.href = '/admin/device-registration.html';
+      };
+
+      document.getElementById('stale-reenroll').onclick = async () => {
+        try {
+          const spki = await crypto.subtle.exportKey('spki', record.publicKey);
+          const b64  = btoa(String.fromCharCode(...new Uint8Array(spki)));
+          const name = document.getElementById('stale-device-name').value.trim() || 'browser';
+          const resp = await fetch('/api/devices', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, public_key: b64, key_type: 'p256' }),
+          });
+          if (!resp.ok) {
+            const err = await resp.text();
+            showToast(`Re-enroll failed: ${err}`, { type: 'error' });
+            return;
+          }
+          const data = await resp.json();
+          await _dbPut(db, 'device', { ...record, deviceId: data.id });
+          overlay.remove();
+          showToast('Re-enrolled successfully', { type: 'success' });
+        } catch (e) {
+          showToast(`Re-enroll error: ${e.message}`, { type: 'error' });
+        }
+      };
+    }
+
     async function checkDeviceRegistration() {
       try {
         const db     = await _openAdminDB();
@@ -163,6 +237,15 @@
             'to decrypt device-encrypted secrets.',
             { id: 'device-reg', type: 'info', persistent: true }
           );
+          return;
+        }
+        // Check if the stored deviceId still exists on the server
+        const devResp = await fetch('/api/admin/devices');
+        if (!devResp.ok) return; // can't verify — skip silently
+        const devices = await devResp.json();
+        const found = Array.isArray(devices) && devices.some(d => d.id === record.deviceId);
+        if (!found) {
+          _showStaleDeviceModal(db, record);
         }
       } catch { /* IndexedDB unavailable — skip silently */ }
     }
