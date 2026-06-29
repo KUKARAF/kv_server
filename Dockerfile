@@ -14,6 +14,11 @@ ENV OPENSSL_STATIC=1
 RUN sh .tools/get_emojis.sh admin/emoji.json
 RUN cargo build --release
 
+# ── test stage ────────────────────────────────────────────────────────────────
+# docker build --target test .   → runs the full test suite; non-zero exit = failure
+FROM builder AS test
+RUN cargo test --bin kv_manager 2>&1
+
 # ── production image ──────────────────────────────────────────────────────────
 FROM alpine:3.21 AS prod
 RUN apk add --no-cache sqlite-libs ca-certificates

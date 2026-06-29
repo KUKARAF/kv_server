@@ -9,6 +9,7 @@ mod keys;
 mod kv;
 mod middleware;
 mod notify;
+mod shares;
 mod state;
 mod tasks;
 mod webauthn;
@@ -23,13 +24,17 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use include_dir::{include_dir, Dir};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+#[cfg(not(test))]
+use include_dir::{include_dir, Dir};
+
+#[cfg(not(test))]
 static ADMIN_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/admin");
 
+#[cfg(not(test))]
 #[tokio::main]
 async fn main() -> Result<()> {
     let use_json = std::env::var("LOG_FORMAT").as_deref() == Ok("json");
@@ -88,6 +93,8 @@ async fn main() -> Result<()> {
         .nest("/api/devices", devices::router())
         .nest("/api/admin/devices", devices::admin_router())
         .nest("/api/session-request", session_request::public_router())
+        .nest("/api/admin/shares", shares::admin_router())
+        .nest("/api/share", shares::public_router())
         .nest("/api/admin", admin::router())
         .route("/api/collect/:id", get(admin::handlers::get_secret_request_public))
         .route(
@@ -151,6 +158,7 @@ async fn version() -> &'static str {
     env!("APP_VERSION")
 }
 
+#[cfg(not(test))]
 async fn serve_favicon() -> Response<Body> {
     Response::builder()
         .status(StatusCode::MOVED_PERMANENTLY)
@@ -159,22 +167,27 @@ async fn serve_favicon() -> Response<Body> {
         .unwrap()
 }
 
+#[cfg(not(test))]
 async fn serve_index() -> Response<Body> {
     serve_file("index.html", "text/html")
 }
 
+#[cfg(not(test))]
 async fn serve_share() -> Response<Body> {
     serve_file("share.html", "text/html")
 }
 
+#[cfg(not(test))]
 async fn serve_collect() -> Response<Body> {
     serve_file("collect.html", "text/html")
 }
 
+#[cfg(not(test))]
 async fn serve_dashboard() -> Response<Body> {
     serve_file("dashboard.html", "text/html")
 }
 
+#[cfg(not(test))]
 async fn serve_admin_static(
     axum::extract::Path(path): axum::extract::Path<String>,
 ) -> Response<Body> {
@@ -188,6 +201,7 @@ async fn serve_admin_static(
     serve_file(&path, mime)
 }
 
+#[cfg(not(test))]
 fn serve_file(path: &str, content_type: &str) -> Response<Body> {
     match ADMIN_DIR.get_file(path) {
         Some(file) => Response::builder()

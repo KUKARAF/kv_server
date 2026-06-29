@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT value, device_encrypted as \"device_encrypted: bool\", zt_ciphertext\n           FROM kv_entries\n           WHERE key = ? AND owner_id = ?\n             AND (expires_at IS NULL OR expires_at > datetime('now'))",
+  "describe": {
+    "columns": [
+      {
+        "name": "value",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_encrypted: bool",
+        "ordinal": 1,
+        "type_info": "Int64"
+      },
+      {
+        "name": "zt_ciphertext",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "24e533c3d50f8e20fd16ba23baec50bd41d5b7d40520f156ca0ce0f29b12e082"
+}

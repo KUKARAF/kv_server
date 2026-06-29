@@ -43,12 +43,20 @@ async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
     .await?
     .rows_affected();
 
-    if kv + approvals + device_auth + session_requests > 0 {
+    let shares = sqlx::query!(
+        "DELETE FROM one_time_shares WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')"
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    if kv + approvals + device_auth + session_requests + shares > 0 {
         tracing::info!(
             kv_deleted = kv,
             approvals_expired = approvals,
             device_auth_expired = device_auth,
             session_requests_expired = session_requests,
+            shares_deleted = shares,
             "TTL cleanup complete"
         );
     }

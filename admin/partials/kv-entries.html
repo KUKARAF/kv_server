@@ -344,27 +344,7 @@
     if (!resp.ok) { alert('Error saving entry: ' + resp.status); return false; }
 
     if (oneTime) {
-      const keyResp = await fetch('/api/admin/keys', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          label: 'one-time:' + key,
-          key_type: 'one_time',
-          expires_at: null,
-          scopes: [{ key_pattern: key, ops: 'read' }],
-        }),
-      });
-      if (!keyResp.ok) { alert('Entry saved but failed to create share key: ' + keyResp.status); }
-      else {
-        const { key: token } = await keyResp.json();
-        const shareUrl = location.origin + '/share?key=' + encodeURIComponent(key) + '&token=' + encodeURIComponent(token);
-        document.getElementById('share-reveal-title').textContent = '🔐 One-time share link generated';
-        document.getElementById('share-reveal-warn').style.display = '';
-        document.getElementById('share-reveal-emoji').style.display = 'none';
-        document.getElementById('share-url').textContent = shareUrl;
-        document.getElementById('share-open').href = shareUrl;
-        document.getElementById('share-reveal').classList.remove('hidden');
-      }
+      await createAndShowShare(key, form.value.value);
     } else if (approvalRequired) {
       const keyResp = await fetch('/api/admin/keys', {
         method: 'POST',
@@ -373,7 +353,7 @@
           label: 'approval:' + key,
           key_type: 'approval_required',
           expires_at: null,
-          scopes: [{ key_pattern: key, ops: 'read' }],
+          scopes: [{ key_pattern: body.scope || '*', ops: 'read' }],
         }),
       });
       if (!keyResp.ok) { alert('Entry saved but failed to create approval key: ' + keyResp.status); }
@@ -489,6 +469,8 @@
           ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="decryptEntry('${esc(e.key)}')">Decrypt</button>`
           : ''}${e.device_encrypted
           ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="openReEncryptModal('${esc(e.key)}','${esc(e.scope ?? '')}',JSON.parse(this.dataset.ids))" data-ids="${recipJson}">Devices</button>`
+          : ''}${!e.device_encrypted
+          ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="shareEntry('${esc(e.key)}')">Share</button>`
           : ''}<button class="btn-icon" onclick="deleteEntry('${esc(e.key)}')" title="Delete">🗑️</button>`;
         return `
         <tr>
@@ -503,6 +485,48 @@
         </tr>`;
       }).join('')}
       </tbody></table>`;
+  }
+
+  async function createAndShowShare(kv_key, plaintext) {
+    const cryptoKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt']);
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv: nonce },
+      cryptoKey,
+      new TextEncoder().encode(plaintext)
+    );
+    const keyB64 = b64uEncode(new Uint8Array(await crypto.subtle.exportKey('raw', cryptoKey)));
+
+    const resp = await fetch('/api/admin/shares', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        kv_key,
+        ciphertext: b64uEncode(new Uint8Array(ciphertext)),
+        nonce: b64uEncode(nonce),
+        expires_in_hours: 48,
+      }),
+    });
+    if (!resp.ok) { alert('Failed to create share: ' + resp.status); return; }
+    const { id } = await resp.json();
+
+    const shareUrl = `${location.origin}/share?id=${encodeURIComponent(id)}#key=${keyB64}`;
+    document.getElementById('share-reveal-title').textContent = '🔐 One-time share link generated';
+    document.getElementById('share-reveal-warn').style.display = '';
+    document.getElementById('share-reveal-emoji').style.display = 'none';
+    document.getElementById('share-url').textContent = shareUrl;
+    document.getElementById('share-open').href = shareUrl;
+    document.getElementById('share-reveal').classList.remove('hidden');
+  }
+
+  async function shareEntry(key) {
+    const resp = await fetch('/api/admin/kv/' + encodeURIComponent(key) + '/value');
+    if (!resp.ok) {
+      alert('Cannot share this entry (status ' + resp.status + '). Device-encrypted and zero-trust entries must use their own flows.');
+      return;
+    }
+    const plaintext = await resp.text();
+    await createAndShowShare(key, plaintext);
   }
 
   function editScope(cell) {

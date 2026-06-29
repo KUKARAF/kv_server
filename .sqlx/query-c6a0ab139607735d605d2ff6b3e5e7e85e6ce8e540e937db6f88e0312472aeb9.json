@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM one_time_shares WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "c6a0ab139607735d605d2ff6b3e5e7e85e6ce8e540e937db6f88e0312472aeb9"
+}

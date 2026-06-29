@@ -63,18 +63,21 @@
     <p id="error-msg" class="hidden share-error"></p>
   </div>
   <script>
-    const params = new URLSearchParams(location.search);
-    const key   = params.get('key');
-    const token = params.get('token');
+    const params   = new URLSearchParams(location.search);
+    const shareId  = params.get('id');
+    const fragKey  = new URLSearchParams(location.hash.slice(1)).get('key');
+    const key      = params.get('key');
+    const token    = params.get('token');
 
     let pollTimer = null;
 
-    if (key) document.getElementById('key-label').textContent = key;
-
-    if (!key || !token) {
-      showError('Invalid or expired share link.');
-    } else {
+    if (shareId && fragKey) {
+      claimShare(shareId, fragKey);
+    } else if (key && token) {
+      if (key) document.getElementById('key-label').textContent = key;
       tryFetch();
+    } else {
+      showError('Invalid or expired share link.');
     }
 
     async function tryFetch() {
@@ -102,6 +105,36 @@
         }
       } catch {
         showError('Network error — please refresh and try again.');
+      }
+    }
+
+    // ── Encrypted one-time share (new flow) ──────────────────────────────────
+
+    async function claimShare(id, keyB64) {
+      try {
+        const resp = await fetch('/api/share/' + encodeURIComponent(id));
+        if (!resp.ok) {
+          showError(resp.status === 404
+            ? 'This link has already been used or has expired.'
+            : 'Failed to retrieve share (error ' + resp.status + ').');
+          return;
+        }
+        const { kv_key, ciphertext, nonce } = await resp.json();
+
+        document.getElementById('key-label').textContent = kv_key;
+
+        const cryptoKey = await crypto.subtle.importKey(
+          'raw', b64decode(keyB64), { name: 'AES-GCM' }, false, ['decrypt']
+        );
+        const plaintext = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: b64decode(nonce) },
+          cryptoKey,
+          b64decode(ciphertext)
+        );
+
+        showResult(new TextDecoder().decode(plaintext), "Here's your value");
+      } catch (err) {
+        showError('Decryption failed — the link may be corrupt or the key is wrong.');
       }
     }
 

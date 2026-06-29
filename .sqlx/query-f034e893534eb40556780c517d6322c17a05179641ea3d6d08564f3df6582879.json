@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM one_time_shares WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "f034e893534eb40556780c517d6322c17a05179641ea3d6d08564f3df6582879"
+}

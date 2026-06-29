@@ -649,6 +649,33 @@ pub async fn admin_write_kv(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn admin_get_kv_value(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    Path(key): Path<String>,
+) -> Result<String, AppError> {
+    let owner = &auth.0.oidc_subject;
+    let row = sqlx::query!(
+        r#"SELECT value, device_encrypted as "device_encrypted: bool", zt_ciphertext
+           FROM kv_entries
+           WHERE key = ? AND owner_id = ?
+             AND (expires_at IS NULL OR expires_at > datetime('now'))"#,
+        key, owner
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if row.device_encrypted {
+        return Err(AppError::Forbidden("device-encrypted entries cannot be shared this way".to_string()));
+    }
+    if row.zt_ciphertext.is_some() {
+        return Err(AppError::Forbidden("zero-trust entries cannot be shared this way".to_string()));
+    }
+
+    Ok(row.value)
+}
+
 pub async fn admin_delete_kv(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,

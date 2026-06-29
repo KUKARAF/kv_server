@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO one_time_shares (id, owner_id, kv_key, ciphertext, nonce, expires_at)\n         VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "a24a531ca087f931537ead43702b30e176ca5846f9bf67d5e0a572282e96c7de"
+}

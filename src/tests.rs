@@ -1,4 +1,4 @@
-use crate::{config::Config, devices, keys::generate::generate_api_key, kv, middleware, state::AppState};
+use crate::{config::Config, devices, keys::generate::generate_api_key, kv, middleware, shares, state::AppState};
 use axum::{
     body::Body,
     extract::connect_info::MockConnectInfo,
@@ -317,4 +317,300 @@ async fn endpoint_auth(
         expected_status,
         "{method} {path} authenticated={authenticated}"
     );
+}
+
+// ── One-time share tests ─────────────────────────────────────────────────────
+
+/// These tests cover every step of the one-time share lifecycle:
+///
+/// Step 1  – create a share (POST /api/admin/shares): 201 + id returned
+/// Step 2  – DB stores ciphertext, never the raw plaintext
+/// Step 3a – claim (GET /api/share/:id): payload decrypts to the original value
+/// Step 3b – share row is gone from DB after a successful claim
+/// Step 3c – second claim on the same id returns 404
+/// Step 3d – a failed claim (wrong id) leaves the real share untouched
+mod share_tests {
+    use super::*;
+    use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+    use axum::body::to_bytes;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use rand::RngCore;
+
+    // ── App builder ───────────────────────────────────────────────────────────
+
+    async fn build_share_app() -> (Router, Arc<AppState>) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let state = AppState::new(pool, test_config(), None);
+        let app = Router::new()
+            .nest("/api/admin/shares", shares::admin_router())
+            .nest("/api/share", shares::public_router())
+            .with_state(Arc::clone(&state));
+        (app, state)
+    }
+
+    // ── Crypto helpers ────────────────────────────────────────────────────────
+
+    struct Fixture {
+        key_bytes: Vec<u8>,
+        ciphertext_b64: String,
+        nonce_b64: String,
+        plaintext: String,
+    }
+
+    fn encrypt_value(plaintext: &str) -> Fixture {
+        let mut rng = rand::thread_rng();
+        let mut key_bytes = [0u8; 32];
+        let mut nonce_bytes = [0u8; 12];
+        rng.fill_bytes(&mut key_bytes);
+        rng.fill_bytes(&mut nonce_bytes);
+        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = Aes256Gcm::new(key)
+            .encrypt(nonce, plaintext.as_bytes())
+            .unwrap();
+        Fixture {
+            key_bytes: key_bytes.to_vec(),
+            ciphertext_b64: URL_SAFE_NO_PAD.encode(&ciphertext),
+            nonce_b64: URL_SAFE_NO_PAD.encode(&nonce_bytes),
+            plaintext: plaintext.to_string(),
+        }
+    }
+
+    fn decrypt_value(fixture: &Fixture, ciphertext_b64: &str, nonce_b64: &str) -> String {
+        let ct = URL_SAFE_NO_PAD.decode(ciphertext_b64).unwrap();
+        let n  = URL_SAFE_NO_PAD.decode(nonce_b64).unwrap();
+        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&fixture.key_bytes);
+        let plaintext = Aes256Gcm::new(key)
+            .decrypt(Nonce::from_slice(&n), ct.as_slice())
+            .expect("decryption failed — ciphertext or key is wrong");
+        String::from_utf8(plaintext).unwrap()
+    }
+
+    // ── Request helpers ───────────────────────────────────────────────────────
+
+    async fn post_share(app: &Router, session_token: &str, kv_key: &str, f: &Fixture) -> String {
+        let body = serde_json::json!({
+            "kv_key": kv_key,
+            "ciphertext": f.ciphertext_b64,
+            "nonce": f.nonce_b64,
+            "expires_in_hours": 48.0,
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/shares")
+                    .header("Authorization", format!("Bearer {session_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 201, "create share must return 201");
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    async fn get_share(app: &Router, share_id: &str) -> (u16, serde_json::Value) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/share/{share_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status().as_u16();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    async fn share_row_exists(pool: &SqlitePool, share_id: &str) -> bool {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM one_time_shares WHERE id = ?",
+        )
+        .bind(share_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+            > 0
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────────────────
+
+    /// Step 1: POST /api/admin/shares → 201 with a non-empty id.
+    #[tokio::test]
+    async fn step1_create_share_returns_id() {
+        let (app, state) = build_share_app().await;
+        let token = insert_session_key(&state.pool, "active", None).await;
+        let f = encrypt_value("my-secret");
+        let id = post_share(&app, &token, "MY_KEY", &f).await;
+        assert!(!id.is_empty(), "returned id must not be empty");
+    }
+
+    /// Step 1 (auth): Unauthenticated create must be rejected.
+    #[tokio::test]
+    async fn step1_create_share_requires_auth() {
+        let (app, _state) = build_share_app().await;
+        let f = encrypt_value("my-secret");
+        let body = serde_json::json!({
+            "kv_key": "KEY", "ciphertext": f.ciphertext_b64,
+            "nonce": f.nonce_b64, "expires_in_hours": 1.0,
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/shares")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 401, "unauthenticated create must return 401");
+    }
+
+    /// Step 2: DB must store the encrypted blob, not the raw plaintext.
+    #[tokio::test]
+    async fn step2_db_stores_ciphertext_not_plaintext() {
+        let (app, state) = build_share_app().await;
+        let token = insert_session_key(&state.pool, "active", None).await;
+        let plaintext = "super-secret-value-that-must-not-appear-in-db";
+        let f = encrypt_value(plaintext);
+        let id = post_share(&app, &token, "MY_KEY", &f).await;
+
+        let stored_ciphertext = sqlx::query_scalar::<_, String>(
+            "SELECT ciphertext FROM one_time_shares WHERE id = ?",
+        )
+        .bind(&id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+
+        let stored_nonce = sqlx::query_scalar::<_, String>(
+            "SELECT nonce FROM one_time_shares WHERE id = ?",
+        )
+        .bind(&id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+
+        assert_ne!(
+            stored_ciphertext, plaintext,
+            "DB must not store the raw plaintext as ciphertext"
+        );
+        assert!(
+            !stored_ciphertext.contains(plaintext),
+            "plaintext must not appear as a substring of the stored ciphertext"
+        );
+        // nonce must also be opaque (not the plaintext)
+        assert_ne!(stored_nonce, plaintext);
+    }
+
+    /// Step 3a: GET /api/share/:id returns 200 and the payload decrypts to the original value.
+    #[tokio::test]
+    async fn step3a_claim_decrypts_to_original_value() {
+        let (app, state) = build_share_app().await;
+        let token = insert_session_key(&state.pool, "active", None).await;
+        let plaintext = "the-real-secret";
+        let f = encrypt_value(plaintext);
+        let id = post_share(&app, &token, "DECRYPTION_KEY", &f).await;
+
+        let (status, json) = get_share(&app, &id).await;
+        assert_eq!(status, 200, "first claim must succeed");
+        assert_eq!(
+            json["kv_key"].as_str().unwrap(),
+            "DECRYPTION_KEY",
+            "kv_key must match what was stored"
+        );
+
+        let recovered = decrypt_value(
+            &f,
+            json["ciphertext"].as_str().unwrap(),
+            json["nonce"].as_str().unwrap(),
+        );
+        assert_eq!(recovered, plaintext, "decrypted value must match original plaintext");
+    }
+
+    /// Step 3b: Share row is deleted from DB after a successful claim.
+    #[tokio::test]
+    async fn step3b_share_deleted_from_db_after_claim() {
+        let (app, state) = build_share_app().await;
+        let token = insert_session_key(&state.pool, "active", None).await;
+        let f = encrypt_value("secret");
+        let id = post_share(&app, &token, "KEY", &f).await;
+
+        assert!(
+            share_row_exists(&state.pool, &id).await,
+            "row must exist in DB before claim"
+        );
+
+        let (status, _) = get_share(&app, &id).await;
+        assert_eq!(status, 200, "claim must succeed");
+
+        assert!(
+            !share_row_exists(&state.pool, &id).await,
+            "row must be deleted from DB after successful claim"
+        );
+    }
+
+    /// Step 3c: A second GET on the same id returns 404 (already consumed).
+    #[tokio::test]
+    async fn step3c_second_claim_returns_404() {
+        let (app, state) = build_share_app().await;
+        let token = insert_session_key(&state.pool, "active", None).await;
+        let f = encrypt_value("secret");
+        let id = post_share(&app, &token, "KEY", &f).await;
+
+        let (first_status, _) = get_share(&app, &id).await;
+        assert_eq!(first_status, 200, "first claim must succeed");
+
+        let (second_status, _) = get_share(&app, &id).await;
+        assert_eq!(second_status, 404, "second claim must return 404 — share is consumed");
+    }
+
+    /// Step 3d: A claim with a wrong/nonexistent id returns 404 and leaves
+    /// the real share completely untouched — both the DB row and the value.
+    #[tokio::test]
+    async fn step3d_wrong_id_does_not_affect_real_share() {
+        let (app, state) = build_share_app().await;
+        let token = insert_session_key(&state.pool, "active", None).await;
+        let f = encrypt_value("secret");
+        let real_id = post_share(&app, &token, "KEY", &f).await;
+
+        // Attempt with a garbage id
+        let (bad_status, _) = get_share(&app, "00000000-0000-0000-0000-000000000000").await;
+        assert_eq!(bad_status, 404, "wrong id must return 404");
+
+        // Real share row must still exist
+        assert!(
+            share_row_exists(&state.pool, &real_id).await,
+            "real share row must survive a failed claim attempt"
+        );
+
+        // And the real share must still be fully claimable and decryptable
+        let (good_status, json) = get_share(&app, &real_id).await;
+        assert_eq!(good_status, 200, "real share must still be claimable after wrong-id attempt");
+        let recovered = decrypt_value(
+            &f,
+            json["ciphertext"].as_str().unwrap(),
+            json["nonce"].as_str().unwrap(),
+        );
+        assert_eq!(recovered, "secret", "real share must still decrypt correctly");
+    }
 }

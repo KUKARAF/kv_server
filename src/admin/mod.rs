@@ -47,6 +47,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/kv/import", post(handlers::admin_import_kv))
         .route("/faux-approvals", get(handlers::list_faux_approvals))
         .route("/faux-approvals/:id", delete(handlers::dismiss_faux_approval))
+        .route("/kv/:key/value", get(handlers::admin_get_kv_value))
         .route("/kv/:key", patch(handlers::admin_patch_kv).delete(handlers::admin_delete_kv))
         .nest("/webauthn", webauthn::admin_router())
         .nest("/session-requests", crate::session_request::admin_router())

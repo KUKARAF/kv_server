@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT kv_key, ciphertext, nonce FROM one_time_shares\n         WHERE id = ? AND (expires_at IS NULL OR expires_at > datetime('now'))",
+  "describe": {
+    "columns": [
+      {
+        "name": "kv_key",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "ciphertext",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "nonce",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b34287d51f5631ae6aed1d44d83758d3b95f300404fba0b73905b86fb0fa9c16"
+}
