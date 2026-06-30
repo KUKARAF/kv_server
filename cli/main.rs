@@ -12,7 +12,10 @@ use std::time::Duration;
 use x25519_dalek::{EphemeralSecret, PublicKey as X25519Pub, StaticSecret};
 
 #[derive(Parser)]
-#[command(name = "kv_cli", about = "KV Manager CLI — device-encrypted secret retrieval")]
+#[command(
+    name = "kv_cli",
+    about = "KV Manager CLI — device-encrypted secret retrieval"
+)]
 struct Cli {
     #[arg(long, env = "KV_SERVER", default_value = "http://localhost:3000")]
     server: String,
@@ -320,7 +323,13 @@ fn encrypt_for_recipients(
 
     use aes_gcm::aead::Payload;
     let ciphertext = body_cipher
-        .encrypt(body_nonce, Payload { msg: value.as_bytes(), aad })
+        .encrypt(
+            body_nonce,
+            Payload {
+                msg: value.as_bytes(),
+                aad,
+            },
+        )
         .map_err(|_| anyhow::anyhow!("body encryption failed"))?;
 
     // For each recipient, wrap DEK

@@ -46,10 +46,10 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         }
 
         let token = extract_token(parts).ok_or(AppError::Unauthorized)?;
-        
+
         // Validate session via api_keys table with type='session'
         let key_hash = hash_key(&token);
-        
+
         let row = sqlx::query!(
             "SELECT owner_id, label
              FROM api_keys

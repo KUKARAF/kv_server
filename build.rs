@@ -10,8 +10,10 @@ fn main() {
     // Refresh the file with: .tools/get_emojis.sh admin/emoji.json
     println!("cargo:rerun-if-changed=admin/emoji.json");
     let json_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("admin/emoji.json");
-    let data = std::fs::read_to_string(&json_path).expect("admin/emoji.json missing — run .tools/get_emojis.sh admin/emoji.json");
-    let entries: Vec<serde_json::Value> = serde_json::from_str(&data).expect("parse admin/emoji.json");
+    let data = std::fs::read_to_string(&json_path)
+        .expect("admin/emoji.json missing — run .tools/get_emojis.sh admin/emoji.json");
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_str(&data).expect("parse admin/emoji.json");
     let pool: Vec<String> = entries
         .iter()
         .filter_map(|v| v["e"].as_str())

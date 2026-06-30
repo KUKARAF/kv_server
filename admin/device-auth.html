@@ -53,7 +53,7 @@
         Expires in <span id="countdown" class="countdown"></span>
       </p>
 
-      <datalist id="key-scopes-list"></datalist>
+      <datalist id="kv-keys-list"></datalist>
 
       <label>API key label
         <input id="key-label" type="text" placeholder="deploy bot key" required>
@@ -64,20 +64,12 @@
       </label>
 
       <div style="margin-top:1rem;">
-        <p class="label-sm">Scope rules</p>
-        <table class="scope-table">
-          <thead><tr><th>Key pattern</th><th>R</th><th>W</th><th>Deny</th><th></th></tr></thead>
-          <tbody id="scope-rules">
-            <tr class="scope-row">
-              <td><input name="key_pattern" list="key-scopes-list" placeholder="myapp/config"></td>
-              <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
-              <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
-              <td class="ops-cell"><input type="checkbox" name="ops_deny"></td>
-              <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
-            </tr>
-          </tbody>
-        </table>
-        <button type="button" class="btn-secondary" onclick="addScope()" style="margin-top:0.5rem;">+ Add scope rule</button>
+        <p class="label-sm">Allowed keys <span style="color:#666;font-size:11px">(leave empty to allow no keys)</span></p>
+        <div id="allowed-keys-tags" class="tag-input-wrap"></div>
+        <div class="tag-add-row">
+          <input id="allowed-key-input" list="kv-keys-list" placeholder="Type or select a key name…">
+          <button type="button" class="btn-secondary" onclick="addAllowedKey()">+ Add</button>
+        </div>
       </div>
 
       <div id="approve-error" class="hidden" style="color:#fca5a5;font-size:13px;margin-top:0.75rem;"></div>
@@ -130,8 +122,8 @@
       if (data.label) document.getElementById('device-label').textContent = data.label;
       document.getElementById('requested-at').textContent = data.requested_at;
       startCountdown(data.expires_at);
-      loadScopes();
 
+      loadKvKeys();
       document.getElementById('loading').classList.add('hidden');
       document.getElementById('approve-view').classList.remove('hidden');
     }
@@ -157,27 +149,35 @@
       setInterval(tick, 1000);
     }
 
-    // ── Scopes ────────────────────────────────────────────────────────────────
-    async function loadScopes() {
-      const resp = await fetch('/api/admin/kv/scopes');
+    // ── Allowed keys tag input ────────────────────────────────────────────────
+    async function loadKvKeys() {
+      const resp = await fetch('/api/admin/kv/keys');
       if (!resp.ok) return;
-      const scopes = await resp.json();
-      const dl = document.getElementById('key-scopes-list');
-      dl.innerHTML = scopes.map(s => `<option value="${esc(s)}">`).join('');
+      const keys = await resp.json();
+      const dl = document.getElementById('kv-keys-list');
+      dl.innerHTML = keys.map(k => `<option value="${esc(k)}">`).join('');
     }
 
-    function addScope() {
-      const tr = document.createElement('tr');
-      tr.className = 'scope-row';
-      tr.innerHTML = `
-        <td><input name="key_pattern" list="key-scopes-list" placeholder="myapp/config"></td>
-        <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
-        <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
-        <td class="ops-cell"><input type="checkbox" name="ops_deny"></td>
-        <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
-      `;
-      document.getElementById('scope-rules').appendChild(tr);
+    function addAllowedKey() {
+      const input = document.getElementById('allowed-key-input');
+      const val = input.value.trim();
+      if (!val) return;
+      const wrap = document.getElementById('allowed-keys-tags');
+      if (Array.from(wrap.querySelectorAll('[data-key]')).some(t => t.dataset.key === val)) {
+        input.value = '';
+        return;
+      }
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.dataset.key = val;
+      tag.innerHTML = `${esc(val)} <button type="button" onclick="this.parentElement.remove()">✕</button>`;
+      wrap.appendChild(tag);
+      input.value = '';
     }
+
+    document.getElementById('allowed-key-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); addAllowedKey(); }
+    });
 
     // ── Approve / Reject ──────────────────────────────────────────────────────
     async function approveRequest() {
@@ -185,26 +185,18 @@
       const expiresAt = document.getElementById('key-expires').value || null;
       const errEl = document.getElementById('approve-error');
 
-      const scopes = Array.from(document.querySelectorAll('#scope-rules .scope-row'))
-        .map(row => {
-          const pattern = row.querySelector('[name=key_pattern]').value.trim();
-          const r = row.querySelector('[name=ops_read]').checked;
-          const w = row.querySelector('[name=ops_write]').checked;
-          const deny = row.querySelector('[name=ops_deny]').checked;
-          const ops = [r && 'read', w && 'write'].filter(Boolean).join(',');
-          return { key_pattern: pattern, ops, deny };
-        })
-        .filter(s => s.key_pattern && s.ops);
+      const allowedKeys = Array.from(
+        document.getElementById('allowed-keys-tags').querySelectorAll('[data-key]')
+      ).map(t => t.dataset.key);
 
       if (!label) { showError('Label is required.'); return; }
-      if (!scopes.length) { showError('At least one scope with an operation is required.'); return; }
 
       errEl.classList.add('hidden');
 
       const resp = await fetch('/api/admin/device-auth/' + requestId + '/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label, scopes, expires_at: expiresAt }),
+        body: JSON.stringify({ label, allowed_keys: allowedKeys, expires_at: expiresAt }),
       });
 
       if (resp.ok) {

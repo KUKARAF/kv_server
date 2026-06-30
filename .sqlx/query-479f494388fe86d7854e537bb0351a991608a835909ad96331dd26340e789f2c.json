@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT kv_key FROM api_key_allowed_keys WHERE api_key_id = ? ORDER BY kv_key",
+  "describe": {
+    "columns": [
+      {
+        "name": "kv_key",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "479f494388fe86d7854e537bb0351a991608a835909ad96331dd26340e789f2c"
+}

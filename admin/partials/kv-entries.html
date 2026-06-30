@@ -1,13 +1,10 @@
 <section>
   <h2>KV Entries</h2>
 
-  <datalist id="scopes-list"></datalist>
-
   <form id="add-entry-form" onsubmit="return addEntry(event)" class="panel">
     <h3>Add / update entry</h3>
     <div class="form-row-2">
       <label>Key <input name="key" required placeholder="DATABASE_URL"></label>
-      <label>Scope <input name="scope" list="scopes-list" placeholder="osmosis/deployment"></label>
     </div>
     <label>Value <textarea name="value" required rows="2" placeholder="the value…"></textarea></label>
     <div class="form-inline">
@@ -52,9 +49,6 @@
       <label>Description (shown to recipient, optional)
         <input name="description" placeholder="e.g. Please provide your database credentials">
       </label>
-      <label>Scope label (applied to submitted entries, optional)
-        <input name="scope" list="scopes-list" placeholder="e.g. myapp/production">
-      </label>
     </div>
     <div class="form-row-2" style="margin-top:0.5rem;">
       <label>Key prefix (prepended to all submitted keys, optional)
@@ -85,7 +79,6 @@
     <h3>Import .env</h3>
     <div class="form-row-2">
       <label>File <input name="file" type="file" accept=".env,text/plain"></label>
-      <label>Scope <input name="scope" list="scopes-list" placeholder="osmosis/deployment"></label>
     </div>
     <label>or paste <textarea name="content" rows="3" placeholder="KEY=value&#10;ANOTHER=value"></textarea></label>
     <div class="form-inline">
@@ -204,15 +197,6 @@
     }).join('');
   }
 
-  async function loadScopes() {
-    const resp = await fetch('/api/admin/kv/scopes');
-    if (!resp.ok) return;
-    const scopes = await resp.json();
-    const dl = document.getElementById('scopes-list');
-    dl.innerHTML = scopes.map(s => `<option value="${esc(s)}">`).join('');
-  }
-  loadScopes();
-
   async function addEntry(e) {
     e.preventDefault();
     const form = e.target;
@@ -281,7 +265,6 @@
         body: JSON.stringify({
           key,
           value: '',
-          scope: form.scope.value.trim() || null,
           ttl_hours: ttlRaw ? parseFloat(ttlRaw) : null,
           ttl_sliding: false,
           open_access: false,
@@ -302,7 +285,7 @@
           label: 'zt:' + key,
           key_type: 'zero_trust',
           expires_at: null,
-          scopes: [{ key_pattern: key, ops: 'read' }],
+          allowed_keys: [key],
         }),
       });
       if (!keyResp.ok) {
@@ -322,7 +305,6 @@
       ['open_access', 'ttl_sliding', 'one_time', 'approval_required', 'zero_trust'].forEach(n => {
         form.querySelector('[name=' + n + ']').disabled = false;
       });
-      loadScopes();
       htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
       return false;
     }
@@ -330,7 +312,6 @@
     const body = {
       key,
       value: form.value.value,
-      scope: form.scope.value.trim() || null,
       ttl_hours: ttlRaw ? parseFloat(ttlRaw) : null,
       ttl_sliding: form.ttl_sliding.checked,
       open_access: form.open_access.checked,
@@ -353,7 +334,7 @@
           label: 'approval:' + key,
           key_type: 'approval_required',
           expires_at: null,
-          scopes: [{ key_pattern: body.scope || '*', ops: 'read' }],
+          allowed_keys: [key],
         }),
       });
       if (!keyResp.ok) { alert('Entry saved but failed to create approval key: ' + keyResp.status); }
@@ -374,7 +355,6 @@
     ['open_access', 'ttl_sliding', 'one_time', 'approval_required', 'zero_trust'].forEach(n => {
       form.querySelector('[name=' + n + ']').disabled = false;
     });
-    loadScopes();
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
     return false;
   }
@@ -395,7 +375,6 @@
     const body = {
       content,
       prefix: form.prefix.value || null,
-      scope: form.scope.value.trim() || null,
       ttl_hours: ttlRaw ? parseFloat(ttlRaw) : null,
       ttl_sliding: false,
       open_access: form.open_access.checked,
@@ -410,7 +389,6 @@
     document.getElementById('import-result').textContent =
       `Imported ${data.imported} entries (${data.skipped} skipped).`;
     form.reset();
-    loadScopes();
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
     return false;
   }
@@ -420,15 +398,6 @@
     const resp = await fetch('/api/admin/kv/' + encodeURIComponent(key), { method: 'DELETE' });
     if (!resp.ok) { alert('Error deleting: ' + resp.status); return; }
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
-  }
-
-  async function saveScope(key, value) {
-    await fetch('/api/admin/kv/' + encodeURIComponent(key), {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope: value || null }),
-    });
-    loadScopes();
   }
 
   // ── Device list cache ────────────────────────────────────────────────────
@@ -455,7 +424,7 @@
     const el = document.getElementById('entries-list');
     if (!entries.length) { el.innerHTML = '<p>No entries found.</p>'; return; }
     el.innerHTML = `<table>
-      <thead><tr><th>Key</th><th>Scope</th><th>TTL (h)</th><th>Sliding</th><th>Open</th><th>Expires</th><th>Created</th><th></th></tr></thead>
+      <thead><tr><th>Key</th><th>TTL (h)</th><th>Sliding</th><th>Open</th><th>Expires</th><th>Created</th><th></th></tr></thead>
       <tbody>${entries.map(e => {
         const recipIds   = e.recipient_device_ids ?? [];
         const recipCount = recipIds.length;
@@ -468,14 +437,13 @@
         const actions = `${e.device_encrypted
           ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="decryptEntry('${esc(e.key)}')">Decrypt</button>`
           : ''}${e.device_encrypted
-          ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="openReEncryptModal('${esc(e.key)}','${esc(e.scope ?? '')}',JSON.parse(this.dataset.ids))" data-ids="${recipJson}">Devices</button>`
+          ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="openReEncryptModal('${esc(e.key)}',JSON.parse(this.dataset.ids))" data-ids="${recipJson}">Devices</button>`
           : ''}${!e.device_encrypted
           ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="shareEntry('${esc(e.key)}')">Share</button>`
           : ''}<button class="btn-icon" onclick="deleteEntry('${esc(e.key)}')" title="Delete">🗑️</button>`;
         return `
         <tr>
           <td><code>${esc(e.key)}</code>${devBadge}</td>
-          <td><span class="scope-cell" data-key="${esc(e.key)}" onclick="editScope(this)">${e.scope ? `<span class="badge badge-scope">${esc(e.scope)}</span>` : '<span class="scope-empty">+ scope</span>'}</span></td>
           <td>${e.ttl_hours ?? '—'}</td>
           <td>${e.ttl_sliding ? '✓' : '—'}</td>
           <td>${e.open_access ? '✓' : '—'}</td>
@@ -529,25 +497,6 @@
     await createAndShowShare(key, plaintext);
   }
 
-  function editScope(cell) {
-    const key = cell.dataset.key;
-    const current = cell.querySelector('.badge-scope')?.textContent ?? '';
-    cell.innerHTML = `<input class="scope-input" list="scopes-list" value="${esc(current)}" placeholder="scope…">`;
-    const input = cell.querySelector('input');
-    input.focus();
-    input.select();
-    const commit = async () => {
-      const val = input.value.trim();
-      await saveScope(key, val);
-      htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
-    };
-    input.addEventListener('blur', commit);
-    input.addEventListener('keydown', ev => {
-      if (ev.key === 'Enter') { ev.preventDefault(); input.blur(); }
-      if (ev.key === 'Escape') { input.removeEventListener('blur', commit); htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit'); }
-    });
-  }
-
   function esc(s) {
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
@@ -565,7 +514,6 @@
       : null;
     const body = {
       description: form.description.value.trim() || null,
-      scope: form.scope.value.trim() || null,
       key_prefix: form.key_prefix.value.trim() || null,
       required_keys,
     };
@@ -598,7 +546,7 @@
     const el = document.getElementById('secret-requests-list');
     if (!rows.length) { el.innerHTML = ''; return; }
     el.innerHTML = `<table>
-      <thead><tr><th>Description</th><th>Scope</th><th>Prefix</th><th>Required keys</th><th>Status</th><th>Created</th><th>Fulfilled</th><th></th></tr></thead>
+      <thead><tr><th>Description</th><th>Prefix</th><th>Required keys</th><th>Status</th><th>Created</th><th>Fulfilled</th><th></th></tr></thead>
       <tbody>${rows.map(r => {
         const actions = (r.status === 'pending'
           ? `<button class="btn-secondary" onclick="revokeSecretRequest('${esc(r.id)}')">Revoke</button> `
@@ -613,7 +561,6 @@
         }
         return `<tr>
           <td>${r.description ? esc(r.description) : '<span style="color:#444">—</span>'}</td>
-          <td>${r.scope ? `<span class="badge badge-scope">${esc(r.scope)}</span>` : '<span style="color:#444">—</span>'}</td>
           <td>${r.key_prefix ? `<code style="font-size:11px">${esc(r.key_prefix)}</code>` : '<span style="color:#444">—</span>'}</td>
           <td>${reqKeys}</td>
           <td><span class="badge badge-${esc(r.status)}">${esc(r.status)}</span></td>
@@ -726,15 +673,14 @@
   }
 
   // ── Re-encrypt / manage device access modal ──────────────────────────────
-  let _reEncryptKey = null, _reEncryptScope = null, _reEncryptRecipientIds = [];
+  let _reEncryptKey = null, _reEncryptRecipientIds = [];
 
   function deviceName(id, devList) {
     return devList.find(d => d.id === id)?.name ?? id.slice(0, 8) + '…';
   }
 
-  async function openReEncryptModal(key, scope, recipientDeviceIds) {
+  async function openReEncryptModal(key, recipientDeviceIds) {
     _reEncryptKey = key;
-    _reEncryptScope = scope || null;
     _reEncryptRecipientIds = recipientDeviceIds;
 
     document.getElementById('reencrypt-key-label').textContent = key;
@@ -758,7 +704,7 @@
 
   function closeReEncryptModal() {
     document.getElementById('reencrypt-modal').classList.add('hidden');
-    _reEncryptKey = null; _reEncryptScope = null; _reEncryptRecipientIds = [];
+    _reEncryptKey = null; _reEncryptRecipientIds = [];
   }
 
   async function confirmReEncrypt() {
@@ -791,7 +737,7 @@
     const allDevices = await loadDevicesOnce();
     const selectedDevices = allDevices.filter(d => selectedIds.includes(d.id));
     try {
-      await encryptValueToDevices(plaintext, _reEncryptKey, _reEncryptScope, selectedDevices);
+      await encryptValueToDevices(plaintext, _reEncryptKey, selectedDevices);
     } catch (err) {
       alert('Re-encryption failed: ' + err.message);
       return;
@@ -803,7 +749,7 @@
   }
 
   // Core: encrypt `value` to all `devices` under key `key` and POST to server
-  async function encryptValueToDevices(value, key, scope, devices) {
+  async function encryptValueToDevices(value, key, devices) {
     const encoder = new TextEncoder();
 
     const dekKey = await crypto.subtle.generateKey({name: 'AES-GCM', length: 256}, true, ['encrypt']);
@@ -870,7 +816,7 @@
     const resp = await fetch('/api/admin/kv/device', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ key, scope, nonce: b64Encode(bodyNonce), ciphertext: b64Encode(ciphertext), aad: b64Encode(aadBytes), recipients }),
+      body: JSON.stringify({ key, nonce: b64Encode(bodyNonce), ciphertext: b64Encode(ciphertext), aad: b64Encode(aadBytes), recipients }),
     });
     if (!resp.ok) throw new Error('Server error: ' + resp.status);
   }
@@ -883,7 +829,7 @@
     const selectedDevices = allDevices.filter(d => checkedIds.has(d.id));
     if (!selectedDevices.length) { alert('Select at least one device to encrypt for.'); return; }
     try {
-      await encryptValueToDevices(form.value.value, key, form.scope.value.trim() || null, selectedDevices);
+      await encryptValueToDevices(form.value.value, key, selectedDevices);
     } catch (err) {
       alert('Error saving device-encrypted entry: ' + err.message);
       return;
@@ -894,7 +840,6 @@
       form.querySelector('[name=' + n + ']').disabled = false;
     });
     document.getElementById('device-picker-panel').classList.add('hidden');
-    loadScopes();
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
   }
 

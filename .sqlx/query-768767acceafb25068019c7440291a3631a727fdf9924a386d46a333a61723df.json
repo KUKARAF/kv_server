@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT open_access FROM kv_entries\n                 WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))\n                 LIMIT 1",
+  "query": "SELECT open_access FROM kv_entries\n         WHERE key = ? AND (expires_at IS NULL OR expires_at > datetime('now'))\n         LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -16,5 +16,5 @@
       false
     ]
   },
-  "hash": "f8e0396214e545613256b97a0582eac695f0ffc908cba2cd5599bf145561c77d"
+  "hash": "768767acceafb25068019c7440291a3631a727fdf9924a386d46a333a61723df"
 }

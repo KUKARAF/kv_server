@@ -6,7 +6,6 @@ use crate::{
     kv::model::compute_expires_at,
     state::AppState,
 };
-use serde_json;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -14,6 +13,7 @@ use axum::{
     Json,
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar};
+use serde_json;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -22,7 +22,7 @@ use uuid::Uuid;
 pub async fn list_keys(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
-) -> Result<Json<Vec<ApiKeyWithScopes>>, AppError> {
+) -> Result<Json<Vec<ApiKeyWithAllowedKeys>>, AppError> {
     let owner = &auth.0.oidc_subject;
     let keys = sqlx::query_as!(
         ApiKeyRow,
@@ -35,14 +35,13 @@ pub async fn list_keys(
 
     let mut result = Vec::with_capacity(keys.len());
     for key in keys {
-        let scopes = sqlx::query_as!(
-            ScopeRow,
-            "SELECT id, api_key_id, scope, ops, deny as \"deny: bool\" FROM api_key_scopes WHERE api_key_id = ?",
+        let allowed_keys = sqlx::query_scalar!(
+            "SELECT kv_key FROM api_key_allowed_keys WHERE api_key_id = ? ORDER BY kv_key",
             key.id
         )
         .fetch_all(&state.pool)
         .await?;
-        result.push(ApiKeyWithScopes { key, scopes });
+        result.push(ApiKeyWithAllowedKeys { key, allowed_keys });
     }
 
     Ok(Json(result))
@@ -53,7 +52,13 @@ pub async fn create_key(
     auth: AdminAuth,
     Json(body): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
-    let valid_types = ["standard", "one_time", "approval_required", "zero_trust", "shareable"];
+    let valid_types = [
+        "standard",
+        "one_time",
+        "approval_required",
+        "zero_trust",
+        "shareable",
+    ];
     if !valid_types.contains(&body.key_type.as_str()) {
         return Err(AppError::Forbidden(format!(
             "invalid key type: {}",
@@ -61,36 +66,11 @@ pub async fn create_key(
         )));
     }
 
-    // For one-time and shareable keys with entry_scope, allow empty scopes array and generate scope automatically
-    let mut scopes = body.scopes.clone();
-    let is_one_time_with_entry_scope = body.key_type == "one_time" && body.entry_scope.is_some();
-    let is_shareable_with_entry_scope = body.key_type == "shareable" && body.entry_scope.is_some();
-    
-    if is_one_time_with_entry_scope || is_shareable_with_entry_scope {
-        // One-time or shareable key tied to a specific entry scope
-        let entry_scope = body.entry_scope.as_ref().unwrap();
-        scopes.push(CreateScopeRequest {
-            scope: entry_scope.clone(),
-            ops: "read".to_string(), // Read-only by default
-            deny: false,
-        });
-    }
-
-    // For one-time/shareable keys with entry_scope, we auto-generate the scope
-    // For all other key types, require at least one scope
-    let allow_empty_scopes = is_one_time_with_entry_scope || is_shareable_with_entry_scope;
-    if scopes.is_empty() && !allow_empty_scopes {
-        return Err(AppError::Forbidden(
-            "at least one scope is required (or provide entry_scope for one-time/shareable keys)".to_string(),
-        ));
-    }
-
-    // Validate each scope has at least one operation
-    for scope in &scopes {
-        if scope.ops.is_empty() {
-            return Err(AppError::Forbidden(
-                "each scope must have at least one operation (read, write, delete, list)".to_string(),
-            ));
+    // Collect allowed keys; for one-time/shareable with entry_key, add that key automatically.
+    let mut allowed_keys = body.allowed_keys.clone();
+    if let Some(ref ek) = body.entry_key {
+        if !allowed_keys.contains(ek) {
+            allowed_keys.push(ek.clone());
         }
     }
 
@@ -98,7 +78,6 @@ pub async fn create_key(
     let (plaintext, key_hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();
 
-    // approval_required keys start as pending_approval
     let status = if body.key_type == "approval_required" {
         "pending_approval"
     } else {
@@ -108,22 +87,31 @@ pub async fn create_key(
     sqlx::query!(
         "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
          VALUES (?, ?, ?, ?, ?, ?, ?)",
-        id, key_hash, body.label, body.key_type, status, body.expires_at, owner
+        id,
+        key_hash,
+        body.label,
+        body.key_type,
+        status,
+        body.expires_at,
+        owner
     )
     .execute(&state.pool)
     .await?;
 
-    for scope in &scopes {
-        let scope_id = Uuid::new_v4().to_string();
+    for kv_key in &allowed_keys {
         sqlx::query!(
-            "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny) VALUES (?, ?, ?, ?, ?)",
-            scope_id, id, scope.scope, scope.ops, scope.deny
+            "INSERT OR IGNORE INTO api_key_allowed_keys (api_key_id, kv_key) VALUES (?, ?)",
+            id,
+            kv_key
         )
         .execute(&state.pool)
         .await?;
     }
 
-    Ok((StatusCode::CREATED, Json(CreateKeyResponse { id, key: plaintext })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateKeyResponse { id, key: plaintext }),
+    ))
 }
 
 pub async fn revoke_key(
@@ -157,7 +145,10 @@ pub async fn delete_revoked_sessions(
     )
     .execute(&state.pool)
     .await?;
-    Ok((StatusCode::OK, Json(serde_json::json!({ "deleted": result.rows_affected() }))))
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({ "deleted": result.rows_affected() })),
+    ))
 }
 
 pub async fn delete_key(
@@ -168,7 +159,8 @@ pub async fn delete_key(
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM api_keys WHERE id = ? AND owner_id = ? AND status IN ('revoked', 'used')",
-        key_id, owner
+        key_id,
+        owner
     )
     .execute(&state.pool)
     .await?;
@@ -189,7 +181,7 @@ pub async fn create_session_key(
     auth: AdminAuth,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
     let owner = &auth.0.oidc_subject;
-    
+
     // Only revoke previous CLI session tokens (label = 'session'), not the web session
     sqlx::query!(
         "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active' AND label = 'session'",
@@ -201,25 +193,21 @@ pub async fn create_session_key(
     // Create new session key with 15 hour TTL
     let (plaintext, key_hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();
-    
+
     sqlx::query!(
         "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
          VALUES (?, ?, 'session', 'session', 'active', datetime('now', '+15 hours'), ?)",
-        id, key_hash, owner
+        id,
+        key_hash,
+        owner
     )
     .execute(&state.pool)
     .await?;
 
-    let scope_id = Uuid::new_v4().to_string();
-    sqlx::query!(
-        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny)
-         VALUES (?, ?, '*', 'read,write,delete,list', 0)",
-        scope_id, id
-    )
-    .execute(&state.pool)
-    .await?;
-
-    Ok((StatusCode::CREATED, Json(CreateKeyResponse { id, key: plaintext })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateKeyResponse { id, key: plaintext }),
+    ))
 }
 
 /// Get the current active session key info for this owner (id only, not the key itself)
@@ -228,7 +216,7 @@ pub async fn get_session_key(
     auth: AdminAuth,
 ) -> Result<Json<Option<SessionKeyInfo>>, AppError> {
     let owner = &auth.0.oidc_subject;
-    
+
     let row = sqlx::query!(
         "SELECT id, expires_at FROM api_keys 
          WHERE owner_id = ? AND type = 'session' AND status = 'active' 
@@ -238,7 +226,7 @@ pub async fn get_session_key(
     )
     .fetch_optional(&state.pool)
     .await?;
-    
+
     Ok(Json(row.map(|r| SessionKeyInfo {
         id: r.id,
         expires_at: r.expires_at,
@@ -252,7 +240,7 @@ pub async fn logout(
     auth: AdminAuth,
 ) -> Result<Response, AppError> {
     let owner = &auth.0.oidc_subject;
-    
+
     // Revoke all active session keys for this owner
     sqlx::query!(
         "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active'",
@@ -260,7 +248,7 @@ pub async fn logout(
     )
     .execute(&state.pool)
     .await?;
-    
+
     let clear = Cookie::build(("session_token", ""))
         .http_only(true)
         .secure(true)
@@ -297,10 +285,7 @@ pub async fn get_session_info(
 
 /// GET /api/admin/session/token — returns the plaintext session token from the cookie.
 /// Used by the dashboard "copy session token" button for use in scripts.
-pub async fn get_session_token(
-    jar: CookieJar,
-    _auth: AdminAuth,
-) -> Result<Json<String>, AppError> {
+pub async fn get_session_token(jar: CookieJar, _auth: AdminAuth) -> Result<Json<String>, AppError> {
     let token = jar
         .get("session_token")
         .map(|c| c.value().to_string())
@@ -325,7 +310,10 @@ pub async fn create_cli_token(
     sqlx::query!(
         "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
          VALUES (?, ?, 'kv-cli', 'approval', 'active', ?, ?)",
-        id, key_hash, expires_at, owner
+        id,
+        key_hash,
+        expires_at,
+        owner
     )
     .execute(&state.pool)
     .await?;
@@ -395,7 +383,8 @@ pub async fn approve_request(
          JOIN api_keys ak ON ak.id = ar.api_key_id
          WHERE ar.id = ? AND ar.status = 'pending' AND ar.expires_at > datetime('now')
            AND ak.owner_id = ?",
-        request_id, owner
+        request_id,
+        owner
     )
     .fetch_optional(&state.pool)
     .await?
@@ -404,7 +393,9 @@ pub async fn approve_request(
     let matches = bcrypt::verify(&body.confirm, &row.emoji_sequence)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {e}")))?;
     if !matches {
-        return Err(AppError::Forbidden("emoji sequence does not match".to_string()));
+        return Err(AppError::Forbidden(
+            "emoji sequence does not match".to_string(),
+        ));
     }
 
     let mut tx = state.pool.begin().await?;
@@ -437,7 +428,8 @@ pub async fn reject_request(
         "UPDATE approval_requests SET status = 'rejected'
          WHERE id = ? AND status = 'pending'
            AND api_key_id IN (SELECT id FROM api_keys WHERE owner_id = ?)",
-        request_id, owner
+        request_id,
+        owner
     )
     .execute(&state.pool)
     .await?;
@@ -470,12 +462,17 @@ pub async fn request_approval(
     sqlx::query!(
         "INSERT INTO approval_requests (id, api_key_id, emoji_sequence, expires_at)
          VALUES (?, ?, ?, datetime('now', '+10 minutes'))",
-        id, key.id, emoji
+        id,
+        key.id,
+        emoji
     )
     .execute(&state.pool)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(RequestApprovalResponse { confirm: emoji })))
+    Ok((
+        StatusCode::CREATED,
+        Json(RequestApprovalResponse { confirm: emoji }),
+    ))
 }
 
 // ── KV (admin view) ──────────────────────────────────────────────────────────
@@ -490,7 +487,7 @@ pub async fn list_kv_entries(
         Some(prefix) => {
             let pattern = format!("{}%", prefix);
             sqlx::query!(
-                r#"SELECT k.key, k.scope, k.ttl_hours, k.ttl_sliding as "ttl_sliding: bool",
+                r#"SELECT k.key, k.ttl_hours, k.ttl_sliding as "ttl_sliding: bool",
                         k.expires_at, k.open_access as "open_access: bool", k.created_at,
                         k.device_encrypted as "device_encrypted: bool",
                         (SELECT json_group_array(dr.device_id)
@@ -501,14 +498,14 @@ pub async fn list_kv_entries(
                  WHERE k.key LIKE ? AND k.owner_id = ?
                    AND (k.expires_at IS NULL OR k.expires_at > datetime('now'))
                  ORDER BY k.key"#,
-                pattern, owner
+                pattern,
+                owner
             )
             .fetch_all(&state.pool)
             .await?
             .into_iter()
             .map(|r| crate::kv::model::KvMetaResponse {
                 key: r.key,
-                scope: r.scope,
                 ttl_hours: r.ttl_hours,
                 ttl_sliding: r.ttl_sliding,
                 expires_at: r.expires_at,
@@ -516,7 +513,8 @@ pub async fn list_kv_entries(
                 created_at: r.created_at,
                 device_encrypted: Some(r.device_encrypted),
                 recipient_device_ids: if r.device_encrypted {
-                    r.recipient_device_ids_json.as_deref()
+                    r.recipient_device_ids_json
+                        .as_deref()
                         .and_then(|s| serde_json::from_str(s).ok())
                 } else {
                     None
@@ -524,9 +522,8 @@ pub async fn list_kv_entries(
             })
             .collect()
         }
-        None => {
-            sqlx::query!(
-                r#"SELECT k.key, k.scope, k.ttl_hours, k.ttl_sliding as "ttl_sliding: bool",
+        None => sqlx::query!(
+            r#"SELECT k.key, k.ttl_hours, k.ttl_sliding as "ttl_sliding: bool",
                         k.expires_at, k.open_access as "open_access: bool", k.created_at,
                         k.device_encrypted as "device_encrypted: bool",
                         (SELECT json_group_array(dr.device_id)
@@ -537,51 +534,47 @@ pub async fn list_kv_entries(
                  WHERE k.owner_id = ?
                    AND (k.expires_at IS NULL OR k.expires_at > datetime('now'))
                  ORDER BY k.key"#,
-                owner
-            )
-            .fetch_all(&state.pool)
-            .await?
-            .into_iter()
-            .map(|r| crate::kv::model::KvMetaResponse {
-                key: r.key,
-                scope: r.scope,
-                ttl_hours: r.ttl_hours,
-                ttl_sliding: r.ttl_sliding,
-                expires_at: r.expires_at,
-                open_access: r.open_access,
-                created_at: r.created_at,
-                device_encrypted: Some(r.device_encrypted),
-                recipient_device_ids: if r.device_encrypted {
-                    r.recipient_device_ids_json.as_deref()
-                        .and_then(|s| serde_json::from_str(s).ok())
-                } else {
-                    None
-                },
-            })
-            .collect()
-        }
+            owner
+        )
+        .fetch_all(&state.pool)
+        .await?
+        .into_iter()
+        .map(|r| crate::kv::model::KvMetaResponse {
+            key: r.key,
+            ttl_hours: r.ttl_hours,
+            ttl_sliding: r.ttl_sliding,
+            expires_at: r.expires_at,
+            open_access: r.open_access,
+            created_at: r.created_at,
+            device_encrypted: Some(r.device_encrypted),
+            recipient_device_ids: if r.device_encrypted {
+                r.recipient_device_ids_json
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+            } else {
+                None
+            },
+        })
+        .collect(),
     };
     Ok(Json(rows))
 }
 
-pub async fn list_scopes(
+pub async fn list_kv_keys(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
 ) -> Result<Json<Vec<String>>, AppError> {
     let owner = &auth.0.oidc_subject;
-    let scopes = sqlx::query_scalar!(
-        "SELECT DISTINCT scope FROM kv_entries
-         WHERE owner_id = ? AND scope IS NOT NULL AND scope != ''
+    let keys = sqlx::query_scalar!(
+        "SELECT key FROM kv_entries
+         WHERE owner_id = ?
            AND (expires_at IS NULL OR expires_at > datetime('now'))
-         ORDER BY scope",
+         ORDER BY key",
         owner
     )
     .fetch_all(&state.pool)
-    .await?
-    .into_iter()
-    .flatten()
-    .collect();
-    Ok(Json(scopes))
+    .await?;
+    Ok(Json(keys))
 }
 
 // ── Admin KV write / import / patch / delete ─────────────────────────────────
@@ -612,7 +605,9 @@ pub async fn admin_write_kv(
         ];
         for (name, field) in &required {
             if field.is_none() {
-                return Err(AppError::Forbidden(format!("missing zero trust field: {name}")));
+                return Err(AppError::Forbidden(format!(
+                    "missing zero trust field: {name}"
+                )));
             }
         }
     }
@@ -623,12 +618,11 @@ pub async fn admin_write_kv(
 
     sqlx::query!(
         "INSERT INTO kv_entries
-             (key, owner_id, value, scope, ttl_hours, ttl_sliding, expires_at, open_access,
+             (key, owner_id, value, ttl_hours, ttl_sliding, expires_at, open_access,
               zt_ciphertext, zt_wrapped_dek, zt_nonce, zt_aad, zt_prf_salt, zt_credential_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(key, owner_id) DO UPDATE SET
              value          = excluded.value,
-             scope          = excluded.scope,
              ttl_hours      = excluded.ttl_hours,
              ttl_sliding    = excluded.ttl_sliding,
              expires_at     = excluded.expires_at,
@@ -639,9 +633,19 @@ pub async fn admin_write_kv(
              zt_aad         = excluded.zt_aad,
              zt_prf_salt    = excluded.zt_prf_salt,
              zt_credential_id = excluded.zt_credential_id",
-        body.key, owner, body.value, body.scope, body.ttl_hours, ttl_sliding, expires_at, open_access,
-        body.zt_ciphertext, body.zt_wrapped_dek, body.zt_nonce, body.zt_aad,
-        body.zt_prf_salt, body.zt_credential_id
+        body.key,
+        owner,
+        body.value,
+        body.ttl_hours,
+        ttl_sliding,
+        expires_at,
+        open_access,
+        body.zt_ciphertext,
+        body.zt_wrapped_dek,
+        body.zt_nonce,
+        body.zt_aad,
+        body.zt_prf_salt,
+        body.zt_credential_id
     )
     .execute(&state.pool)
     .await?;
@@ -660,17 +664,22 @@ pub async fn admin_get_kv_value(
            FROM kv_entries
            WHERE key = ? AND owner_id = ?
              AND (expires_at IS NULL OR expires_at > datetime('now'))"#,
-        key, owner
+        key,
+        owner
     )
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
     if row.device_encrypted {
-        return Err(AppError::Forbidden("device-encrypted entries cannot be shared this way".to_string()));
+        return Err(AppError::Forbidden(
+            "device-encrypted entries cannot be shared this way".to_string(),
+        ));
     }
     if row.zt_ciphertext.is_some() {
-        return Err(AppError::Forbidden("zero-trust entries cannot be shared this way".to_string()));
+        return Err(AppError::Forbidden(
+            "zero-trust entries cannot be shared this way".to_string(),
+        ));
     }
 
     Ok(row.value)
@@ -684,27 +693,8 @@ pub async fn admin_delete_kv(
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM kv_entries WHERE key = ? AND owner_id = ?",
-        key, owner
-    )
-    .execute(&state.pool)
-    .await?;
-
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound);
-    }
-    Ok(StatusCode::NO_CONTENT)
-}
-
-pub async fn admin_patch_kv(
-    State(state): State<Arc<AppState>>,
-    auth: AdminAuth,
-    Path(key): Path<String>,
-    Json(body): Json<AdminKvPatchRequest>,
-) -> Result<StatusCode, AppError> {
-    let owner = &auth.0.oidc_subject;
-    let result = sqlx::query!(
-        "UPDATE kv_entries SET scope = ? WHERE key = ? AND owner_id = ?",
-        body.scope, key, owner
+        key,
+        owner
     )
     .execute(&state.pool)
     .await?;
@@ -743,16 +733,15 @@ pub async fn admin_import_kv(
         let expires_at = compute_expires_at(body.ttl_hours);
 
         sqlx::query!(
-            "INSERT INTO kv_entries (key, owner_id, value, scope, ttl_hours, ttl_sliding, expires_at, open_access)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO kv_entries (key, owner_id, value, ttl_hours, ttl_sliding, expires_at, open_access)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(key, owner_id) DO UPDATE SET
                  value       = excluded.value,
-                 scope       = excluded.scope,
                  ttl_hours   = excluded.ttl_hours,
                  ttl_sliding = excluded.ttl_sliding,
                  expires_at  = excluded.expires_at,
                  open_access = excluded.open_access",
-            key, owner, value, body.scope, body.ttl_hours, ttl_sliding, expires_at, open_access
+            key, owner, value, body.ttl_hours, ttl_sliding, expires_at, open_access
         )
         .execute(&state.pool)
         .await?;
@@ -765,9 +754,7 @@ pub async fn admin_import_kv(
 
 /// Strip surrounding single or double quotes from a .env value.
 fn unquote(s: &str) -> String {
-    if (s.starts_with('"') && s.ends_with('"'))
-        || (s.starts_with('\'') && s.ends_with('\''))
-    {
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
         s[1..s.len() - 1].to_string()
     } else {
         s.to_string()
@@ -788,13 +775,15 @@ pub async fn list_access_log(
     Json(
         entries
             .into_iter()
-            .map(|e| serde_json::json!({
-                "ip": e.ip,
-                "api_key_id": e.api_key_id,
-                "key": e.key,
-                "op": e.op,
-                "ts": e.ts.to_rfc3339(),
-            }))
+            .map(|e| {
+                serde_json::json!({
+                    "ip": e.ip,
+                    "api_key_id": e.api_key_id,
+                    "key": e.key,
+                    "op": e.op,
+                    "ts": e.ts.to_rfc3339(),
+                })
+            })
             .collect(),
     )
 }
@@ -868,14 +857,17 @@ pub async fn create_secret_request(
         .map(|v| serde_json::to_string(v).unwrap_or_default());
 
     sqlx::query!(
-        "INSERT INTO secret_requests (id, owner_id, owner_label, description, scope, key_prefix, required_keys)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
-        id, owner, email, body.description, body.scope, body.key_prefix, required_keys_json
+        "INSERT INTO secret_requests (id, owner_id, owner_label, description, key_prefix, required_keys)
+         VALUES (?, ?, ?, ?, ?, ?)",
+        id, owner, email, body.description, body.key_prefix, required_keys_json
     )
     .execute(&state.pool)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(CreateSecretRequestResponse { id })))
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateSecretRequestResponse { id }),
+    ))
 }
 
 pub async fn list_secret_requests(
@@ -885,7 +877,7 @@ pub async fn list_secret_requests(
     let owner = &auth.0.oidc_subject;
     let rows = sqlx::query_as!(
         SecretRequestRow,
-        "SELECT id, owner_label, description, scope, key_prefix, required_keys, status, created_at, fulfilled_at
+        "SELECT id, owner_label, description, key_prefix, required_keys, status, created_at, fulfilled_at
          FROM secret_requests WHERE owner_id = ? ORDER BY created_at DESC",
         owner
     )
@@ -903,7 +895,8 @@ pub async fn revoke_secret_request(
     let result = sqlx::query!(
         "UPDATE secret_requests SET status = 'revoked'
          WHERE id = ? AND owner_id = ? AND status = 'pending'",
-        id, owner
+        id,
+        owner
     )
     .execute(&state.pool)
     .await?;
@@ -922,7 +915,8 @@ pub async fn delete_secret_request(
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM secret_requests WHERE id = ? AND owner_id = ?",
-        id, owner
+        id,
+        owner
     )
     .execute(&state.pool)
     .await?;
@@ -971,7 +965,7 @@ pub async fn submit_secret_request(
     let mut tx = state.pool.begin().await?;
 
     let row = sqlx::query!(
-        "SELECT owner_id, scope, status, key_prefix, required_keys FROM secret_requests WHERE id = ?",
+        "SELECT owner_id, status, key_prefix, required_keys FROM secret_requests WHERE id = ?",
         id
     )
     .fetch_optional(&mut *tx)
@@ -985,7 +979,6 @@ pub async fn submit_secret_request(
     }
 
     let owner_id = row.owner_id;
-    let scope = row.scope;
     let prefix = row.key_prefix.as_deref().unwrap_or("").to_string();
 
     let required: Vec<String> = row
@@ -1019,8 +1012,12 @@ pub async fn submit_secret_request(
         .iter()
         .filter_map(|e| {
             let bare = e.key.trim().to_string();
-            if bare.is_empty() { return None; }
-            if bypass_keys.contains(bare.as_str()) { return None; }
+            if bare.is_empty() {
+                return None;
+            }
+            if bypass_keys.contains(bare.as_str()) {
+                return None;
+            }
             Some((format!("{}{}", prefix, bare), e.value.clone()))
         })
         .collect();
@@ -1031,7 +1028,8 @@ pub async fn submit_secret_request(
         let exists = sqlx::query_scalar!(
             r#"SELECT 1 as "x: i32" FROM kv_entries WHERE key = ? AND owner_id = ?
              AND (expires_at IS NULL OR expires_at > datetime('now'))"#,
-            final_key, owner_id
+            final_key,
+            owner_id
         )
         .fetch_optional(&mut *tx)
         .await?;
@@ -1052,8 +1050,10 @@ pub async fn submit_secret_request(
 
     for (final_key, value) in &entries_to_insert {
         sqlx::query!(
-            "INSERT INTO kv_entries (key, owner_id, value, scope) VALUES (?, ?, ?, ?)",
-            final_key, owner_id, value, scope
+            "INSERT INTO kv_entries (key, owner_id, value) VALUES (?, ?, ?)",
+            final_key,
+            owner_id,
+            value
         )
         .execute(&mut *tx)
         .await?;
@@ -1075,7 +1075,10 @@ pub async fn submit_secret_request(
             sqlx::query!(
                 "INSERT INTO faux_approvals (id, owner_id, secret_request_id, message)
                  VALUES (?, ?, ?, ?)",
-                fa_id, owner_id, id, msg
+                fa_id,
+                owner_id,
+                id,
+                msg
             )
             .execute(&mut *tx)
             .await?;
@@ -1111,7 +1114,8 @@ pub async fn dismiss_faux_approval(
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM faux_approvals WHERE id = ? AND owner_id = ?",
-        id, owner
+        id,
+        owner
     )
     .execute(&state.pool)
     .await?;

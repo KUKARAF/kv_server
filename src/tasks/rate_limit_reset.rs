@@ -6,8 +6,7 @@ pub async fn run(state: Arc<AppState>) {
     loop {
         let now = Utc::now();
         // Calculate seconds until next midnight UTC
-        let seconds_until_midnight = 86400
-            - (now.num_seconds_from_midnight() as i64);
+        let seconds_until_midnight = 86400 - (now.num_seconds_from_midnight() as i64);
         let sleep_secs = seconds_until_midnight.max(1) as u64;
 
         tokio::time::sleep(std::time::Duration::from_secs(sleep_secs)).await;

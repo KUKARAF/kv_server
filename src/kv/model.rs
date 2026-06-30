@@ -34,7 +34,6 @@ pub struct KvUpsertRequest {
 #[derive(Debug, Serialize)]
 pub struct KvMetaResponse {
     pub key: String,
-    pub scope: Option<String>,
     pub ttl_hours: Option<f64>,
     pub ttl_sliding: bool,
     pub expires_at: Option<String>,
@@ -59,11 +58,9 @@ pub fn compute_expires_at(ttl_hours: Option<f64>) -> Option<String> {
 pub fn is_expired(expires_at: &Option<String>) -> bool {
     match expires_at {
         None => false,
-        Some(s) => {
-            DateTime::parse_from_str(&format!("{} +0000", s), "%Y-%m-%d %H:%M:%S %z")
-                .map(|dt| dt.with_timezone(&Utc) <= Utc::now())
-                .unwrap_or(false)
-        }
+        Some(s) => DateTime::parse_from_str(&format!("{} +0000", s), "%Y-%m-%d %H:%M:%S %z")
+            .map(|dt| dt.with_timezone(&Utc) <= Utc::now())
+            .unwrap_or(false),
     }
 }
 
@@ -81,7 +78,6 @@ pub struct DeviceKvRecipient {
 #[derive(Debug, Deserialize)]
 pub struct DeviceKvWriteRequest {
     pub key: String,
-    pub scope: Option<String>,
     pub nonce: String,
     pub ciphertext: String,
     pub aad: String,

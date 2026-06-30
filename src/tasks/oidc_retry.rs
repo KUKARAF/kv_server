@@ -29,7 +29,10 @@ pub async fn run(state: Arc<AppState>) {
                 return;
             }
             Err(e) => {
-                tracing::warn!("OIDC retry failed, will try again in {}s: {e:#}", RETRY_INTERVAL.as_secs());
+                tracing::warn!(
+                    "OIDC retry failed, will try again in {}s: {e:#}",
+                    RETRY_INTERVAL.as_secs()
+                );
             }
         }
     }

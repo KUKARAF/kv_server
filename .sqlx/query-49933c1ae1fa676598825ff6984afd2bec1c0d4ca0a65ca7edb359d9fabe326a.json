@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT owner_id, scope, status, key_prefix, required_keys FROM secret_requests WHERE id = ?",
+  "query": "SELECT owner_id, status, key_prefix, required_keys FROM secret_requests WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -9,23 +9,18 @@
         "type_info": "Text"
       },
       {
-        "name": "scope",
+        "name": "status",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "status",
+        "name": "key_prefix",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "key_prefix",
-        "ordinal": 3,
-        "type_info": "Text"
-      },
-      {
         "name": "required_keys",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Text"
       }
     ],
@@ -34,11 +29,10 @@
     },
     "nullable": [
       false,
-      true,
       false,
       true,
       true
     ]
   },
-  "hash": "557f0cf86008085c25c42c0d31a0fe524526c38e18584e79d446353e46f60a70"
+  "hash": "49933c1ae1fa676598825ff6984afd2bec1c0d4ca0a65ca7edb359d9fabe326a"
 }

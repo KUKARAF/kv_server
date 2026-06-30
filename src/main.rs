@@ -4,17 +4,17 @@ mod config;
 mod db;
 mod devices;
 mod error;
-mod session_request;
 mod keys;
 mod kv;
 mod middleware;
 mod notify;
+mod session_request;
 mod shares;
 mod state;
 mod tasks;
-mod webauthn;
 #[cfg(test)]
 mod tests;
+mod webauthn;
 
 use anyhow::Result;
 use axum::{
@@ -96,7 +96,10 @@ async fn main() -> Result<()> {
         .nest("/api/admin/shares", shares::admin_router())
         .nest("/api/share", shares::public_router())
         .nest("/api/admin", admin::router())
-        .route("/api/collect/:id", get(admin::handlers::get_secret_request_public))
+        .route(
+            "/api/collect/:id",
+            get(admin::handlers::get_secret_request_public),
+        )
         .route(
             "/api/collect/:id/submit",
             post(admin::handlers::submit_secret_request),
@@ -107,7 +110,9 @@ async fn main() -> Result<()> {
         .route("/share", get(serve_share))
         .route("/collect", get(serve_collect))
         .route("/", get(serve_index))
-        .layer(axum_middleware::from_fn(middleware::security_headers::layer))
+        .layer(axum_middleware::from_fn(
+            middleware::security_headers::layer,
+        ))
         .layer(axum_middleware::from_fn_with_state(
             Arc::clone(&state),
             middleware::rate_limit::layer,
@@ -137,7 +142,10 @@ async fn health() -> &'static str {
 async fn healthz(
     axum::extract::State(state): axum::extract::State<Arc<state::AppState>>,
 ) -> Response<Body> {
-    match sqlx::query_scalar::<_, i64>("SELECT 1").fetch_one(&state.pool).await {
+    match sqlx::query_scalar::<_, i64>("SELECT 1")
+        .fetch_one(&state.pool)
+        .await
+    {
         Ok(_) => Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json")
@@ -148,7 +156,9 @@ async fn healthz(
             Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
                 .header("content-type", "application/json")
-                .body(Body::from(r#"{"status":"degraded","reason":"db unreachable"}"#))
+                .body(Body::from(
+                    r#"{"status":"degraded","reason":"db unreachable"}"#,
+                ))
                 .unwrap()
         }
     }

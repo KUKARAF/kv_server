@@ -1,9 +1,6 @@
 use crate::{
-    auth::middleware::AdminAuth,
-    error::AppError,
-    keys::generate::generate_api_key,
-    session_request::model::*,
-    state::AppState,
+    auth::middleware::AdminAuth, error::AppError, keys::generate::generate_api_key,
+    session_request::model::*, state::AppState,
 };
 use axum::{
     extract::{Path, State},
@@ -33,11 +30,18 @@ pub async fn create_request(
     .execute(&state.pool)
     .await?;
 
-    let url = format!("{}/admin/session-request.html?id={}", state.config.public_base_url, id);
+    let url = format!(
+        "{}/admin/session-request.html?id={}",
+        state.config.public_base_url, id
+    );
 
     Ok((
         StatusCode::CREATED,
-        Json(CreateSessionRequestResponse { id, url, expires_at }),
+        Json(CreateSessionRequestResponse {
+            id,
+            url,
+            expires_at,
+        }),
     ))
 }
 
@@ -152,16 +156,6 @@ pub async fn approve(
         key_hash,
         expires_offset,
         owner
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    let scope_id = Uuid::new_v4().to_string();
-    sqlx::query!(
-        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny)
-         VALUES (?, ?, '*', 'read,write,delete,list', 0)",
-        scope_id,
-        key_id
     )
     .execute(&mut *tx)
     .await?;

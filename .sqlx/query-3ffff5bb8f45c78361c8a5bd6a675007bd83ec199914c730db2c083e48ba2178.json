@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO api_key_allowed_keys (api_key_id, kv_key) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "3ffff5bb8f45c78361c8a5bd6a675007bd83ec199914c730db2c083e48ba2178"
+}

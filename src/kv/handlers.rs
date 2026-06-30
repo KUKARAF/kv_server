@@ -1,12 +1,12 @@
 use crate::{
     auth::middleware::AdminAuth,
     error::AppError,
-    keys::{
-        generate::{generate_emoji_sequence, hash_key},
-        scope::check_scope,
-    },
+    keys::generate::{generate_emoji_sequence, hash_key},
     kv::model::{compute_expires_at, DeviceKvWriteRequest, KvMetaResponse, KvUpsertRequest},
-    middleware::{api_key::ApiKeyAuth, rate_limit::extract_real_ip},
+    middleware::{
+        api_key::{check_kv_access, ApiKeyAuth},
+        rate_limit::extract_real_ip,
+    },
     state::{AccessLogEntry, AppState, ACCESS_LOG_CAP},
 };
 use axum::{
@@ -19,7 +19,13 @@ use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
 use uuid::Uuid;
 
-fn log_access(state: &AppState, headers: &HeaderMap, addr: SocketAddr, auth: &ApiKeyAuth, key: &str) {
+fn log_access(
+    state: &AppState,
+    headers: &HeaderMap,
+    addr: SocketAddr,
+    auth: &ApiKeyAuth,
+    key: &str,
+) {
     let ip = extract_real_ip(headers, addr.ip()).to_string();
     let entry = AccessLogEntry {
         ip,
@@ -64,7 +70,9 @@ pub async fn request_access(
     .ok_or(AppError::Unauthorized)?;
 
     if api_key.key_type != "approval_required" || api_key.status != "pending_approval" {
-        return Err(AppError::Forbidden("key is not awaiting approval".to_string()));
+        return Err(AppError::Forbidden(
+            "key is not awaiting approval".to_string(),
+        ));
     }
 
     // Cancel any existing pending requests so admin only sees the latest
@@ -84,7 +92,9 @@ pub async fn request_access(
     sqlx::query!(
         "INSERT INTO approval_requests (id, api_key_id, emoji_sequence, expires_at)
          VALUES (?, ?, ?, datetime('now', '+10 minutes'))",
-        id, api_key.id, emoji_hash
+        id,
+        api_key.id,
+        emoji_hash
     )
     .execute(&state.pool)
     .await?;
@@ -104,39 +114,58 @@ pub async fn get_entry(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<String, AppError> {
+    check_kv_access(&auth.allowed_keys, &key)?;
     log_access(&state, &headers, addr, &auth, &key);
-    let (value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext, device_encrypted) = if let Some(ref oid) = auth.owner_id {
-        let row = sqlx::query!(
-            r#"SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext,
+    let (value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext, device_encrypted) =
+        if let Some(ref oid) = auth.owner_id {
+            let row = sqlx::query!(
+                r#"SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext,
                       device_encrypted as "device_encrypted: bool"
                FROM kv_entries
                WHERE key = ? AND owner_id = ?
                  AND (expires_at IS NULL OR expires_at > datetime('now'))"#,
-            key, oid
-        )
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
-        (row.value, row.ttl_hours, row.ttl_sliding, row.expires_at, row.zt_ciphertext, row.device_encrypted)
-    } else {
-        // Open-access path — no owner filter
-        let row = sqlx::query!(
-            r#"SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext,
+                key,
+                oid
+            )
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
+            (
+                row.value,
+                row.ttl_hours,
+                row.ttl_sliding,
+                row.expires_at,
+                row.zt_ciphertext,
+                row.device_encrypted,
+            )
+        } else {
+            // Open-access path — no owner filter
+            let row = sqlx::query!(
+                r#"SELECT value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext,
                       device_encrypted as "device_encrypted: bool"
                FROM kv_entries
                WHERE key = ? AND open_access = 1
                  AND (expires_at IS NULL OR expires_at > datetime('now'))
                LIMIT 1"#,
-            key
-        )
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
-        (row.value, row.ttl_hours, row.ttl_sliding, row.expires_at, row.zt_ciphertext, row.device_encrypted)
-    };
+                key
+            )
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or(AppError::NotFound)?;
+            (
+                row.value,
+                row.ttl_hours,
+                row.ttl_sliding,
+                row.expires_at,
+                row.zt_ciphertext,
+                row.device_encrypted,
+            )
+        };
 
     if device_encrypted {
-        return Err(AppError::Forbidden("device-encrypted: fetch via /api/devices/<id>/kv/<key>".to_string()));
+        return Err(AppError::Forbidden(
+            "device-encrypted: fetch via /api/devices/<id>/kv/<key>".to_string(),
+        ));
     }
 
     // Zero Trust entries: plaintext never stored — client must use the WebAuthn flow.
@@ -150,7 +179,9 @@ pub async fn get_entry(
             let new_expires = compute_expires_at(Some(ttl_hours));
             sqlx::query!(
                 "UPDATE kv_entries SET expires_at = ? WHERE key = ? AND owner_id = ?",
-                new_expires, key, oid
+                new_expires,
+                key,
+                oid
             )
             .execute(&state.pool)
             .await?;
@@ -169,6 +200,7 @@ pub async fn upsert_entry(
     Path(key): Path<String>,
     Json(body): Json<KvUpsertRequest>,
 ) -> Result<StatusCode, AppError> {
+    check_kv_access(&auth.allowed_keys, &key)?;
     log_access(&state, &headers, addr, &auth, &key);
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
 
@@ -191,7 +223,9 @@ pub async fn upsert_entry(
         ];
         for (name, field) in &required {
             if field.is_none() {
-                return Err(AppError::Forbidden(format!("missing zero trust field: {name}")));
+                return Err(AppError::Forbidden(format!(
+                    "missing zero trust field: {name}"
+                )));
             }
         }
     }
@@ -217,9 +251,19 @@ pub async fn upsert_entry(
              zt_aad         = excluded.zt_aad,
              zt_prf_salt    = excluded.zt_prf_salt,
              zt_credential_id = excluded.zt_credential_id",
-        key, owner_id, body.value, body.ttl_hours, ttl_sliding, expires_at, open_access,
-        body.zt_ciphertext, body.zt_wrapped_dek, body.zt_nonce, body.zt_aad,
-        body.zt_prf_salt, body.zt_credential_id
+        key,
+        owner_id,
+        body.value,
+        body.ttl_hours,
+        ttl_sliding,
+        expires_at,
+        open_access,
+        body.zt_ciphertext,
+        body.zt_wrapped_dek,
+        body.zt_nonce,
+        body.zt_aad,
+        body.zt_prf_salt,
+        body.zt_credential_id
     )
     .execute(&state.pool)
     .await?;
@@ -234,12 +278,14 @@ pub async fn delete_entry(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    check_kv_access(&auth.allowed_keys, &key)?;
     log_access(&state, &headers, addr, &auth, &key);
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
 
     let result = sqlx::query!(
         "DELETE FROM kv_entries WHERE key = ? AND owner_id = ?",
-        key, owner_id
+        key,
+        owner_id
     )
     .execute(&state.pool)
     .await?;
@@ -265,38 +311,13 @@ pub async fn list_entries(
         Some(prefix) => {
             let pattern = format!("{}%", prefix);
             sqlx::query!(
-                r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
+                r#"SELECT key, ttl_hours, ttl_sliding as "ttl_sliding: bool",
                         expires_at, open_access as "open_access: bool", created_at
                  FROM kv_entries
                  WHERE key LIKE ? AND owner_id = ?
                    AND (expires_at IS NULL OR expires_at > datetime('now'))
                  ORDER BY key"#,
-                pattern, owner_id
-            )
-            .fetch_all(&state.pool)
-            .await?
-            .into_iter()
-            .map(|r| KvMetaResponse {
-                key: r.key,
-                scope: r.scope,
-                ttl_hours: r.ttl_hours,
-                ttl_sliding: r.ttl_sliding,
-                expires_at: r.expires_at,
-                open_access: r.open_access,
-                created_at: r.created_at,
-                device_encrypted: None,
-                recipient_device_ids: None,
-            })
-            .collect()
-        }
-        None => {
-            sqlx::query!(
-                r#"SELECT key, scope, ttl_hours, ttl_sliding as "ttl_sliding: bool",
-                        expires_at, open_access as "open_access: bool", created_at
-                 FROM kv_entries
-                 WHERE owner_id = ?
-                   AND (expires_at IS NULL OR expires_at > datetime('now'))
-                 ORDER BY key"#,
+                pattern,
                 owner_id
             )
             .fetch_all(&state.pool)
@@ -304,7 +325,6 @@ pub async fn list_entries(
             .into_iter()
             .map(|r| KvMetaResponse {
                 key: r.key,
-                scope: r.scope,
                 ttl_hours: r.ttl_hours,
                 ttl_sliding: r.ttl_sliding,
                 expires_at: r.expires_at,
@@ -315,13 +335,33 @@ pub async fn list_entries(
             })
             .collect()
         }
+        None => sqlx::query!(
+            r#"SELECT key, ttl_hours, ttl_sliding as "ttl_sliding: bool",
+                        expires_at, open_access as "open_access: bool", created_at
+                 FROM kv_entries
+                 WHERE owner_id = ?
+                   AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 ORDER BY key"#,
+            owner_id
+        )
+        .fetch_all(&state.pool)
+        .await?
+        .into_iter()
+        .map(|r| KvMetaResponse {
+            key: r.key,
+            ttl_hours: r.ttl_hours,
+            ttl_sliding: r.ttl_sliding,
+            expires_at: r.expires_at,
+            open_access: r.open_access,
+            created_at: r.created_at,
+            device_encrypted: None,
+            recipient_device_ids: None,
+        })
+        .collect(),
     };
 
-    // When using an API key, filter results to only entries within allowed scopes
-    let rows = if auth.api_key_id.is_some() && !auth.allowed_scopes.is_empty() {
-        rows.into_iter()
-            .filter(|e| check_scope(&auth.allowed_scopes, e.scope.as_deref(), "list"))
-            .collect()
+    let rows = if let Some(ref keys) = auth.allowed_keys {
+        rows.into_iter().filter(|e| keys.contains(&e.key)).collect()
     } else {
         rows
     };
@@ -334,10 +374,10 @@ pub async fn list_entries(
 /// Claims embedded in the short-lived ZT JWT issued after a successful WebAuthn assertion.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ZtClaims {
-    pub sub: String,     // owner_id
-    pub kv_key: String,  // the KV key this token is scoped to
-    pub jti: String,     // unique token ID (for single-use enforcement)
-    pub exp: usize,      // Unix timestamp expiry
+    pub sub: String,    // owner_id
+    pub kv_key: String, // the KV key this token is scoped to
+    pub jti: String,    // unique token ID (for single-use enforcement)
+    pub exp: usize,     // Unix timestamp expiry
 }
 
 #[derive(Serialize)]
@@ -375,7 +415,9 @@ pub async fn get_zt_payload(
 
     // Enforce: token must be scoped to exactly this key
     if claims.kv_key != key {
-        return Err(AppError::Forbidden("token scoped to a different key".to_string()));
+        return Err(AppError::Forbidden(
+            "token scoped to a different key".to_string(),
+        ));
     }
 
     // Enforce single-use: reject if jti already consumed
@@ -384,7 +426,8 @@ pub async fn get_zt_payload(
         claims.jti
     )
     .fetch_one(&state.pool)
-    .await? != 0;
+    .await?
+        != 0;
 
     if already_used {
         return Err(AppError::Forbidden("token already used".to_string()));
@@ -396,7 +439,8 @@ pub async fn get_zt_payload(
         .unwrap_or_else(|| "1970-01-01 00:00:00".to_string());
     sqlx::query!(
         "INSERT OR IGNORE INTO zt_used_tokens (jti, expires_at) VALUES (?, ?)",
-        claims.jti, exp_str
+        claims.jti,
+        exp_str
     )
     .execute(&state.pool)
     .await?;
@@ -408,7 +452,8 @@ pub async fn get_zt_payload(
          WHERE key = ? AND owner_id = ?
            AND zt_ciphertext IS NOT NULL
            AND (expires_at IS NULL OR expires_at > datetime('now'))",
-        key, claims.sub
+        key,
+        claims.sub
     )
     .fetch_optional(&state.pool)
     .await?
@@ -435,7 +480,9 @@ pub async fn write_device_kv(
     let owner_id = &auth.0.oidc_subject;
 
     if body.recipients.is_empty() {
-        return Err(AppError::Forbidden("at least one recipient is required".to_string()));
+        return Err(AppError::Forbidden(
+            "at least one recipient is required".to_string(),
+        ));
     }
 
     let mut tx = state.pool.begin().await?;
@@ -449,7 +496,11 @@ pub async fn write_device_kv(
              ciphertext = excluded.ciphertext,
              aad        = excluded.aad,
              created_at = datetime('now')",
-        body.key, owner_id, body.nonce, body.ciphertext, body.aad
+        body.key,
+        owner_id,
+        body.nonce,
+        body.ciphertext,
+        body.aad
     )
     .execute(&mut *tx)
     .await?;
@@ -457,7 +508,8 @@ pub async fn write_device_kv(
     // Remove existing recipients for this key (re-encrypt replaces all)
     sqlx::query!(
         "DELETE FROM device_kv_recipients WHERE kv_key = ? AND owner_id = ?",
-        body.key, owner_id
+        body.key,
+        owner_id
     )
     .execute(&mut *tx)
     .await?;
@@ -477,12 +529,12 @@ pub async fn write_device_kv(
 
     // Mark kv_entries row as device-encrypted (create if missing)
     sqlx::query!(
-        "INSERT INTO kv_entries (key, owner_id, value, scope, device_encrypted)
-         VALUES (?, ?, '', ?, 1)
+        "INSERT INTO kv_entries (key, owner_id, value, device_encrypted)
+         VALUES (?, ?, '', 1)
          ON CONFLICT(key, owner_id) DO UPDATE SET
-             device_encrypted = 1,
-             scope = excluded.scope",
-        body.key, owner_id, body.scope
+             device_encrypted = 1",
+        body.key,
+        owner_id
     )
     .execute(&mut *tx)
     .await?;
@@ -492,4 +544,3 @@ pub async fn write_device_kv(
     tracing::info!(owner_id = %owner_id, key = %body.key, recipients = body.recipients.len(), "device-encrypted KV written");
     Ok(StatusCode::CREATED)
 }
-

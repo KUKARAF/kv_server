@@ -16,7 +16,6 @@ pub fn hash_key(plaintext: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
-
 // Generated at compile time from admin/emoji.json — refresh with .tools/get_emojis.sh
 include!(concat!(env!("OUT_DIR"), "/emoji_pool.rs"));
 
@@ -24,5 +23,9 @@ pub fn generate_emoji_sequence() -> String {
     let mut rng = rand::thread_rng();
     let count = 3;
     let indices = rand::seq::index::sample(&mut rng, EMOJI_POOL.len(), count);
-    indices.iter().map(|i| EMOJI_POOL[i]).collect::<Vec<_>>().join("")
+    indices
+        .iter()
+        .map(|i| EMOJI_POOL[i])
+        .collect::<Vec<_>>()
+        .join("")
 }

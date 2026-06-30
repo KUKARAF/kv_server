@@ -34,7 +34,10 @@ pub enum AppError {
 
     // 403 with emoji sequence for approval_required keys
     #[error("pending approval")]
-    PendingApproval { confirm: String, approver: Option<String> },
+    PendingApproval {
+        confirm: String,
+        approver: Option<String>,
+    },
 
     // 403 for zero_trust entries — client must complete WebAuthn ceremony
     #[error("zero trust required")]
@@ -61,11 +64,19 @@ impl IntoResponse for AppError {
         }
 
         if matches!(self, AppError::RateLimited) {
-            return (StatusCode::TOO_MANY_REQUESTS, Json(json!({ "error": "rate limit exceeded" }))).into_response();
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({ "error": "rate limit exceeded" })),
+            )
+                .into_response();
         }
 
         if matches!(self, AppError::Unauthorized) {
-            let mut response = (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response();
+            let mut response = (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "unauthorized" })),
+            )
+                .into_response();
             response.extensions_mut().insert(AuthFailed);
             return response;
         }
@@ -101,7 +112,8 @@ impl IntoResponse for AppError {
             | AppError::KeyConflict(_) => unreachable!(),
             AppError::Internal(e) => {
                 tracing::error!("internal error: {e:#}");
-                return Redirect::to("https://static.osmosis.page/osmosis/500.html").into_response();
+                return Redirect::to("https://static.osmosis.page/osmosis/500.html")
+                    .into_response();
             }
         };
 

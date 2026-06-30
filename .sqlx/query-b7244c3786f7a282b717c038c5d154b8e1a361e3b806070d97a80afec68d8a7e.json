@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT key FROM kv_entries\n         WHERE owner_id = ?\n           AND (expires_at IS NULL OR expires_at > datetime('now'))\n         ORDER BY key",
+  "describe": {
+    "columns": [
+      {
+        "name": "key",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b7244c3786f7a282b717c038c5d154b8e1a361e3b806070d97a80afec68d8a7e"
+}

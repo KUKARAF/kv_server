@@ -1,8 +1,6 @@
 <section>
   <h2>API Keys</h2>
 
-  <datalist id="key-scopes-list"></datalist>
-
   <form id="create-key-form" onsubmit="return createKey(event)" class="panel">
     <h3>Create key</h3>
     <div class="form-row-2">
@@ -18,21 +16,14 @@
     </div>
     <label>Expires at (optional) <input name="expires_at" type="datetime-local"></label>
 
-    <div id="scope-rules-wrap">
-      <p class="label-sm">Scope rules</p>
-      <table class="scope-table">
-        <thead><tr><th>Key pattern</th><th>R</th><th>W</th><th>Deny</th><th></th></tr></thead>
-        <tbody id="scope-rules">
-          <tr class="scope-row">
-            <td><input name="key_pattern" list="key-scopes-list" placeholder="osmosis/deployment"></td>
-            <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
-            <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
-            <td class="ops-cell"><input type="checkbox" name="ops_deny"></td>
-            <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
-          </tr>
-        </tbody>
-      </table>
-      <button type="button" class="btn-secondary" onclick="addScope()">+ Add scope rule</button>
+    <div id="allowed-keys-wrap">
+      <p class="label-sm">Allowed keys <span class="hint">(leave empty to allow no keys)</span></p>
+      <div id="allowed-keys-tags" class="tag-input-wrap"></div>
+      <div class="tag-add-row">
+        <input id="allowed-key-input" list="kv-keys-list" placeholder="Type or select a key name…">
+        <datalist id="kv-keys-list"></datalist>
+        <button type="button" class="btn-secondary" onclick="addAllowedKey()">+ Add</button>
+      </div>
     </div>
 
     <button type="submit">Create</button>
@@ -50,47 +41,48 @@
 </section>
 
 <script>
-  async function loadKeyScopes() {
-    const resp = await fetch('/api/admin/kv/scopes');
+  async function loadKvKeys() {
+    const resp = await fetch('/api/admin/kv/keys');
     if (!resp.ok) return;
-    const scopes = await resp.json();
-    const dl = document.getElementById('key-scopes-list');
-    dl.innerHTML = scopes.map(s => `<option value="${esc(s)}">`).join('');
+    const keys = await resp.json();
+    const dl = document.getElementById('kv-keys-list');
+    dl.innerHTML = keys.map(k => `<option value="${esc(k)}">`).join('');
   }
-  loadKeyScopes();
+  loadKvKeys();
 
-  function addScope() {
-    const tr = document.createElement('tr');
-    tr.className = 'scope-row';
-    tr.innerHTML = `
-      <td><input name="key_pattern" list="key-scopes-list" placeholder="osmosis/deployment"></td>
-      <td class="ops-cell"><input type="checkbox" name="ops_read" checked></td>
-      <td class="ops-cell"><input type="checkbox" name="ops_write"></td>
-      <td class="ops-cell"><input type="checkbox" name="ops_deny"></td>
-      <td><button type="button" class="btn-icon" onclick="this.closest('.scope-row').remove()">✕</button></td>
-    `;
-    document.getElementById('scope-rules').appendChild(tr);
+  function addAllowedKey() {
+    const input = document.getElementById('allowed-key-input');
+    const val = input.value.trim();
+    if (!val) return;
+    const wrap = document.getElementById('allowed-keys-tags');
+    if (Array.from(wrap.querySelectorAll('[data-key]')).some(t => t.dataset.key === val)) {
+      input.value = '';
+      return;
+    }
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.dataset.key = val;
+    tag.innerHTML = `${esc(val)} <button type="button" onclick="this.parentElement.remove()">✕</button>`;
+    wrap.appendChild(tag);
+    input.value = '';
   }
+
+  document.getElementById('allowed-key-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); addAllowedKey(); }
+  });
 
   async function createKey(e) {
     e.preventDefault();
     const form = e.target;
-    const scopes = Array.from(form.querySelectorAll('#scope-rules .scope-row'))
-      .map(row => {
-        const pattern = row.querySelector('[name=key_pattern]').value.trim();
-        const r = row.querySelector('[name=ops_read]').checked;
-        const w = row.querySelector('[name=ops_write]').checked;
-        const deny = row.querySelector('[name=ops_deny]').checked;
-        const ops = [r && 'read', w && 'write'].filter(Boolean).join(',');
-        return { key_pattern: pattern, ops, deny };
-      })
-      .filter(s => s.key_pattern && s.ops);
+    const allowedKeys = Array.from(
+      document.getElementById('allowed-keys-tags').querySelectorAll('[data-key]')
+    ).map(t => t.dataset.key);
 
     const body = {
       label: form.label.value.trim(),
       key_type: form.key_type.value,
       expires_at: form.expires_at.value || null,
-      scopes,
+      allowed_keys: allowedKeys,
     };
 
     const resp = await fetch('/api/admin/keys', {
@@ -106,6 +98,7 @@
     reveal.classList.remove('hidden');
 
     form.reset();
+    document.getElementById('allowed-keys-tags').innerHTML = '';
     htmx.trigger(document.getElementById('keys-list'), 'load');
     return false;
   }
@@ -122,7 +115,7 @@
     const inactive = ['revoked', 'used'];
     if (!keys.length) { el.innerHTML = '<p>No keys yet.</p>'; return; }
     el.innerHTML = `<table>
-      <thead><tr><th>Label</th><th>Type</th><th>Status</th><th>Scopes</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
+      <thead><tr><th>Label</th><th>Type</th><th>Status</th><th>Allowed keys</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
       <tbody>${keys.map(k => {
         const isInactive = inactive.includes(k.status);
         const action = isInactive
@@ -135,14 +128,18 @@
                      hx-swap="none"
                      hx-confirm="Revoke this key?"
                      hx-on::after-request="htmx.trigger(document.getElementById('keys-list'), 'load')">Revoke</button>`;
+        const keyType = k.key_type;
+        const allowedKeysCell = (keyType === 'session' || keyType === 'approval')
+          ? '<em>all</em>'
+          : k.allowed_keys.length
+            ? `<small>${k.allowed_keys.map(esc).join('<br>')}</small>`
+            : '<small style="color:#888">none</small>';
         return `
         <tr>
           <td>${esc(k.label)}</td>
           <td><span class="badge badge-${k.key_type}">${esc(k.key_type)}</span></td>
           <td><span class="badge badge-${k.status}">${esc(k.status)}</span></td>
-          <td><small>${k.scopes.map(s => s.deny
-            ? `<span style="color:#c0392b">deny:${esc(s.scope)} [${esc(s.ops)}]</span>`
-            : `${esc(s.scope)} [${esc(s.ops)}]`).join('<br>')}</small></td>
+          <td>${allowedKeysCell}</td>
           <td>${k.expires_at ? esc(k.expires_at) : '—'}</td>
           <td>${k.last_used_at ? esc(k.last_used_at) : '—'}</td>
           <td>${action}</td>

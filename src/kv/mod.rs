@@ -18,4 +18,3 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/:key", put(handlers::upsert_entry))
         .route("/:key", delete(handlers::delete_entry))
 }
-

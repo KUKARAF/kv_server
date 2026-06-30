@@ -24,15 +24,19 @@ pub async fn create_share(
         let secs = (h * 3600.0) as i64;
         format!(
             "{}",
-            (chrono::Utc::now() + chrono::Duration::seconds(secs))
-                .format("%Y-%m-%d %H:%M:%S")
+            (chrono::Utc::now() + chrono::Duration::seconds(secs)).format("%Y-%m-%d %H:%M:%S")
         )
     });
 
     sqlx::query!(
         "INSERT INTO one_time_shares (id, owner_id, kv_key, ciphertext, nonce, expires_at)
          VALUES (?, ?, ?, ?, ?, ?)",
-        id, owner_id, body.kv_key, body.ciphertext, body.nonce, expires_at
+        id,
+        owner_id,
+        body.kv_key,
+        body.ciphertext,
+        body.nonce,
+        expires_at
     )
     .execute(&state.pool)
     .await?;

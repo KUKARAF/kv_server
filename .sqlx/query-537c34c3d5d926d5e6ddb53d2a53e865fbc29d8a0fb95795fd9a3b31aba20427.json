@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, api_key_id, scope, ops, deny as \"deny: bool\" FROM api_key_scopes WHERE api_key_id = ?",
+  "query": "SELECT id, status, expires_at, owner_id\n         FROM api_keys\n         WHERE key_hash = ? AND type = 'session'",
   "describe": {
     "columns": [
       {
@@ -9,24 +9,19 @@
         "type_info": "Text"
       },
       {
-        "name": "api_key_id",
+        "name": "status",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "scope",
+        "name": "expires_at",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "ops",
+        "name": "owner_id",
         "ordinal": 3,
         "type_info": "Text"
-      },
-      {
-        "name": "deny: bool",
-        "ordinal": 4,
-        "type_info": "Int64"
       }
     ],
     "parameters": {
@@ -35,10 +30,9 @@
     "nullable": [
       false,
       false,
-      false,
-      false,
+      true,
       false
     ]
   },
-  "hash": "2b9ff85318354ef1e41d3cdaaf7c90e3919d4f39e1b10df4eddeecd8a58bb165"
+  "hash": "537c34c3d5d926d5e6ddb53d2a53e865fbc29d8a0fb95795fd9a3b31aba20427"
 }

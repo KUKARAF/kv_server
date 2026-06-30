@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO kv_entries (key, owner_id, value) VALUES (?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "a512ac68d9b8c24b8c5e0b98441574262a669c02d75c4bb85d79478d736ffd8e"
+}

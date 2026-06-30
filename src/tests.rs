@@ -1,10 +1,10 @@
-use crate::{config::Config, devices, keys::generate::generate_api_key, kv, middleware, shares, state::AppState};
+use crate::{
+    config::Config, devices, keys::generate::generate_api_key, kv, middleware, shares,
+    state::AppState,
+};
 use axum::{
-    body::Body,
-    extract::connect_info::MockConnectInfo,
-    http::Request,
-    middleware as axum_middleware,
-    Router,
+    body::Body, extract::connect_info::MockConnectInfo, http::Request,
+    middleware as axum_middleware, Router,
 };
 use rstest::rstest;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 const TEST_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 1));
 const TEST_OWNER: &str = "test-owner";
-const SCOPED_KEY: &str = "scoped-key";
+const RESTRICTED_KEY: &str = "scoped-key";
 const OPEN_KEY: &str = "open-key";
 
 fn test_config() -> Config {
@@ -57,7 +57,9 @@ async fn build_test_app() -> (Router, Arc<AppState>) {
         .nest("/kv", kv::router())
         .nest("/api/devices", devices::router())
         .nest("/api/admin/devices", devices::admin_router())
-        .layer(axum_middleware::from_fn(middleware::security_headers::layer))
+        .layer(axum_middleware::from_fn(
+            middleware::security_headers::layer,
+        ))
         .layer(axum_middleware::from_fn_with_state(
             Arc::clone(&state),
             middleware::rate_limit::layer,
@@ -78,14 +80,12 @@ fn rate_count(state: &AppState) -> u32 {
 
 async fn block_count(pool: &SqlitePool) -> i64 {
     let ip_str = TEST_IP.to_string();
-    sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(failed_count, 0) FROM blocked_ips WHERE ip = ?",
-    )
-    .bind(&ip_str)
-    .fetch_optional(pool)
-    .await
-    .unwrap()
-    .unwrap_or(0)
+    sqlx::query_scalar::<_, i64>("SELECT COALESCE(failed_count, 0) FROM blocked_ips WHERE ip = ?")
+        .bind(&ip_str)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+        .unwrap_or(0)
 }
 
 async fn seed_open_access_entry(pool: &SqlitePool) {
@@ -98,15 +98,13 @@ async fn seed_open_access_entry(pool: &SqlitePool) {
     .unwrap();
 }
 
-async fn seed_scoped_entry(pool: &SqlitePool) {
-    sqlx::query(
-        "INSERT INTO kv_entries (key, owner_id, value, scope) VALUES (?, ?, 'secret', 'restricted')",
-    )
-    .bind(SCOPED_KEY)
-    .bind(TEST_OWNER)
-    .execute(pool)
-    .await
-    .unwrap();
+async fn seed_restricted_entry(pool: &SqlitePool) {
+    sqlx::query("INSERT INTO kv_entries (key, owner_id, value) VALUES (?, ?, 'secret')")
+        .bind(RESTRICTED_KEY)
+        .bind(TEST_OWNER)
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 async fn insert_session_key(pool: &SqlitePool, status: &str, expires_at: Option<&str>) -> String {
@@ -131,7 +129,7 @@ async fn insert_api_key(
     pool: &SqlitePool,
     status: &str,
     expires_at: Option<&str>,
-    scope: &str,
+    allowed_keys: &[&str],
 ) -> String {
     let (plaintext, hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();
@@ -148,16 +146,16 @@ async fn insert_api_key(
     .await
     .unwrap();
 
-    let scope_id = Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops) VALUES (?, ?, ?, 'read')",
-    )
-    .bind(&scope_id)
-    .bind(&id)
-    .bind(scope)
-    .execute(pool)
-    .await
-    .unwrap();
+    for kv_key in allowed_keys {
+        sqlx::query(
+            "INSERT OR IGNORE INTO api_key_allowed_keys (api_key_id, kv_key) VALUES (?, ?)",
+        )
+        .bind(&id)
+        .bind(kv_key)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
 
     plaintext
 }
@@ -200,7 +198,7 @@ enum Cred {
     ApiKeyValid,
     ApiKeyExpired,
     ApiKeyRevoked,
-    ApiKeyWrongScope,
+    ApiKeyNoAccess,
 }
 
 async fn resolve_cred(cred: Cred, pool: &SqlitePool) -> (Option<String>, Option<String>) {
@@ -208,21 +206,26 @@ async fn resolve_cred(cred: Cred, pool: &SqlitePool) -> (Option<String>, Option<
         Cred::None => (None, None),
         Cred::BearerUnknown => (Some("kv_notindatabaseatall".to_string()), None),
         Cred::BearerValid => (Some(insert_session_key(pool, "active", None).await), None),
-        Cred::BearerExpired => {
-            (Some(insert_session_key(pool, "active", Some("2020-01-01 00:00:00")).await), None)
-        }
+        Cred::BearerExpired => (
+            Some(insert_session_key(pool, "active", Some("2020-01-01 00:00:00")).await),
+            None,
+        ),
         Cred::BearerRevoked => (Some(insert_session_key(pool, "revoked", None).await), None),
         Cred::ApiKeyUnknown => (None, Some("kv_notindatabaseatall".to_string())),
-        Cred::ApiKeyValid => (None, Some(insert_api_key(pool, "active", None, "*").await)),
+        Cred::ApiKeyValid => (
+            None,
+            Some(insert_api_key(pool, "active", None, &["protected-key"]).await),
+        ),
         Cred::ApiKeyExpired => (
             None,
-            Some(insert_api_key(pool, "active", Some("2020-01-01 00:00:00"), "*").await),
+            Some(insert_api_key(pool, "active", Some("2020-01-01 00:00:00"), &[]).await),
         ),
-        Cred::ApiKeyRevoked => (None, Some(insert_api_key(pool, "revoked", None, "*").await)),
-        // scope 'allowed' does not cover kv entry scope 'restricted'
-        Cred::ApiKeyWrongScope => {
-            (None, Some(insert_api_key(pool, "active", None, "allowed").await))
-        }
+        Cred::ApiKeyRevoked => (None, Some(insert_api_key(pool, "revoked", None, &[]).await)),
+        // token allowed to access "other-key" but not RESTRICTED_KEY ("scoped-key")
+        Cred::ApiKeyNoAccess => (
+            None,
+            Some(insert_api_key(pool, "active", None, &["other-key"]).await),
+        ),
     }
 }
 
@@ -231,17 +234,17 @@ async fn resolve_cred(cred: Cred, pool: &SqlitePool) -> (Option<String>, Option<
 /// Each case encodes: scenario number, request path, credential kind,
 /// whether the rate counter should increment, whether the block counter should increment.
 #[rstest]
-#[case(1,  "/kv/protected-key", Cred::None,           true,  true )]
-#[case(2,  "/kv/protected-key", Cred::BearerUnknown,  false, false)]
-#[case(3,  "/kv/protected-key", Cred::BearerValid,    false, false)]
-#[case(4,  "/kv/protected-key", Cred::BearerExpired,  false, false)]
-#[case(5,  "/kv/protected-key", Cred::BearerRevoked,  false, true )]
-#[case(6,  "/kv/protected-key", Cred::ApiKeyUnknown,  false, true )]
-#[case(7,  "/kv/protected-key", Cred::ApiKeyValid,    false, false)]
-#[case(8,  "/kv/protected-key", Cred::ApiKeyExpired,  false, true )]
-#[case(9,  "/kv/protected-key", Cred::ApiKeyRevoked,  false, true )]
-#[case(10, "/kv/scoped-key",    Cred::ApiKeyWrongScope, false, false)]
-#[case(11, "/kv/open-key",      Cred::None,           false, false)]
+#[case(1, "/kv/protected-key", Cred::None, true, true)]
+#[case(2, "/kv/protected-key", Cred::BearerUnknown, false, false)]
+#[case(3, "/kv/protected-key", Cred::BearerValid, false, false)]
+#[case(4, "/kv/protected-key", Cred::BearerExpired, false, false)]
+#[case(5, "/kv/protected-key", Cred::BearerRevoked, false, true)]
+#[case(6, "/kv/protected-key", Cred::ApiKeyUnknown, false, true)]
+#[case(7, "/kv/protected-key", Cred::ApiKeyValid, false, false)]
+#[case(8, "/kv/protected-key", Cred::ApiKeyExpired, false, true)]
+#[case(9, "/kv/protected-key", Cred::ApiKeyRevoked, false, true)]
+#[case(10, "/kv/scoped-key", Cred::ApiKeyNoAccess, false, false)]
+#[case(11, "/kv/open-key", Cred::None, false, false)]
 #[tokio::test]
 async fn auth_counter_behaviour(
     #[case] scenario: u8,
@@ -254,7 +257,7 @@ async fn auth_counter_behaviour(
     let pool = &state.pool;
 
     seed_open_access_entry(pool).await;
-    seed_scoped_entry(pool).await;
+    seed_restricted_entry(pool).await;
 
     let (bearer, api_key) = resolve_cred(cred, pool).await;
     let req = get_req(path, bearer, api_key);
@@ -271,13 +274,21 @@ async fn auth_counter_behaviour(
         rate > 0,
         expect_rate_inc,
         "scenario {scenario}: rate counter expected {}, got {rate}",
-        if expect_rate_inc { "increment" } else { "no change" }
+        if expect_rate_inc {
+            "increment"
+        } else {
+            "no change"
+        }
     );
     assert_eq!(
         block > 0,
         expect_block_inc,
         "scenario {scenario}: block counter expected {}, got {block}",
-        if expect_block_inc { "increment" } else { "no change" }
+        if expect_block_inc {
+            "increment"
+        } else {
+            "no change"
+        }
     );
 }
 
@@ -287,13 +298,25 @@ async fn auth_counter_behaviour(
 /// Authenticated requests reach the handler and return the expected status.
 #[rstest]
 // ── unauthenticated → 401 ───────────────────────────────────────────────────
-#[case("POST",   "/api/devices",                   Some(r#"{"name":"t","public_key":"dGVzdA=="}"#), false, 401)]
-#[case("GET",    "/api/admin/devices",             None,                                             false, 401)]
-#[case("DELETE", "/api/admin/devices/nonexistent", None,                                             false, 401)]
+#[case(
+    "POST",
+    "/api/devices",
+    Some(r#"{"name":"t","public_key":"dGVzdA=="}"#),
+    false,
+    401
+)]
+#[case("GET", "/api/admin/devices", None, false, 401)]
+#[case("DELETE", "/api/admin/devices/nonexistent", None, false, 401)]
 // ── authenticated → handler response ────────────────────────────────────────
-#[case("POST",   "/api/devices",                   Some(r#"{"name":"t","public_key":"dGVzdA=="}"#), true,  201)]
-#[case("GET",    "/api/admin/devices",             None,                                             true,  200)]
-#[case("DELETE", "/api/admin/devices/nonexistent", None,                                             true,  404)]
+#[case(
+    "POST",
+    "/api/devices",
+    Some(r#"{"name":"t","public_key":"dGVzdA=="}"#),
+    true,
+    201
+)]
+#[case("GET", "/api/admin/devices", None, true, 200)]
+#[case("DELETE", "/api/admin/devices/nonexistent", None, true, 404)]
 #[tokio::test]
 async fn endpoint_auth(
     #[case] method: &str,
@@ -331,7 +354,10 @@ async fn endpoint_auth(
 /// Step 3d – a failed claim (wrong id) leaves the real share untouched
 mod share_tests {
     use super::*;
-    use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+    use aes_gcm::{
+        aead::{Aead, KeyInit},
+        Aes256Gcm, Nonce,
+    };
     use axum::body::to_bytes;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use rand::RngCore;
@@ -383,7 +409,7 @@ mod share_tests {
 
     fn decrypt_value(fixture: &Fixture, ciphertext_b64: &str, nonce_b64: &str) -> String {
         let ct = URL_SAFE_NO_PAD.decode(ciphertext_b64).unwrap();
-        let n  = URL_SAFE_NO_PAD.decode(nonce_b64).unwrap();
+        let n = URL_SAFE_NO_PAD.decode(nonce_b64).unwrap();
         let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&fixture.key_bytes);
         let plaintext = Aes256Gcm::new(key)
             .decrypt(Nonce::from_slice(&n), ct.as_slice())
@@ -440,13 +466,11 @@ mod share_tests {
     }
 
     async fn share_row_exists(pool: &SqlitePool, share_id: &str) -> bool {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM one_time_shares WHERE id = ?",
-        )
-        .bind(share_id)
-        .fetch_one(pool)
-        .await
-        .unwrap()
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM one_time_shares WHERE id = ?")
+            .bind(share_id)
+            .fetch_one(pool)
+            .await
+            .unwrap()
             > 0
     }
 
@@ -482,7 +506,11 @@ mod share_tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status().as_u16(), 401, "unauthenticated create must return 401");
+        assert_eq!(
+            resp.status().as_u16(),
+            401,
+            "unauthenticated create must return 401"
+        );
     }
 
     /// Step 2: DB must store the encrypted blob, not the raw plaintext.
@@ -494,21 +522,19 @@ mod share_tests {
         let f = encrypt_value(plaintext);
         let id = post_share(&app, &token, "MY_KEY", &f).await;
 
-        let stored_ciphertext = sqlx::query_scalar::<_, String>(
-            "SELECT ciphertext FROM one_time_shares WHERE id = ?",
-        )
-        .bind(&id)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+        let stored_ciphertext =
+            sqlx::query_scalar::<_, String>("SELECT ciphertext FROM one_time_shares WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
 
-        let stored_nonce = sqlx::query_scalar::<_, String>(
-            "SELECT nonce FROM one_time_shares WHERE id = ?",
-        )
-        .bind(&id)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap();
+        let stored_nonce =
+            sqlx::query_scalar::<_, String>("SELECT nonce FROM one_time_shares WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
 
         assert_ne!(
             stored_ciphertext, plaintext,
@@ -544,7 +570,10 @@ mod share_tests {
             json["ciphertext"].as_str().unwrap(),
             json["nonce"].as_str().unwrap(),
         );
-        assert_eq!(recovered, plaintext, "decrypted value must match original plaintext");
+        assert_eq!(
+            recovered, plaintext,
+            "decrypted value must match original plaintext"
+        );
     }
 
     /// Step 3b: Share row is deleted from DB after a successful claim.
@@ -581,7 +610,10 @@ mod share_tests {
         assert_eq!(first_status, 200, "first claim must succeed");
 
         let (second_status, _) = get_share(&app, &id).await;
-        assert_eq!(second_status, 404, "second claim must return 404 — share is consumed");
+        assert_eq!(
+            second_status, 404,
+            "second claim must return 404 — share is consumed"
+        );
     }
 
     /// Step 3d: A claim with a wrong/nonexistent id returns 404 and leaves
@@ -605,12 +637,169 @@ mod share_tests {
 
         // And the real share must still be fully claimable and decryptable
         let (good_status, json) = get_share(&app, &real_id).await;
-        assert_eq!(good_status, 200, "real share must still be claimable after wrong-id attempt");
+        assert_eq!(
+            good_status, 200,
+            "real share must still be claimable after wrong-id attempt"
+        );
         let recovered = decrypt_value(
             &f,
             json["ciphertext"].as_str().unwrap(),
             json["nonce"].as_str().unwrap(),
         );
-        assert_eq!(recovered, "secret", "real share must still decrypt correctly");
+        assert_eq!(
+            recovered, "secret",
+            "real share must still decrypt correctly"
+        );
+    }
+}
+
+// ── API key type tests ───────────────────────────────────────────────────────
+
+const PROTECTED_KEY: &str = "protected-key";
+
+async fn insert_typed_api_key(
+    pool: &SqlitePool,
+    key_type: &str,
+    status: &str,
+    expires_at: Option<&str>,
+    allowed_keys: &[&str],
+) -> String {
+    let (plaintext, hash) = generate_api_key();
+    let id = Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO api_keys (id, key_hash, label, type, status, owner_id, expires_at)
+         VALUES (?, ?, 'test-key', ?, ?, ?, ?)",
+    )
+    .bind(&id)
+    .bind(&hash)
+    .bind(key_type)
+    .bind(status)
+    .bind(TEST_OWNER)
+    .bind(expires_at)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    for kv_key in allowed_keys {
+        sqlx::query(
+            "INSERT OR IGNORE INTO api_key_allowed_keys (api_key_id, kv_key) VALUES (?, ?)",
+        )
+        .bind(&id)
+        .bind(kv_key)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    plaintext
+}
+
+async fn seed_protected_entry(pool: &SqlitePool) {
+    sqlx::query("INSERT OR IGNORE INTO kv_entries (key, owner_id, value) VALUES (?, ?, 'secret')")
+        .bind(PROTECTED_KEY)
+        .bind(TEST_OWNER)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// Verifies HTTP status for each API key type and status combination.
+#[rstest]
+#[case("approval_required", "pending_approval", 403)]
+#[case("zero_trust", "pending_approval", 401)]
+#[case("one_time", "active", 200)]
+#[case("shareable", "active", 200)]
+#[tokio::test]
+async fn key_type_behaviour(
+    #[case] key_type: &'static str,
+    #[case] status: &'static str,
+    #[case] expected_status: u16,
+) {
+    let (app, state) = build_test_app().await;
+    let pool = &state.pool;
+    seed_protected_entry(pool).await;
+
+    let raw_key = insert_typed_api_key(pool, key_type, status, None, &[PROTECTED_KEY]).await;
+
+    let req = get_req(&format!("/kv/{}", PROTECTED_KEY), None, Some(raw_key));
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status().as_u16(),
+        expected_status,
+        "key_type={key_type} status={status}"
+    );
+}
+
+/// A one-time key is consumed on first use and rejected on the second.
+#[tokio::test]
+async fn one_time_key_consumed_on_first_use() {
+    let (app, state) = build_test_app().await;
+    let pool = &state.pool;
+    seed_protected_entry(pool).await;
+
+    let raw_key = insert_typed_api_key(pool, "one_time", "active", None, &[PROTECTED_KEY]).await;
+
+    // First request — should succeed.
+    let resp1 = app
+        .clone()
+        .oneshot(get_req(
+            &format!("/kv/{}", PROTECTED_KEY),
+            None,
+            Some(raw_key.clone()),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp1.status().as_u16(),
+        200,
+        "first use of one-time key must succeed"
+    );
+
+    // Allow the fire-and-forget consume UPDATE to land.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Second request — key is now status='used', must be rejected.
+    let resp2 = app
+        .oneshot(get_req(
+            &format!("/kv/{}", PROTECTED_KEY),
+            None,
+            Some(raw_key),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp2.status().as_u16(),
+        401,
+        "second use of one-time key must be rejected"
+    );
+}
+
+/// `check_kv_access` unit tests — no DB or HTTP involved.
+#[cfg(test)]
+mod check_kv_access_tests {
+    use super::*;
+    use crate::middleware::api_key::check_kv_access;
+
+    #[test]
+    fn none_allows_any_key() {
+        assert!(check_kv_access(&None, "anything").is_ok());
+    }
+
+    #[test]
+    fn matching_key_is_allowed() {
+        let keys = Some(vec!["foo".to_string()]);
+        assert!(check_kv_access(&keys, "foo").is_ok());
+    }
+
+    #[test]
+    fn non_matching_key_is_forbidden() {
+        let keys = Some(vec!["foo".to_string()]);
+        assert!(check_kv_access(&keys, "bar").is_err());
+    }
+
+    #[test]
+    fn empty_allowlist_forbids_everything() {
+        let keys: Option<Vec<String>> = Some(vec![]);
+        assert!(check_kv_access(&keys, "anything").is_err());
     }
 }

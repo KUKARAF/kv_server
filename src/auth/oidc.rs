@@ -10,9 +10,8 @@ use hmac::{Hmac, Mac};
 use openidconnect::{
     core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
     reqwest::async_http_client,
-    AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope,
-    TokenResponse,
+    AuthorizationCode, ClientId, ClientSecret, CsrfToken, IssuerUrl, Nonce, PkceCodeChallenge,
+    PkceCodeVerifier, RedirectUrl, Scope, TokenResponse,
 };
 use rand::RngCore;
 use serde::Deserialize;
@@ -61,10 +60,7 @@ fn encode_state_cookie(state: &str, pkce_verifier: &str, nonce: &str, signing_ke
     format!("{}.{}", encoded, sig)
 }
 
-fn decode_state_cookie(
-    cookie_value: &str,
-    signing_key: &str,
-) -> Option<(String, String, String)> {
+fn decode_state_cookie(cookie_value: &str, signing_key: &str) -> Option<(String, String, String)> {
     let (encoded, sig) = cookie_value.split_once('.')?;
     let payload = String::from_utf8(URL_SAFE_NO_PAD.decode(encoded).ok()?).ok()?;
     let expected_sig = sign(&payload, signing_key);
@@ -153,16 +149,10 @@ async fn create_session_key(
     sqlx::query!(
         "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
          VALUES (?, ?, ?, 'session', 'active', datetime('now', '+15 hours'), ?)",
-        id, key_hash, email, owner_id
-    )
-    .execute(pool)
-    .await?;
-
-    let scope_id = Uuid::new_v4().to_string();
-    sqlx::query!(
-        "INSERT INTO api_key_scopes (id, api_key_id, scope, ops, deny)
-         VALUES (?, ?, '*', 'read,write,delete,list', 0)",
-        scope_id, id
+        id,
+        key_hash,
+        email,
+        owner_id
     )
     .execute(pool)
     .await?;

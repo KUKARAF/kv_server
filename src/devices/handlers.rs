@@ -1,5 +1,9 @@
 use crate::{auth::middleware::AdminAuth, devices::model::*, error::AppError, state::AppState};
-use axum::{extract::{Path, State}, http::StatusCode, Json};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    Json,
+};
 use std::sync::Arc;
 use uuid::Uuid;
 

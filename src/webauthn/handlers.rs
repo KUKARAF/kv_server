@@ -20,7 +20,9 @@ use uuid::Uuid;
 use webauthn_rs::prelude::Passkey;
 
 fn webauthn_unavailable() -> AppError {
-    AppError::Internal(anyhow::anyhow!("WebAuthn not configured (check WEBAUTHN_RP_ID/WEBAUTHN_RP_ORIGIN)"))
+    AppError::Internal(anyhow::anyhow!(
+        "WebAuthn not configured (check WEBAUTHN_RP_ID/WEBAUTHN_RP_ORIGIN)"
+    ))
 }
 
 fn inject_prf_extension(options_json: &mut serde_json::Value, prf_salt: &[u8]) {
@@ -79,15 +81,17 @@ pub async fn register_begin(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("WebAuthn registration begin: {e}")))?;
 
     let challenge_id = Uuid::new_v4().to_string();
-    state.webauthn_reg_challenges.insert(
-        challenge_id.clone(),
-        RegChallengeEntry { state: reg_state },
-    );
+    state
+        .webauthn_reg_challenges
+        .insert(challenge_id.clone(), RegChallengeEntry { state: reg_state });
 
     let options = serde_json::to_value(&ccr)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize options: {e}")))?;
 
-    Ok(Json(RegisterBeginResponse { challenge_id, options }))
+    Ok(Json(RegisterBeginResponse {
+        challenge_id,
+        options,
+    }))
 }
 
 pub async fn register_finish(
@@ -101,7 +105,9 @@ pub async fn register_finish(
     let entry = state
         .webauthn_reg_challenges
         .remove(&body.challenge_id)
-        .ok_or_else(|| AppError::Forbidden("unknown or expired registration challenge".to_string()))?;
+        .ok_or_else(|| {
+            AppError::Forbidden("unknown or expired registration challenge".to_string())
+        })?;
 
     let passkey: Passkey = webauthn
         .finish_passkey_registration(&body.credential, &entry.1.state)
@@ -126,7 +132,9 @@ pub async fn register_finish(
     .execute(&state.pool)
     .await?;
 
-    Ok(Json(RegisterFinishResponse { credential_id: cred_id_str }))
+    Ok(Json(RegisterFinishResponse {
+        credential_id: cred_id_str,
+    }))
 }
 
 // ── Authentication (public — X-Api-Key for zero_trust type) ─────────────────
@@ -175,21 +183,23 @@ pub async fn authenticate_begin(
          WHERE key = ? AND owner_id = ?
            AND zt_ciphertext IS NOT NULL
            AND (expires_at IS NULL OR expires_at > datetime('now'))",
-        body.key, owner_id
+        body.key,
+        owner_id
     )
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
-    let prf_salt_b64 = kv_row.zt_prf_salt.ok_or_else(|| {
-        AppError::Internal(anyhow::anyhow!("ZT entry missing prf_salt"))
-    })?;
+    let prf_salt_b64 = kv_row
+        .zt_prf_salt
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("ZT entry missing prf_salt")))?;
     let prf_salt = URL_SAFE_NO_PAD
         .decode(&prf_salt_b64)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("decode prf_salt: {e}")))?;
 
     // Load credentials for this owner (optionally filtered to the bound credential).
-    let passkeys = load_passkeys_for_owner(&state, &owner_id, kv_row.zt_credential_id.as_deref()).await?;
+    let passkeys =
+        load_passkeys_for_owner(&state, &owner_id, kv_row.zt_credential_id.as_deref()).await?;
     if passkeys.is_empty() {
         return Err(AppError::Forbidden(
             "no registered hardware keys for this account".to_string(),
@@ -216,7 +226,10 @@ pub async fn authenticate_begin(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize options: {e}")))?;
     inject_prf_extension(&mut options, &prf_salt);
 
-    Ok(Json(AuthenticateBeginResponse { challenge_id, options }))
+    Ok(Json(AuthenticateBeginResponse {
+        challenge_id,
+        options,
+    }))
 }
 
 pub async fn authenticate_finish(
@@ -228,9 +241,16 @@ pub async fn authenticate_finish(
     let entry = state
         .webauthn_auth_challenges
         .remove(&body.challenge_id)
-        .ok_or_else(|| AppError::Forbidden("unknown or expired authentication challenge".to_string()))?;
+        .ok_or_else(|| {
+            AppError::Forbidden("unknown or expired authentication challenge".to_string())
+        })?;
 
-    let AuthChallengeEntry { state: auth_state, kv_key, owner_id, .. } = entry.1;
+    let AuthChallengeEntry {
+        state: auth_state,
+        kv_key,
+        owner_id,
+        ..
+    } = entry.1;
 
     let auth_result = webauthn
         .finish_passkey_authentication(&body.assertion, &auth_state)
@@ -246,7 +266,8 @@ pub async fn authenticate_finish(
                 "UPDATE zero_trust_credentials
                  SET last_used_at = datetime('now')
                  WHERE credential_id = ? AND owner_id = ?",
-                cred_id_str, owner
+                cred_id_str,
+                owner
             )
             .execute(&pool)
             .await;
@@ -256,7 +277,12 @@ pub async fn authenticate_finish(
     // Issue short-lived (60 s) single-use JWT scoped to this key.
     let jti = Uuid::new_v4().to_string();
     let exp = (Utc::now() + chrono::Duration::seconds(60)).timestamp() as usize;
-    let claims = ZtClaims { sub: owner_id, kv_key, jti, exp };
+    let claims = ZtClaims {
+        sub: owner_id,
+        kv_key,
+        jti,
+        exp,
+    };
     let zt_token = encode(
         &Header::default(),
         &claims,
@@ -307,7 +333,10 @@ pub async fn prf_challenge(
     // (A verify endpoint could be added later for extra assurance.)
     drop(auth_state); // not stored; admin auth handles authorization
 
-    Ok(Json(PrfChallengeResponse { challenge_id, options }))
+    Ok(Json(PrfChallengeResponse {
+        challenge_id,
+        options,
+    }))
 }
 
 // ── Admin: list / delete credentials ─────────────────────────────────────────
@@ -338,7 +367,8 @@ pub async fn delete_credential(
     let owner_id = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM zero_trust_credentials WHERE id = ? AND owner_id = ?",
-        id, owner_id
+        id,
+        owner_id
     )
     .execute(&state.pool)
     .await?;
@@ -366,12 +396,10 @@ async fn load_passkeys_for_owner(
         .fetch_all(&state.pool)
         .await?
     } else {
-        sqlx::query_as(
-            "SELECT public_key_cose FROM zero_trust_credentials WHERE owner_id = ?",
-        )
-        .bind(owner_id)
-        .fetch_all(&state.pool)
-        .await?
+        sqlx::query_as("SELECT public_key_cose FROM zero_trust_credentials WHERE owner_id = ?")
+            .bind(owner_id)
+            .fetch_all(&state.pool)
+            .await?
     };
 
     let mut passkeys = Vec::with_capacity(rows.len());
@@ -400,14 +428,23 @@ mod tests {
             jti,
             exp,
         };
-        encode(&Header::default(), &claims, &EncodingKey::from_secret(secret)).unwrap()
+        encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(secret),
+        )
+        .unwrap()
     }
 
     #[test]
     fn valid_zt_token_decodes() {
         let secret = b"test-secret-key";
         let token = make_zt_token("my-key", "user1", 60, secret);
-        let data = decode::<ZtClaims>(&token, &DecodingKey::from_secret(secret), &Validation::default());
+        let data = decode::<ZtClaims>(
+            &token,
+            &DecodingKey::from_secret(secret),
+            &Validation::default(),
+        );
         assert!(data.is_ok());
         let claims = data.unwrap().claims;
         assert_eq!(claims.kv_key, "my-key");
@@ -418,7 +455,11 @@ mod tests {
     fn expired_zt_token_rejected() {
         let secret = b"test-secret-key";
         let token = make_zt_token("my-key", "user1", -120, secret); // expired 2 minutes ago
-        let data = decode::<ZtClaims>(&token, &DecodingKey::from_secret(secret), &Validation::default());
+        let data = decode::<ZtClaims>(
+            &token,
+            &DecodingKey::from_secret(secret),
+            &Validation::default(),
+        );
         assert!(data.is_err(), "expired token should be rejected");
     }
 
@@ -427,8 +468,15 @@ mod tests {
         let secret = b"test-secret-key";
         let wrong_secret = b"different-secret";
         let token = make_zt_token("my-key", "user1", 60, secret);
-        let data = decode::<ZtClaims>(&token, &DecodingKey::from_secret(wrong_secret), &Validation::default());
-        assert!(data.is_err(), "token signed with wrong key should be rejected");
+        let data = decode::<ZtClaims>(
+            &token,
+            &DecodingKey::from_secret(wrong_secret),
+            &Validation::default(),
+        );
+        assert!(
+            data.is_err(),
+            "token signed with wrong key should be rejected"
+        );
     }
 
     #[test]
@@ -436,7 +484,12 @@ mod tests {
         // Simulate what get_zt_payload does: verify claims.kv_key == path key.
         let secret = b"test-secret-key";
         let token = make_zt_token("secret-A", "user1", 60, secret);
-        let data = decode::<ZtClaims>(&token, &DecodingKey::from_secret(secret), &Validation::default()).unwrap();
+        let data = decode::<ZtClaims>(
+            &token,
+            &DecodingKey::from_secret(secret),
+            &Validation::default(),
+        )
+        .unwrap();
         let claims = data.claims;
         // Token for "secret-A" used to request "secret-B" — must be rejected.
         assert_ne!(claims.kv_key, "secret-B");

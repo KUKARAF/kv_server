@@ -6,7 +6,10 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use std::{net::{IpAddr, SocketAddr}, sync::Arc};
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 
 pub fn extract_real_ip(headers: &HeaderMap, fallback: IpAddr) -> IpAddr {
     headers
@@ -68,7 +71,11 @@ pub async fn layer(
 
     // Only count failed authentication attempts — successful requests (including
     // open-access reads) must not penalise the caller.
-    if response.extensions().get::<crate::error::AuthFailed>().is_some() {
+    if response
+        .extensions()
+        .get::<crate::error::AuthFailed>()
+        .is_some()
+    {
         let mut entry = state.rate_counters.entry(ip).or_insert(0);
         *entry += 1;
         let new_count = *entry;

@@ -2,7 +2,10 @@ pub mod handlers;
 pub mod model;
 
 use crate::state::AppState;
-use axum::{routing::{delete, get, post}, Router};
+use axum::{
+    routing::{delete, get, post},
+    Router,
+};
 use std::sync::Arc;
 
 pub fn router() -> Router<Arc<AppState>> {

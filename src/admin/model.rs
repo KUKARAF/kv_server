@@ -12,80 +12,33 @@ pub struct ApiKeyRow {
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct ScopeRow {
-    pub id: String,
+#[allow(dead_code)]
+pub struct AllowedKeyRow {
+    pub id: i64,
     pub api_key_id: String,
-    pub scope: String,
-    pub ops: String,
-    pub deny: bool,
+    pub kv_key: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct ApiKeyWithScopes {
+pub struct ApiKeyWithAllowedKeys {
     #[serde(flatten)]
     pub key: ApiKeyRow,
-    pub scopes: Vec<ScopeRow>,
+    pub allowed_keys: Vec<String>,
 }
 
-/// Request to create a new API key.
-///
-/// # Examples
-///
-/// Standard key with multiple scopes:
-/// ```json
-/// {
-///   "label": "my-standard-key",
-///   "key_type": "standard",
-///   "scopes": [
-///     { "key_pattern": "config", "ops": "read,list" },
-///     { "key_pattern": "secrets", "ops": "read" }
-///   ]
-/// }
-/// ```
-///
-/// One-time key tied to a specific entry scope (no additional scopes needed):
-/// ```json
-/// {
-///   "label": "share-api-key-with-john",
-///   "key_type": "one_time",
-///   "entry_scope": "api_keys/staging",
-///   "scopes": []
-/// }
-/// ```
-///
-/// Shareable key tied to a specific entry scope (reusable, for URLs):
-/// ```json
-/// {
-///   "label": "share-secret-with-team",
-///   "key_type": "shareable",
-///   "entry_scope": "secrets/api_key",
-///   "scopes": []
-/// }
-/// ```
 #[derive(Debug, Deserialize)]
 pub struct CreateKeyRequest {
     pub label: String,
     pub key_type: String, // standard | one_time | approval_required | zero_trust | shareable
     pub expires_at: Option<String>,
-    pub scopes: Vec<CreateScopeRequest>,
-    /// For one-time or shareable keys: if provided, automatically creates a read-only scope tied to this entry scope.
-    /// The key will only be able to read entries with this scope.
-    /// - one_time: key can only be used once, then expires
-    /// - shareable: key can be used multiple times (ideal for shareable URLs)
-    ///
-    /// Example: "api_keys/staging" restricts access to entries with scope "api_keys/staging".
+    /// For manually-created (non-session) keys: the list of KV key names this token may access.
+    /// Session keys ignore this field and have implicit full access.
     #[serde(default)]
-    pub entry_scope: Option<String>,
-}
-
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct CreateScopeRequest {
-    #[serde(rename = "key_pattern")]
-    pub scope: String,
-    pub ops: String, // comma-separated: read,write,delete,list
+    pub allowed_keys: Vec<String>,
+    /// For one-time or shareable keys: if provided, automatically restricts the token to this
+    /// single KV key name (added to allowed_keys).
     #[serde(default)]
-    pub deny: bool,
+    pub entry_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,7 +65,6 @@ pub struct AdminKvWriteRequest {
     pub key: String,
     #[serde(default)]
     pub value: String,
-    pub scope: Option<String>,
     pub ttl_hours: Option<f64>,
     #[serde(default)]
     pub ttl_sliding: bool,
@@ -129,9 +81,8 @@ pub struct AdminKvWriteRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct AdminKvImportRequest {
-    pub content: String,          // raw .env file text
-    pub prefix: Option<String>,   // optional key prefix, e.g. "myapp/"
-    pub scope: Option<String>,
+    pub content: String,        // raw .env file text
+    pub prefix: Option<String>, // optional key prefix, e.g. "myapp/"
     pub ttl_hours: Option<f64>,
     #[serde(default)]
     pub ttl_sliding: bool,
@@ -139,15 +90,10 @@ pub struct AdminKvImportRequest {
     pub open_access: bool,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct AdminKvPatchRequest {
-    pub scope: Option<String>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct AdminKvImportResponse {
     pub imported: usize,
-    pub skipped: usize,  // blank/comment lines
+    pub skipped: usize, // blank/comment lines
 }
 
 #[derive(Debug, Serialize)]
@@ -165,7 +111,6 @@ pub struct ApproveRequest {
 #[derive(Debug, Deserialize)]
 pub struct CreateSecretRequestBody {
     pub description: Option<String>,
-    pub scope: Option<String>,
     pub key_prefix: Option<String>,
     pub required_keys: Option<Vec<String>>,
 }
@@ -180,7 +125,6 @@ pub struct SecretRequestRow {
     pub id: String,
     pub owner_label: String,
     pub description: Option<String>,
-    pub scope: Option<String>,
     pub key_prefix: Option<String>,
     pub required_keys: Option<String>, // raw JSON string
     pub status: String,
@@ -232,7 +176,6 @@ pub struct BlockedIpRow {
     pub blocked_at: Option<String>,
     pub last_failure: String,
 }
-
 
 /// Info about the current active session key for an owner
 #[derive(Debug, Serialize)]

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT key, scope, ttl_hours, ttl_sliding as \"ttl_sliding: bool\",\n                        expires_at, open_access as \"open_access: bool\", created_at\n                 FROM kv_entries\n                 WHERE key LIKE ? AND owner_id = ?\n                   AND (expires_at IS NULL OR expires_at > datetime('now'))\n                 ORDER BY key",
+  "query": "SELECT key, ttl_hours, ttl_sliding as \"ttl_sliding: bool\",\n                        expires_at, open_access as \"open_access: bool\", created_at\n                 FROM kv_entries\n                 WHERE key LIKE ? AND owner_id = ?\n                   AND (expires_at IS NULL OR expires_at > datetime('now'))\n                 ORDER BY key",
   "describe": {
     "columns": [
       {
@@ -9,33 +9,28 @@
         "type_info": "Text"
       },
       {
-        "name": "scope",
-        "ordinal": 1,
-        "type_info": "Text"
-      },
-      {
         "name": "ttl_hours",
-        "ordinal": 2,
+        "ordinal": 1,
         "type_info": "Float"
       },
       {
         "name": "ttl_sliding: bool",
-        "ordinal": 3,
+        "ordinal": 2,
         "type_info": "Int64"
       },
       {
         "name": "expires_at",
-        "ordinal": 4,
+        "ordinal": 3,
         "type_info": "Text"
       },
       {
         "name": "open_access: bool",
-        "ordinal": 5,
+        "ordinal": 4,
         "type_info": "Int64"
       },
       {
         "name": "created_at",
-        "ordinal": 6,
+        "ordinal": 5,
         "type_info": "Text"
       }
     ],
@@ -45,12 +40,11 @@
     "nullable": [
       false,
       true,
-      true,
       false,
       true,
       false,
       false
     ]
   },
-  "hash": "7c40df9063d7a8767a071de109a810c030d820b94e0a96379b0266d9a60961e6"
+  "hash": "ec963b3b18a34becad31a16c0fad0d27950634531dbab95a67289e2bebc8aca9"
 }
