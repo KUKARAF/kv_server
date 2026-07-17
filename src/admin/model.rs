@@ -174,6 +174,8 @@ pub struct BlockedIpRow {
     pub ip: String,
     pub failed_count: i64,
     pub blocked_at: Option<String>,
+    pub unblock_at: Option<String>,
+    pub block_count: i64,
     pub last_failure: String,
 }
 

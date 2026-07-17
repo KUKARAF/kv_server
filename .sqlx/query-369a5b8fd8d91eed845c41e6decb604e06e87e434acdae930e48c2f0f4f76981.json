@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT ip, failed_count, blocked_at, last_failure\n         FROM blocked_ips ORDER BY failed_count DESC",
+  "query": "SELECT ip, failed_count, blocked_at, unblock_at, block_count, last_failure\n         FROM blocked_ips ORDER BY failed_count DESC",
   "describe": {
     "columns": [
       {
@@ -19,8 +19,18 @@
         "type_info": "Text"
       },
       {
-        "name": "last_failure",
+        "name": "unblock_at",
         "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "block_count",
+        "ordinal": 4,
+        "type_info": "Int64"
+      },
+      {
+        "name": "last_failure",
+        "ordinal": 5,
         "type_info": "Text"
       }
     ],
@@ -31,8 +41,10 @@
       false,
       false,
       true,
+      true,
+      false,
       false
     ]
   },
-  "hash": "73b0095ffbaf58950be97dc4e84c2ada60ccff7371a962df1098a9e6035bb1dc"
+  "hash": "369a5b8fd8d91eed845c41e6decb604e06e87e434acdae930e48c2f0f4f76981"
 }

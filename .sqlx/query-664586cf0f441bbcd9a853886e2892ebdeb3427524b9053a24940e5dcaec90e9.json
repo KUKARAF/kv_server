@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT 1 FROM blocked_ips WHERE ip = ? AND blocked_at IS NOT NULL",
+  "query": "SELECT 1 FROM blocked_ips\n         WHERE ip = ? AND blocked_at IS NOT NULL\n           AND (unblock_at IS NULL OR unblock_at > datetime('now'))",
   "describe": {
     "columns": [
       {
@@ -16,5 +16,5 @@
       false
     ]
   },
-  "hash": "407a1d6b5b321c241bc3036c57640ff65951a344038cb98e31b3fd0bbc769645"
+  "hash": "664586cf0f441bbcd9a853886e2892ebdeb3427524b9053a24940e5dcaec90e9"
 }

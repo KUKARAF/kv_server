@@ -24,6 +24,7 @@ pub struct Config {
 
     pub daily_rate_limit: u32,
     pub auth_failure_threshold: u32,
+    pub auth_block_base_secs: u64,
     pub ttl_cleanup_interval_secs: u64,
     pub trust_proxy_headers: bool,
 
@@ -76,6 +77,13 @@ impl Config {
                 .unwrap_or_else(|_| "10".to_string())
                 .parse()
                 .context("AUTH_FAILURE_THRESHOLD must be a number")?,
+
+            // Base duration for the first temporary block; doubles per repeat
+            // offense, capped at 30 days in record_auth_failure.
+            auth_block_base_secs: env::var("AUTH_BLOCK_BASE_SECS")
+                .unwrap_or_else(|_| "3600".to_string())
+                .parse()
+                .context("AUTH_BLOCK_BASE_SECS must be a number")?,
 
             ttl_cleanup_interval_secs: env::var("TTL_CLEANUP_INTERVAL_SECS")
                 .unwrap_or_else(|_| "300".to_string())

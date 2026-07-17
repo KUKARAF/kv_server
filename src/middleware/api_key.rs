@@ -89,9 +89,15 @@ fn extract_kv_key(parts: &Parts) -> String {
     parts.uri.path().trim_start_matches('/').to_string()
 }
 
-fn fire_record_failure(pool: SqlitePool, ip: IpAddr, threshold: u32, reason: &'static str) {
+fn fire_record_failure(
+    pool: SqlitePool,
+    ip: IpAddr,
+    threshold: u32,
+    base_secs: u64,
+    reason: &'static str,
+) {
     tokio::spawn(async move {
-        record_auth_failure(&pool, ip, threshold, reason).await;
+        record_auth_failure(&pool, ip, threshold, base_secs, reason).await;
     });
 }
 
@@ -135,6 +141,7 @@ async fn auth_session_bearer(
                 state.pool.clone(),
                 ip,
                 state.config.auth_failure_threshold,
+                state.config.auth_block_base_secs,
                 "revoked or used session key",
             );
         }
@@ -149,7 +156,7 @@ async fn auth_session_bearer(
 
         if expired {
             tracing::debug!(key_id = %api_key.id, "session key expired — triggering re-auth");
-            return Err(AppError::Unauthorized);
+            return Err(AppError::SessionExpired);
         }
     }
 
@@ -227,6 +234,7 @@ async fn auth_manual_key(
                 state.pool.clone(),
                 ip,
                 state.config.auth_failure_threshold,
+                state.config.auth_block_base_secs,
                 "unknown API key",
             );
         }
@@ -248,6 +256,7 @@ async fn auth_manual_key(
                 state.pool.clone(),
                 ip,
                 state.config.auth_failure_threshold,
+                state.config.auth_block_base_secs,
                 "revoked or used API key",
             );
         }
@@ -271,6 +280,7 @@ async fn auth_manual_key(
                     state.pool.clone(),
                     ip,
                     state.config.auth_failure_threshold,
+                    state.config.auth_block_base_secs,
                     "expired API key",
                 );
             }
@@ -391,6 +401,7 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                     state.pool.clone(),
                     ip,
                     state.config.auth_failure_threshold,
+                    state.config.auth_block_base_secs,
                     "missing X-Api-Key header",
                 );
             }

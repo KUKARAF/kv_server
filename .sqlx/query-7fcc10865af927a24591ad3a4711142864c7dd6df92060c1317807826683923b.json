@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE blocked_ips SET blocked_at = NULL, failed_count = 0 WHERE ip = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "7fcc10865af927a24591ad3a4711142864c7dd6df92060c1317807826683923b"
+}

@@ -32,6 +32,11 @@ pub enum AppError {
     #[error("rate limit exceeded")]
     RateLimited,
 
+    // 401 identical to Unauthorized, but benign: an expired session prompting
+    // re-auth. Carries no AuthFailed marker so it never counts toward limits.
+    #[error("session expired")]
+    SessionExpired,
+
     // 403 with emoji sequence for approval_required keys
     #[error("pending approval")]
     PendingApproval {
@@ -81,6 +86,16 @@ impl IntoResponse for AppError {
             return response;
         }
 
+        // Same wire format as Unauthorized, but without the AuthFailed marker:
+        // expired sessions trigger re-auth and must not count toward limits.
+        if matches!(self, AppError::SessionExpired) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "unauthorized" })),
+            )
+                .into_response();
+        }
+
         if let AppError::KeyConflict(keys) = &self {
             return (
                 StatusCode::CONFLICT,
@@ -106,6 +121,7 @@ impl IntoResponse for AppError {
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::RateLimited
             | AppError::Unauthorized
+            | AppError::SessionExpired
             | AppError::Forbidden(_)
             | AppError::PendingApproval { .. }
             | AppError::ZeroTrustRequired

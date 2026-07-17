@@ -798,7 +798,7 @@ pub async fn list_blocked_ips(
 ) -> Result<Json<Vec<crate::admin::model::BlockedIpRow>>, AppError> {
     let rows = sqlx::query_as!(
         crate::admin::model::BlockedIpRow,
-        "SELECT ip, failed_count, blocked_at, last_failure
+        "SELECT ip, failed_count, blocked_at, unblock_at, block_count, last_failure
          FROM blocked_ips ORDER BY failed_count DESC"
     )
     .fetch_all(&state.pool)

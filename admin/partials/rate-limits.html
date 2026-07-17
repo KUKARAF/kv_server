@@ -37,17 +37,22 @@
       + '<th style="text-align:left;padding:6px 8px;">IP</th>'
       + '<th style="text-align:right;padding:6px 8px;">Failures</th>'
       + '<th style="text-align:left;padding:6px 8px;">Blocked at</th>'
+      + '<th style="text-align:left;padding:6px 8px;">Until</th>'
       + '<th style="text-align:left;padding:6px 8px;">Last failure</th>'
       + '<th style="padding:6px 8px;"></th>'
       + '</tr></thead><tbody>';
     for (const row of data) {
       const blockedAt = row.blocked_at ? new Date(row.blocked_at).toLocaleString() : '<span style="color:var(--muted)">tracking</span>';
+      const until = !row.blocked_at ? '<span style="color:var(--muted)">—</span>'
+        : (row.unblock_at ? new Date(row.unblock_at).toLocaleString() : '<span style="color:var(--danger,#e53e3e)">permanent</span>');
+      const offenses = row.block_count ? ` <span style="color:var(--muted)">(#${row.block_count})</span>` : '';
       const lastFailure = new Date(row.last_failure).toLocaleString();
       const rowStyle = row.blocked_at ? 'background:color-mix(in srgb,var(--danger,#e53e3e) 8%,transparent)' : '';
       html += `<tr style="border-top:1px solid var(--border);${rowStyle}">
         <td style="padding:6px 8px;font-family:monospace">${row.ip}</td>
-        <td style="padding:6px 8px;text-align:right">${row.failed_count}</td>
+        <td style="padding:6px 8px;text-align:right">${row.failed_count}${offenses}</td>
         <td style="padding:6px 8px;font-size:0.85em">${blockedAt}</td>
+        <td style="padding:6px 8px;font-size:0.85em;white-space:nowrap">${until}</td>
         <td style="padding:6px 8px;font-size:0.85em;white-space:nowrap">${lastFailure}</td>
         <td style="padding:6px 8px;text-align:right">
           <button class="btn-secondary" style="font-size:0.8em;padding:2px 8px"

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT block_count as \"block_count: i64\",\n                  (unblock_at > datetime('now', '+90 minutes')) as \"over_90m: i64\"\n           FROM blocked_ips WHERE ip = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "block_count: i64",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "over_90m: i64",
+        "ordinal": 1,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "a436010849df56e35b8be432d96473c51119572dd0601a02cf2e294d60a7b3fa"
+}

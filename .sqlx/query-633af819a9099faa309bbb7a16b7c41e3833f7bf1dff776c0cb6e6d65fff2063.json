@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO blocked_ips (ip, failed_count, last_failure)\n         VALUES (?, 1, datetime('now'))\n         ON CONFLICT(ip) DO UPDATE SET\n             failed_count = failed_count + 1,\n             last_failure = datetime('now')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "633af819a9099faa309bbb7a16b7c41e3833f7bf1dff776c0cb6e6d65fff2063"
+}

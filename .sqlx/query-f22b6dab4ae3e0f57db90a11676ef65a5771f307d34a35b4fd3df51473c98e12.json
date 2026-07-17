@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT blocked_at, unblock_at, block_count as \"block_count: i64\"\n           FROM blocked_ips WHERE ip = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "blocked_at",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "unblock_at",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "block_count: i64",
+        "ordinal": 2,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "f22b6dab4ae3e0f57db90a11676ef65a5771f307d34a35b4fd3df51473c98e12"
+}

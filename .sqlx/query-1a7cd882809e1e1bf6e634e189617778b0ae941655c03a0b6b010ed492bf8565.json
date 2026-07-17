@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE blocked_ips\n         SET blocked_at = datetime('now'),\n             block_count = ?,\n             unblock_at = datetime('now', ?)\n         WHERE ip = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "1a7cd882809e1e1bf6e634e189617778b0ae941655c03a0b6b010ed492bf8565"
+}

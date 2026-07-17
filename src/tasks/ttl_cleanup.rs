@@ -50,13 +50,25 @@ async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
     .await?
     .rows_affected();
 
-    if kv + approvals + device_auth + session_requests + shares > 0 {
+    // Lift expired temporary IP blocks. Keep block_count + last_failure as
+    // offender history so a re-block escalates in duration.
+    let unblocked = sqlx::query!(
+        "UPDATE blocked_ips SET blocked_at = NULL, failed_count = 0
+         WHERE unblock_at IS NOT NULL AND blocked_at IS NOT NULL
+           AND unblock_at <= datetime('now')"
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    if kv + approvals + device_auth + session_requests + shares + unblocked > 0 {
         tracing::info!(
             kv_deleted = kv,
             approvals_expired = approvals,
             device_auth_expired = device_auth,
             session_requests_expired = session_requests,
             shares_deleted = shares,
+            ips_unblocked = unblocked,
             "TTL cleanup complete"
         );
     }

@@ -36,6 +36,7 @@ fn test_config() -> Config {
         webauthn_rp_origin: "http://localhost:3000".to_string(),
         daily_rate_limit: 100,
         auth_failure_threshold: 50,
+        auth_block_base_secs: 3600,
         ttl_cleanup_interval_secs: 300,
         trust_proxy_headers: true,
         public_base_url: "http://localhost:3000".to_string(),
@@ -236,10 +237,10 @@ async fn resolve_cred(cred: Cred, pool: &SqlitePool) -> (Option<String>, Option<
 /// whether the rate counter should increment, whether the block counter should increment.
 #[rstest]
 #[case(1, "/kv/protected-key", Cred::None, true, true)]
-#[case(2, "/kv/protected-key", Cred::BearerUnknown, false, false)]
+#[case(2, "/kv/protected-key", Cred::BearerUnknown, true, false)]
 #[case(3, "/kv/protected-key", Cred::BearerValid, false, false)]
 #[case(4, "/kv/protected-key", Cred::BearerExpired, false, false)]
-#[case(5, "/kv/protected-key", Cred::BearerRevoked, false, true)]
+#[case(5, "/kv/protected-key", Cred::BearerRevoked, true, true)]
 #[case(6, "/kv/protected-key", Cred::ApiKeyUnknown, true, true)]
 #[case(7, "/kv/protected-key", Cred::ApiKeyValid, false, false)]
 #[case(8, "/kv/protected-key", Cred::ApiKeyExpired, true, true)]
@@ -772,6 +773,63 @@ async fn one_time_key_consumed_on_first_use() {
         resp2.status().as_u16(),
         401,
         "second use of one-time key must be rejected"
+    );
+}
+
+/// An IP that hits the threshold gets a temporary block; a repeat offense after
+/// the block is lifted escalates both the counter and the block duration.
+#[tokio::test]
+async fn escalating_temp_blocks() {
+    let (_app, state) = build_test_app().await;
+    let pool = &state.pool;
+    let ip: IpAddr = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9));
+    let ip_str = "203.0.113.9";
+    let threshold = 3u32;
+    let base = 3600u64;
+
+    for _ in 0..threshold {
+        middleware::ip_block::record_auth_failure(pool, ip, threshold, base, "test").await;
+    }
+
+    let row = sqlx::query!(
+        r#"SELECT blocked_at, unblock_at, block_count as "block_count: i64"
+           FROM blocked_ips WHERE ip = ?"#,
+        ip_str
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(row.blocked_at.is_some(), "should be blocked at threshold");
+    assert!(row.unblock_at.is_some(), "temp block must set unblock_at");
+    assert_eq!(row.block_count, 1);
+
+    // Mimic ttl_cleanup lifting an expired temp block (block_count retained).
+    sqlx::query!(
+        "UPDATE blocked_ips SET blocked_at = NULL, failed_count = 0 WHERE ip = ?",
+        ip_str
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    // Second offense: block_count -> 2, window doubled to ~2h (> 90m from now).
+    for _ in 0..threshold {
+        middleware::ip_block::record_auth_failure(pool, ip, threshold, base, "test").await;
+    }
+
+    let row2 = sqlx::query!(
+        r#"SELECT block_count as "block_count: i64",
+                  (unblock_at > datetime('now', '+90 minutes')) as "over_90m: i64"
+           FROM blocked_ips WHERE ip = ?"#,
+        ip_str
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(row2.block_count, 2, "repeat offense increments block_count");
+    assert_eq!(
+        row2.over_90m, 1,
+        "second block should exceed 90m (doubled from 1h base)"
     );
 }
 

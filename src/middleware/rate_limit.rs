@@ -33,28 +33,20 @@ pub async fn layer(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, AppError> {
-    // Skip rate limiting only for established interactive/session clients.
-    // X-Api-Key requests are NOT exempt: the counter only increments on auth
-    // failures, so valid keys are unaffected while invalid-key floods get counted.
+    // No credential-shape exemptions: the counter only increments on auth
+    // failures (AuthFailed marker), so valid clients are never penalised while
+    // junk-credential floods — Bearer, cookie, or X-Api-Key alike — all count.
+    // Expired sessions return SessionExpired (no marker) and stay free.
     let headers = request.headers();
-    let has_auth = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.starts_with("Bearer "))
-        .unwrap_or(false)
-        || headers
-            .get("cookie")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.split(';').any(|p| p.trim().starts_with("session_token=")))
-            .unwrap_or(false);
 
-    if has_auth {
-        return Ok(next.run(request).await);
-    }
-
-    // Resolve the real client IP from proxy headers set by Caddy,
-    // falling back to the socket address when running without a proxy.
-    let ip = extract_real_ip(headers, addr.ip(), state.config.trust_proxy_headers);
+    // Resolve the real client IP from proxy headers set by Caddy, falling back
+    // to the socket address; IPv6 is bucketed to /64 so hosts rotating within
+    // a prefix share one counter.
+    let ip = crate::middleware::ip_block::counter_bucket(extract_real_ip(
+        headers,
+        addr.ip(),
+        state.config.trust_proxy_headers,
+    ));
 
     let limit = state.config.daily_rate_limit;
 

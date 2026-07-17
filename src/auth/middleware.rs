@@ -50,16 +50,28 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         // Validate session via api_keys table with type='session'
         let key_hash = hash_key(&token);
 
+        // Fetch without an expiry filter so an expired-but-known cookie is
+        // distinguishable from a genuinely unknown token: the former is a benign
+        // re-auth (SessionExpired, uncounted), the latter a real failure.
         let row = sqlx::query!(
-            "SELECT owner_id, label
+            "SELECT owner_id, label, expires_at
              FROM api_keys
-             WHERE key_hash = ? AND type IN ('session', 'approval') AND status = 'active'
-               AND (expires_at IS NULL OR expires_at > datetime('now'))",
+             WHERE key_hash = ? AND type IN ('session', 'approval') AND status = 'active'",
             key_hash
         )
         .fetch_optional(&state.pool)
         .await?
         .ok_or(AppError::Unauthorized)?;
+
+        if let Some(ref exp) = row.expires_at {
+            let expired: bool = sqlx::query_scalar!("SELECT datetime(?) <= datetime('now')", exp)
+                .fetch_one(&state.pool)
+                .await?
+                != 0;
+            if expired {
+                return Err(AppError::SessionExpired);
+            }
+        }
 
         Ok(AdminAuth(SessionClaims {
             oidc_subject: row.owner_id,
