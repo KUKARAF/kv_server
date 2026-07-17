@@ -37,6 +37,7 @@ fn test_config() -> Config {
         daily_rate_limit: 100,
         auth_failure_threshold: 50,
         ttl_cleanup_interval_secs: 300,
+        trust_proxy_headers: true,
         public_base_url: "http://localhost:3000".to_string(),
     }
 }
@@ -239,10 +240,10 @@ async fn resolve_cred(cred: Cred, pool: &SqlitePool) -> (Option<String>, Option<
 #[case(3, "/kv/protected-key", Cred::BearerValid, false, false)]
 #[case(4, "/kv/protected-key", Cred::BearerExpired, false, false)]
 #[case(5, "/kv/protected-key", Cred::BearerRevoked, false, true)]
-#[case(6, "/kv/protected-key", Cred::ApiKeyUnknown, false, true)]
+#[case(6, "/kv/protected-key", Cred::ApiKeyUnknown, true, true)]
 #[case(7, "/kv/protected-key", Cred::ApiKeyValid, false, false)]
-#[case(8, "/kv/protected-key", Cred::ApiKeyExpired, false, true)]
-#[case(9, "/kv/protected-key", Cred::ApiKeyRevoked, false, true)]
+#[case(8, "/kv/protected-key", Cred::ApiKeyExpired, true, true)]
+#[case(9, "/kv/protected-key", Cred::ApiKeyRevoked, true, true)]
 #[case(10, "/kv/scoped-key", Cred::ApiKeyNoAccess, false, false)]
 #[case(11, "/kv/open-key", Cred::None, false, false)]
 #[tokio::test]

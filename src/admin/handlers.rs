@@ -457,6 +457,8 @@ pub async fn request_approval(
     .ok_or(AppError::NotFound)?;
 
     let emoji = generate_emoji_sequence();
+    let emoji_hash = bcrypt::hash(&emoji, 6)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {e}")))?;
     let id = Uuid::new_v4().to_string();
 
     sqlx::query!(
@@ -464,7 +466,7 @@ pub async fn request_approval(
          VALUES (?, ?, ?, datetime('now', '+10 minutes'))",
         id,
         key.id,
-        emoji
+        emoji_hash
     )
     .execute(&state.pool)
     .await?;

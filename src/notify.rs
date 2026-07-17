@@ -26,10 +26,27 @@ pub fn send(pool: SqlitePool, title: String, priority: &'static str) {
     });
 }
 
-async fn fetch_key(pool: &SqlitePool) -> Option<String> {
+/// Resolve the hardcoded admin's `owner_id` from their OIDC-created session key.
+/// `label = ADMIN_EMAIL AND type = 'session'` is not spoofable: `create_key` cannot mint
+/// `type='session'` rows — only the OIDC callback does, with `label = email`.
+pub(crate) async fn admin_owner_id(pool: &SqlitePool) -> Option<String> {
     sqlx::query_scalar::<_, String>(
-        "SELECT value FROM kv_entries WHERE key = 'NOTIFY_API_KEY' LIMIT 1",
+        "SELECT owner_id FROM api_keys WHERE label = ? AND type = 'session' LIMIT 1",
     )
+    .bind(crate::config::ADMIN_EMAIL)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn fetch_key(pool: &SqlitePool) -> Option<String> {
+    // Scope strictly to the admin owner so a non-admin's NOTIFY_API_KEY entry can never be used.
+    let owner = admin_owner_id(pool).await?;
+    sqlx::query_scalar::<_, String>(
+        "SELECT value FROM kv_entries WHERE key = 'NOTIFY_API_KEY' AND owner_id = ? LIMIT 1",
+    )
+    .bind(owner)
     .fetch_optional(pool)
     .await
     .ok()

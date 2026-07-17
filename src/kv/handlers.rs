@@ -26,7 +26,7 @@ fn log_access(
     auth: &ApiKeyAuth,
     key: &str,
 ) {
-    let ip = extract_real_ip(headers, addr.ip()).to_string();
+    let ip = extract_real_ip(headers, addr.ip(), state.config.trust_proxy_headers).to_string();
     let entry = AccessLogEntry {
         ip,
         api_key_id: auth.api_key_id.clone(),
@@ -203,6 +203,17 @@ pub async fn upsert_entry(
     check_kv_access(&auth.allowed_keys, &key)?;
     log_access(&state, &headers, addr, &auth, &key);
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
+
+    // Reserved key: only the hardcoded admin may set NOTIFY_API_KEY (defense-in-depth;
+    // the notify read is already admin-scoped).
+    if key == "NOTIFY_API_KEY" {
+        let admin = crate::notify::admin_owner_id(&state.pool)
+            .await
+            .ok_or_else(|| AppError::Forbidden("reserved key".to_string()))?;
+        if owner_id != admin {
+            return Err(AppError::Forbidden("reserved key".to_string()));
+        }
+    }
 
     // Validate ZT fields: either all required ZT fields present, or none.
     let is_zt = body.zt_ciphertext.is_some()

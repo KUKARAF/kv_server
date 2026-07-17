@@ -11,18 +11,19 @@ use std::{
     sync::Arc,
 };
 
-pub fn extract_real_ip(headers: &HeaderMap, fallback: IpAddr) -> IpAddr {
+/// Resolves the client IP. When `trust_proxy` is true, honors only the
+/// `x-real-ip` header (Caddy overwrites it, so clients cannot forge it through
+/// the proxy); `x-forwarded-for` is never used — its leftmost entry is
+/// attacker-controlled. When `trust_proxy` is false, all headers are ignored
+/// and the socket peer address is used.
+pub fn extract_real_ip(headers: &HeaderMap, fallback: IpAddr, trust_proxy: bool) -> IpAddr {
+    if !trust_proxy {
+        return fallback;
+    }
     headers
         .get("x-real-ip")
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse().ok())
-        .or_else(|| {
-            headers
-                .get("x-forwarded-for")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.split(',').next())
-                .and_then(|s| s.trim().parse().ok())
-        })
         .unwrap_or(fallback)
 }
 
@@ -32,15 +33,15 @@ pub async fn layer(
     request: Request<Body>,
     next: Next,
 ) -> Result<Response, AppError> {
-    // Skip rate limiting for authenticated requests — any credential header is sufficient.
-    // The actual endpoints will reject invalid tokens; we don't need to validate here.
+    // Skip rate limiting only for established interactive/session clients.
+    // X-Api-Key requests are NOT exempt: the counter only increments on auth
+    // failures, so valid keys are unaffected while invalid-key floods get counted.
     let headers = request.headers();
-    let has_auth = headers.contains_key("x-api-key")
-        || headers
-            .get("authorization")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.starts_with("Bearer "))
-            .unwrap_or(false)
+    let has_auth = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.starts_with("Bearer "))
+        .unwrap_or(false)
         || headers
             .get("cookie")
             .and_then(|v| v.to_str().ok())
@@ -53,7 +54,7 @@ pub async fn layer(
 
     // Resolve the real client IP from proxy headers set by Caddy,
     // falling back to the socket address when running without a proxy.
-    let ip = extract_real_ip(headers, addr.ip());
+    let ip = extract_real_ip(headers, addr.ip(), state.config.trust_proxy_headers);
 
     let limit = state.config.daily_rate_limit;
 

@@ -1,9 +1,12 @@
 use crate::{
-    auth::middleware::AdminAuth, error::AppError, keys::generate::generate_api_key,
-    session_request::model::*, state::AppState,
+    auth::middleware::AdminAuth,
+    error::AppError,
+    keys::generate::{generate_api_key, hash_key},
+    session_request::model::*,
+    state::AppState,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -15,17 +18,20 @@ pub async fn create_request(
     Json(body): Json<CreateSessionRequestBody>,
 ) -> Result<(StatusCode, Json<CreateSessionRequestResponse>), AppError> {
     let id = Uuid::new_v4().to_string();
+    // Separate poll secret held only by the requester; stored hashed.
+    let (poll_secret, poll_secret_hash) = generate_api_key();
     let expires_at = sqlx::query_scalar!("SELECT datetime('now', '+15 minutes')")
         .fetch_one(&state.pool)
         .await?
         .unwrap_or_default();
 
     sqlx::query!(
-        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours) VALUES (?, ?, ?, ?)",
+        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret) VALUES (?, ?, ?, ?, ?)",
         id,
         body.label,
         expires_at,
-        body.requested_duration_hours
+        body.requested_duration_hours,
+        poll_secret_hash
     )
     .execute(&state.pool)
     .await?;
@@ -41,6 +47,7 @@ pub async fn create_request(
             id,
             url,
             expires_at,
+            poll_secret,
         }),
     ))
 }
@@ -48,14 +55,23 @@ pub async fn create_request(
 pub async fn poll_status(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(q): Query<PollQuery>,
 ) -> Result<Json<PollStatusResponse>, AppError> {
     let row = sqlx::query!(
-        "SELECT status, plaintext_token FROM session_requests WHERE id = ?",
+        "SELECT status, plaintext_token, poll_secret FROM session_requests WHERE id = ?",
         id
     )
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    // Require the requester's poll secret. Compare hashes (constant-length hex) and return
+    // NotFound on mismatch so the endpoint is not a token oracle for anyone holding only the id.
+    let provided_hash = hash_key(&q.secret);
+    match &row.poll_secret {
+        Some(stored) if *stored == provided_hash => {}
+        _ => return Err(AppError::NotFound),
+    }
 
     if row.status != "approved" {
         return Ok(Json(PollStatusResponse {

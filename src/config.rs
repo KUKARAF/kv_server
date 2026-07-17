@@ -1,6 +1,10 @@
 use anyhow::{Context, Result};
 use std::env;
 
+/// The sole owner allowed to set and use the reserved `NOTIFY_API_KEY` entry.
+/// Resolved to an `owner_id` via the OIDC-created session key whose `label` is this email.
+pub const ADMIN_EMAIL: &str = "rafal.kuka94@gmail.com";
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
@@ -21,6 +25,7 @@ pub struct Config {
     pub daily_rate_limit: u32,
     pub auth_failure_threshold: u32,
     pub ttl_cleanup_interval_secs: u64,
+    pub trust_proxy_headers: bool,
 
     pub public_base_url: String,
 }
@@ -76,6 +81,10 @@ impl Config {
                 .unwrap_or_else(|_| "300".to_string())
                 .parse()
                 .context("TTL_CLEANUP_INTERVAL_SECS must be a number")?,
+
+            trust_proxy_headers: env::var("TRUST_PROXY_HEADERS")
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(true),
 
             public_base_url: env::var("PUBLIC_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:3000".to_string()),

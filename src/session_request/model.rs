@@ -11,6 +11,13 @@ pub struct CreateSessionRequestResponse {
     pub id: String,
     pub url: String,
     pub expires_at: String,
+    /// Secret held only by the requester; required to poll for the session token.
+    pub poll_secret: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PollQuery {
+    pub secret: String,
 }
 
 #[derive(Debug, Serialize)]

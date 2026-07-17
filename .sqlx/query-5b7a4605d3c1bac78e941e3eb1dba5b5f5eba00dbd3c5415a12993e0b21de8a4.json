@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT status, plaintext_token FROM session_requests WHERE id = ?",
+  "query": "SELECT status, plaintext_token, poll_secret FROM session_requests WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "name": "plaintext_token",
         "ordinal": 1,
         "type_info": "Text"
+      },
+      {
+        "name": "poll_secret",
+        "ordinal": 2,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -19,8 +24,9 @@
     },
     "nullable": [
       false,
+      true,
       true
     ]
   },
-  "hash": "2c5238f0148330e08cad33e5f6945f5d921c0a42b85ddec2857e73fe9b8fd2bb"
+  "hash": "5b7a4605d3c1bac78e941e3eb1dba5b5f5eba00dbd3c5415a12993e0b21de8a4"
 }

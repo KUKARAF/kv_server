@@ -23,7 +23,11 @@ pub async fn layer(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let ip = extract_real_ip(request.headers(), addr.ip());
+    let ip = extract_real_ip(
+        request.headers(),
+        addr.ip(),
+        state.config.trust_proxy_headers,
+    );
     request.extensions_mut().insert(ClientIp(ip));
 
     let ip_str = ip.to_string();
