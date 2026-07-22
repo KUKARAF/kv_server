@@ -23,16 +23,20 @@ pub async fn create_management_key(
             "at least one recipient is required".to_string(),
         ));
     }
+    validate_limit_reset(&body.default_limit_reset)?;
 
     let id = Uuid::new_v4().to_string();
     let mut tx = state.pool.begin().await?;
 
     sqlx::query!(
-        "INSERT INTO management_keys (id, owner_id, provider, label) VALUES (?, ?, ?, ?)",
+        "INSERT INTO management_keys (id, owner_id, provider, label, default_limit, default_limit_reset)
+         VALUES (?, ?, ?, ?, ?, ?)",
         id,
         owner_id,
         body.provider,
         body.label,
+        body.default_limit,
+        body.default_limit_reset,
     )
     .execute(&mut *tx)
     .await?;
@@ -75,7 +79,7 @@ pub async fn list_management_keys(
 ) -> Result<Json<Vec<ManagementKeyRow>>, AppError> {
     let owner_id = &auth.0.oidc_subject;
     let rows = sqlx::query!(
-        "SELECT id, provider, label, status, created_at, last_used_at
+        "SELECT id, provider, label, status, created_at, last_used_at, default_limit, default_limit_reset
          FROM management_keys WHERE owner_id = ? ORDER BY created_at DESC",
         owner_id
     )
@@ -89,9 +93,47 @@ pub async fn list_management_keys(
         status: r.status,
         created_at: r.created_at,
         last_used_at: r.last_used_at,
+        default_limit: r.default_limit,
+        default_limit_reset: r.default_limit_reset,
     })
     .collect();
     Ok(Json(rows))
+}
+
+fn validate_limit_reset(value: &Option<String>) -> Result<(), AppError> {
+    match value.as_deref() {
+        None | Some("daily") | Some("weekly") | Some("monthly") => Ok(()),
+        Some(other) => Err(AppError::Forbidden(format!(
+            "invalid default_limit_reset: {other}"
+        ))),
+    }
+}
+
+pub async fn update_management_key_defaults(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateManagementKeyDefaultsRequest>,
+) -> Result<StatusCode, AppError> {
+    let owner_id = &auth.0.oidc_subject;
+    validate_limit_reset(&body.default_limit_reset)?;
+
+    let affected = sqlx::query!(
+        "UPDATE management_keys SET default_limit = ?, default_limit_reset = ?
+         WHERE id = ? AND owner_id = ?",
+        body.default_limit,
+        body.default_limit_reset,
+        id,
+        owner_id,
+    )
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+
+    if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Device-authenticated: returns the encrypted body + this device's DEK wrap.

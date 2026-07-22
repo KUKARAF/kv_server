@@ -17,6 +17,8 @@ pub struct CreateManagementKeyRequest {
     pub ciphertext: String,
     pub aad: String,
     pub recipients: Vec<DeviceRecipient>,
+    pub default_limit: Option<f64>,
+    pub default_limit_reset: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -32,6 +34,14 @@ pub struct ManagementKeyRow {
     pub status: String,
     pub created_at: String,
     pub last_used_at: Option<String>,
+    pub default_limit: Option<f64>,
+    pub default_limit_reset: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateManagementKeyDefaultsRequest {
+    pub default_limit: Option<f64>,
+    pub default_limit_reset: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

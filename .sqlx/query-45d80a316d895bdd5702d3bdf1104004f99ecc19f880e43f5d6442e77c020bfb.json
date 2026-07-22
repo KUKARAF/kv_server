@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO management_keys (id, owner_id, provider, label, default_limit, default_limit_reset)\n         VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "45d80a316d895bdd5702d3bdf1104004f99ecc19f880e43f5d6442e77c020bfb"
+}

@@ -22,6 +22,20 @@
       <input name="secret" type="password" required autocomplete="off" placeholder="sk-or-...">
     </label>
 
+    <div class="form-row-2">
+      <label>Default limit (USD, optional)
+        <input name="default_limit" type="number" step="any" placeholder="—">
+      </label>
+      <label>Default limit reset
+        <select name="default_limit_reset">
+          <option value="">None</option>
+          <option value="daily">Daily</option>
+          <option value="weekly">Weekly</option>
+          <option value="monthly">Monthly</option>
+        </select>
+      </label>
+    </div>
+
     <div id="mgmt-key-device-picker" style="margin-top:0.75rem;">
       <p class="label-sm">Encrypt for devices <span class="hint">(select at least one)</span></p>
       <div id="mgmt-key-device-checkboxes" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">
@@ -164,6 +178,10 @@
     if (!checked.length) { alert('Select at least one device to encrypt for.'); return false; }
     const devices = checked.map(cb => ({ id: cb.value, key_type: cb.dataset.keyType, public_key: cb.dataset.publicKey }));
 
+    const defaultLimitStr = form.default_limit.value;
+    const defaultLimit = defaultLimitStr === '' ? null : Number(defaultLimitStr);
+    const defaultLimitReset = form.default_limit_reset.value || null;
+
     let payload;
     try {
       payload = await mgmtKeyEncryptToDevices('mgmt-key:' + label, secret, devices);
@@ -175,7 +193,12 @@
     const resp = await fetch('/api/admin/management-keys', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, label, ...payload }),
+      body: JSON.stringify({
+        provider, label,
+        default_limit: defaultLimit,
+        default_limit_reset: defaultLimitReset,
+        ...payload,
+      }),
     });
     if (!resp.ok) { alert('Error storing management key: ' + resp.status); return false; }
 
@@ -191,17 +214,29 @@
     }
   });
 
+  let _mgmtKeysCache = [];
+
+  function mgmtKeyFormatDefaults(r) {
+    if (r.default_limit == null && !r.default_limit_reset) return '—';
+    const parts = [];
+    if (r.default_limit != null) parts.push('$' + r.default_limit);
+    if (r.default_limit_reset) parts.push(r.default_limit_reset);
+    return esc(parts.join(' / '));
+  }
+
   function mgmtKeyRenderList(json) {
     const rows = JSON.parse(json);
+    _mgmtKeysCache = rows;
     const el = document.getElementById('mgmt-keys-list');
     if (!rows.length) { el.innerHTML = '<p>No management keys yet.</p>'; return; }
     el.innerHTML = `<table>
-      <thead><tr><th>Label</th><th>Provider</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+      <thead><tr><th>Label</th><th>Provider</th><th>Status</th><th>Defaults</th><th>Created</th><th>Last used</th><th></th></tr></thead>
       <tbody>${rows.map(r => `
         <tr>
           <td>${esc(r.label)}</td>
           <td>${esc(r.provider)}</td>
           <td><span class="badge badge-${esc(r.status)}">${esc(r.status)}</span></td>
+          <td>${mgmtKeyFormatDefaults(r)}</td>
           <td>${esc(r.created_at)}</td>
           <td>${r.last_used_at ? esc(r.last_used_at) : '—'}</td>
           <td>
@@ -210,12 +245,52 @@
                 hx-swap="none"
                 hx-confirm="Revoke this management key record?"
                 hx-on::after-request="htmx.trigger(document.getElementById('mgmt-keys-list'), 'load')">Revoke</button>` : ''}
+            <button class="btn-secondary" onclick="mgmtKeyToggleEditDefaults('${esc(r.id)}')">Edit defaults</button>
             <button class="btn-secondary" onclick="mgmtKeyToggleProvisioned('${esc(r.id)}')">Provisioned keys</button>
           </td>
         </tr>
-        <tr id="mgmt-key-provisioned-${esc(r.id)}" class="hidden"><td colspan="6"></td></tr>`).join('')}
+        <tr id="mgmt-key-edit-defaults-${esc(r.id)}" class="hidden"><td colspan="7"></td></tr>
+        <tr id="mgmt-key-provisioned-${esc(r.id)}" class="hidden"><td colspan="7"></td></tr>`).join('')}
       </tbody></table>`;
     htmx.process(el);
+  }
+
+  function mgmtKeyToggleEditDefaults(id) {
+    const row = document.getElementById('mgmt-key-edit-defaults-' + id);
+    const cell = row.querySelector('td');
+    if (!row.classList.contains('hidden')) { row.classList.add('hidden'); return; }
+    row.classList.remove('hidden');
+    const mk = _mgmtKeysCache.find(r => r.id === id) || {};
+    cell.innerHTML = `
+      <div class="form-row-2">
+        <label>Default limit (USD)
+          <input id="mgmt-key-edit-limit-${esc(id)}" type="number" step="any" value="${mk.default_limit ?? ''}">
+        </label>
+        <label>Default limit reset
+          <select id="mgmt-key-edit-reset-${esc(id)}">
+            ${['', 'daily', 'weekly', 'monthly'].map(v =>
+              `<option value="${v}" ${(mk.default_limit_reset || '') === v ? 'selected' : ''}>${v || 'None'}</option>`
+            ).join('')}
+          </select>
+        </label>
+      </div>
+      <button type="button" onclick="mgmtKeySaveDefaults('${esc(id)}')">Save defaults</button>`;
+  }
+
+  async function mgmtKeySaveDefaults(id) {
+    const limitStr = document.getElementById('mgmt-key-edit-limit-' + id).value;
+    const resetStr = document.getElementById('mgmt-key-edit-reset-' + id).value;
+    const resp = await fetch('/api/admin/management-keys/' + encodeURIComponent(id), {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        default_limit: limitStr === '' ? null : Number(limitStr),
+        default_limit_reset: resetStr || null,
+      }),
+    });
+    if (!resp.ok) { alert('Failed to save defaults: ' + resp.status); return; }
+    document.getElementById('mgmt-key-edit-defaults-' + id).classList.add('hidden');
+    htmx.trigger(document.getElementById('mgmt-keys-list'), 'load');
   }
 
   async function mgmtKeyToggleProvisioned(id) {
@@ -228,13 +303,21 @@
   }
 
   function mgmtKeyProvisionedPanelSkeleton(id) {
+    const mk = _mgmtKeysCache.find(r => r.id === id) || {};
+    const limitVal = mk.default_limit ?? '';
+    const resetOptions = ['', 'daily', 'weekly', 'monthly'].map(v =>
+      `<option value="${v}" ${(mk.default_limit_reset || '') === v ? 'selected' : ''}>${v || 'None'}</option>`
+    ).join('');
     return `
       <div class="panel" style="margin-bottom:0.75rem;">
         <h3>Create a key on the provider</h3>
         <div class="form-row-2">
           <label>Label <input id="mgmt-key-new-label-${esc(id)}" placeholder="my-app"></label>
-          <label>Limit (optional) <input id="mgmt-key-new-limit-${esc(id)}" type="number" step="any"></label>
+          <label>Limit (optional)
+            <input id="mgmt-key-new-limit-${esc(id)}" type="number" step="any" value="${limitVal}">
+          </label>
         </div>
+        <label>Limit reset <select id="mgmt-key-new-reset-${esc(id)}">${resetOptions}</select></label>
         <p class="label-sm">Encrypt the generated secret for <span class="hint">(select at least one)</span></p>
         <div id="mgmt-key-new-devices-${esc(id)}" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">Loading devices…</div>
         <button type="button" style="margin-top:0.75rem;" onclick="mgmtKeyProviderCreateFlow('${esc(id)}')">Create on provider</button>
@@ -327,7 +410,7 @@
     }));
   }
 
-  async function mgmtKeyProviderCreate(mgmtKey, label, limit) {
+  async function mgmtKeyProviderCreate(mgmtKey, label, limit, limitReset) {
     const resp = await fetch(OPENROUTER_BASE + '/', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + mgmtKey, 'Content-Type': 'application/json' },
@@ -336,8 +419,23 @@
     if (!resp.ok) throw new Error('openrouter returned ' + resp.status + ': ' + await resp.text());
     const parsed = await resp.json();
     const data = parsed.data || {};
+    const providerKeyId = data.hash ?? data.id;
+
+    // Per OpenRouter's docs, limit_reset is only documented on the update (PATCH)
+    // endpoint, not on create — so applying a reset cadence takes a follow-up call.
+    if (limitReset) {
+      const patchResp = await fetch(OPENROUTER_BASE + '/' + encodeURIComponent(providerKeyId), {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + mgmtKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit_reset: limitReset }),
+      });
+      if (!patchResp.ok) {
+        throw new Error('openrouter update (limit_reset) returned ' + patchResp.status + ': ' + await patchResp.text());
+      }
+    }
+
     return {
-      providerKeyId: data.hash ?? data.id,
+      providerKeyId,
       label: data.name ?? label,
       plaintextSecret: parsed.key,
     };
@@ -409,6 +507,7 @@
     if (!label) { alert('Label is required.'); return; }
     const limitStr = document.getElementById('mgmt-key-new-limit-' + id).value;
     const limit = limitStr === '' ? null : Number(limitStr);
+    const limitReset = document.getElementById('mgmt-key-new-reset-' + id).value || null;
 
     const checked = [...document.querySelectorAll('#mgmt-key-new-devices-' + id + ' input:checked')];
     if (!checked.length) { alert('Select at least one device to encrypt the new secret for.'); return; }
@@ -424,7 +523,7 @@
 
     let created;
     try {
-      created = await mgmtKeyProviderCreate(mgmtKey, label, limit);
+      created = await mgmtKeyProviderCreate(mgmtKey, label, limit, limitReset);
     } catch (err) {
       alert('Failed to create key on provider: ' + err.message);
       return;

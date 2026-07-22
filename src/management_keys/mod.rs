@@ -3,7 +3,7 @@ pub mod model;
 
 use crate::state::AppState;
 use axum::{
-    routing::{get, post},
+    routing::{get, patch, post},
     Router,
 };
 use std::sync::Arc;
@@ -14,6 +14,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
             "/",
             post(handlers::create_management_key).get(handlers::list_management_keys),
         )
+        .route("/:id", patch(handlers::update_management_key_defaults))
         .route(
             "/:id/devices/:device_id",
             get(handlers::get_management_key_envelope),

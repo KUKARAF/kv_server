@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE management_keys SET default_limit = ?, default_limit_reset = ?\n         WHERE id = ? AND owner_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "f79c1ac73584f43ec7d8bb579698f50c7fa9dacb071b774fa7ea6e368bdbddaa"
+}
