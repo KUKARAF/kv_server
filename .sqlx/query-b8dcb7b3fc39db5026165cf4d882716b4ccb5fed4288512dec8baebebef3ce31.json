@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE provisioned_keys SET status = 'revoked', revoked_at = datetime('now')\n         WHERE id = ? AND management_key_id = ? AND status = 'active'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b8dcb7b3fc39db5026165cf4d882716b4ccb5fed4288512dec8baebebef3ce31"
+}

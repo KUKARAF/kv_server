@@ -1,0 +1,511 @@
+<section>
+  <h2>Management Keys</h2>
+  <p class="hint">
+    Third-party provider management/provisioning keys (e.g. OpenRouter). Always encrypted
+    client-side to selected registered devices — this server never sees the plaintext.
+    Generating and revoking keys <em>on the provider</em> works from both the CLI
+    (<code>kv mgmt-key keys ...</code>) and here, by decrypting the management key with this
+    browser's registered device key and calling the provider directly.
+  </p>
+
+  <form id="create-mgmt-key-form" onsubmit="return mgmtKeyCreate(event)" class="panel">
+    <h3>Store a management key</h3>
+    <div class="form-row-2">
+      <label>Label <input name="label" required placeholder="openrouter prod"></label>
+      <label>Provider
+        <select name="provider">
+          <option value="openrouter">OpenRouter</option>
+        </select>
+      </label>
+    </div>
+    <label>Management key value
+      <input name="secret" type="password" required autocomplete="off" placeholder="sk-or-...">
+    </label>
+
+    <div id="mgmt-key-device-picker" style="margin-top:0.75rem;">
+      <p class="label-sm">Encrypt for devices <span class="hint">(select at least one)</span></p>
+      <div id="mgmt-key-device-checkboxes" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">
+        Loading devices…
+      </div>
+    </div>
+
+    <button type="submit" style="margin-top:0.75rem;">Store</button>
+  </form>
+
+  <div id="mgmt-keys-list" hx-get="/api/admin/management-keys" hx-trigger="load" hx-swap="none">
+    Loading…
+  </div>
+</section>
+
+<script>
+  // ── Device picker (encrypt-only; does not require this browser to be a device) ──
+  let _mgmtDevicesCache = null;
+  async function mgmtKeyLoadDevices() {
+    if (_mgmtDevicesCache) return _mgmtDevicesCache;
+    const r = await fetch('/api/admin/devices');
+    _mgmtDevicesCache = r.ok ? await r.json() : [];
+    return _mgmtDevicesCache;
+  }
+
+  async function mgmtKeyRenderDevicePicker() {
+    const devices = await mgmtKeyLoadDevices();
+    const el = document.getElementById('mgmt-key-device-checkboxes');
+    if (!devices.length) {
+      el.innerHTML = '<span style="color:#f87171;font-size:12px">No devices registered — register one first.</span>';
+      return;
+    }
+    el.innerHTML = devices.map(d => `
+      <label class="label-check">
+        <input type="checkbox" value="${esc(d.id)}" data-key-type="${esc(d.key_type)}" data-public-key="${esc(d.public_key)}">
+        ${esc(d.name)} <span style="color:#555;font-size:10px">(${esc(d.key_type)})</span>
+      </label>`).join('');
+  }
+  mgmtKeyRenderDevicePicker();
+
+  // ── b64 helpers (standard, non-url-safe — matches server-side storage format) ──
+  function mgmtKeyB64Encode(buf) {
+    const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+    let bin = '';
+    for (const b of bytes) bin += String.fromCharCode(b);
+    return btoa(bin);
+  }
+  function mgmtKeyB64Decode(s) {
+    const bin = atob(s);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+  }
+
+  // Encrypt `plaintext` to `devices` under additional-authenticated-data `aad`.
+  // Same protocol as the KV device-encryption flow (kv-entries.html) — AES-256-GCM
+  // body + per-device ECDH(X25519/P-256) -> HKDF-SHA256(salt=32 zero bytes,
+  // info="kv-device-wrap") -> AES-256-GCM DEK wrap.
+  async function mgmtKeyEncryptToDevices(aad, plaintext, devices) {
+    const encoder = new TextEncoder();
+
+    const dekKey = await crypto.subtle.generateKey({name: 'AES-GCM', length: 256}, true, ['encrypt']);
+    const rawDek = await crypto.subtle.exportKey('raw', dekKey);
+
+    const aadBytes  = encoder.encode(aad);
+    const bodyNonce = crypto.getRandomValues(new Uint8Array(12));
+    const ciphertext = await crypto.subtle.encrypt(
+      {name: 'AES-GCM', iv: bodyNonce, additionalData: aadBytes},
+      dekKey, encoder.encode(plaintext)
+    );
+
+    const salt32   = new Uint8Array(32);
+    const hkdfInfo = encoder.encode('kv-device-wrap');
+    const recipients = [];
+
+    for (const device of devices) {
+      let ephPubB64, dekNonceB64, encryptedDekB64;
+
+      if (device.key_type === 'x25519') {
+        const devicePub = await crypto.subtle.importKey('raw', mgmtKeyB64Decode(device.public_key), {name: 'X25519'}, false, []);
+        const ephemeral = await crypto.subtle.generateKey({name: 'X25519'}, true, ['deriveBits']);
+        const sharedBits = await crypto.subtle.deriveBits({name: 'X25519', public: devicePub}, ephemeral.privateKey, 256);
+        ephPubB64 = mgmtKeyB64Encode(await crypto.subtle.exportKey('raw', ephemeral.publicKey));
+        const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+        const wrapKey = await crypto.subtle.deriveKey(
+          {name: 'HKDF', hash: 'SHA-256', salt: salt32, info: hkdfInfo},
+          hkdfKey, {name: 'AES-GCM', length: 256}, false, ['encrypt']
+        );
+        const dekNonce = crypto.getRandomValues(new Uint8Array(12));
+        const encDek = await crypto.subtle.encrypt({name: 'AES-GCM', iv: dekNonce}, wrapKey, rawDek);
+        dekNonceB64 = mgmtKeyB64Encode(dekNonce);
+        encryptedDekB64 = mgmtKeyB64Encode(encDek);
+
+      } else if (device.key_type === 'p256') {
+        const devicePub = await crypto.subtle.importKey('spki', mgmtKeyB64Decode(device.public_key), {name: 'ECDH', namedCurve: 'P-256'}, false, []);
+        const ephemeral = await crypto.subtle.generateKey({name: 'ECDH', namedCurve: 'P-256'}, true, ['deriveBits']);
+        const sharedBits = await crypto.subtle.deriveBits({name: 'ECDH', public: devicePub}, ephemeral.privateKey, 256);
+        ephPubB64 = mgmtKeyB64Encode(await crypto.subtle.exportKey('raw', ephemeral.publicKey));
+        const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+        const wrapKey = await crypto.subtle.deriveKey(
+          {name: 'HKDF', hash: 'SHA-256', salt: salt32, info: hkdfInfo},
+          hkdfKey, {name: 'AES-GCM', length: 256}, false, ['encrypt']
+        );
+        const dekNonce = crypto.getRandomValues(new Uint8Array(12));
+        const encDek = await crypto.subtle.encrypt({name: 'AES-GCM', iv: dekNonce}, wrapKey, rawDek);
+        dekNonceB64 = mgmtKeyB64Encode(dekNonce);
+        encryptedDekB64 = mgmtKeyB64Encode(encDek);
+
+      } else {
+        console.warn('Skipping device with unknown key_type:', device.id, device.key_type);
+        continue;
+      }
+
+      recipients.push({
+        device_id: device.id, key_type: device.key_type,
+        ephemeral_pub: ephPubB64, dek_nonce: dekNonceB64, encrypted_dek: encryptedDekB64,
+      });
+    }
+
+    if (!recipients.length) throw new Error('Failed to encrypt for any selected device.');
+
+    return {
+      nonce: mgmtKeyB64Encode(bodyNonce),
+      ciphertext: mgmtKeyB64Encode(ciphertext),
+      aad: mgmtKeyB64Encode(aadBytes),
+      recipients,
+    };
+  }
+
+  // ── Create ────────────────────────────────────────────────────────────────
+  async function mgmtKeyCreate(e) {
+    e.preventDefault();
+    const form = e.target;
+    const label = form.label.value.trim();
+    const provider = form.provider.value;
+    const secret = form.secret.value;
+    if (!secret) { alert('Management key value is required.'); return false; }
+
+    const checked = [...document.querySelectorAll('#mgmt-key-device-checkboxes input:checked')];
+    if (!checked.length) { alert('Select at least one device to encrypt for.'); return false; }
+    const devices = checked.map(cb => ({ id: cb.value, key_type: cb.dataset.keyType, public_key: cb.dataset.publicKey }));
+
+    let payload;
+    try {
+      payload = await mgmtKeyEncryptToDevices('mgmt-key:' + label, secret, devices);
+    } catch (err) {
+      alert('Encryption failed: ' + err.message);
+      return false;
+    }
+
+    const resp = await fetch('/api/admin/management-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, label, ...payload }),
+    });
+    if (!resp.ok) { alert('Error storing management key: ' + resp.status); return false; }
+
+    form.reset();
+    htmx.trigger(document.getElementById('mgmt-keys-list'), 'load');
+    return false;
+  }
+
+  // ── List + revoke ────────────────────────────────────────────────────────
+  document.addEventListener('htmx:afterRequest', function(e) {
+    if (e.detail.pathInfo?.requestPath === '/api/admin/management-keys') {
+      mgmtKeyRenderList(e.detail.xhr.response);
+    }
+  });
+
+  function mgmtKeyRenderList(json) {
+    const rows = JSON.parse(json);
+    const el = document.getElementById('mgmt-keys-list');
+    if (!rows.length) { el.innerHTML = '<p>No management keys yet.</p>'; return; }
+    el.innerHTML = `<table>
+      <thead><tr><th>Label</th><th>Provider</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr>
+          <td>${esc(r.label)}</td>
+          <td>${esc(r.provider)}</td>
+          <td><span class="badge badge-${esc(r.status)}">${esc(r.status)}</span></td>
+          <td>${esc(r.created_at)}</td>
+          <td>${r.last_used_at ? esc(r.last_used_at) : '—'}</td>
+          <td>
+            ${r.status === 'active' ? `<button class="btn-danger"
+                hx-post="/api/admin/management-keys/${esc(r.id)}/revoke"
+                hx-swap="none"
+                hx-confirm="Revoke this management key record?"
+                hx-on::after-request="htmx.trigger(document.getElementById('mgmt-keys-list'), 'load')">Revoke</button>` : ''}
+            <button class="btn-secondary" onclick="mgmtKeyToggleProvisioned('${esc(r.id)}')">Provisioned keys</button>
+          </td>
+        </tr>
+        <tr id="mgmt-key-provisioned-${esc(r.id)}" class="hidden"><td colspan="6"></td></tr>`).join('')}
+      </tbody></table>`;
+    htmx.process(el);
+  }
+
+  async function mgmtKeyToggleProvisioned(id) {
+    const row = document.getElementById('mgmt-key-provisioned-' + id);
+    const cell = row.querySelector('td');
+    if (!row.classList.contains('hidden')) { row.classList.add('hidden'); return; }
+    row.classList.remove('hidden');
+    cell.innerHTML = mgmtKeyProvisionedPanelSkeleton(id);
+    await mgmtKeyRefreshProvisionedPanel(id);
+  }
+
+  function mgmtKeyProvisionedPanelSkeleton(id) {
+    return `
+      <div class="panel" style="margin-bottom:0.75rem;">
+        <h3>Create a key on the provider</h3>
+        <div class="form-row-2">
+          <label>Label <input id="mgmt-key-new-label-${esc(id)}" placeholder="my-app"></label>
+          <label>Limit (optional) <input id="mgmt-key-new-limit-${esc(id)}" type="number" step="any"></label>
+        </div>
+        <p class="label-sm">Encrypt the generated secret for <span class="hint">(select at least one)</span></p>
+        <div id="mgmt-key-new-devices-${esc(id)}" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">Loading devices…</div>
+        <button type="button" style="margin-top:0.75rem;" onclick="mgmtKeyProviderCreateFlow('${esc(id)}')">Create on provider</button>
+      </div>
+      <div id="mgmt-key-live-${esc(id)}">Loading live keys…</div>
+      <div id="mgmt-key-stored-${esc(id)}" style="margin-top:0.75rem;">Loading stored secrets…</div>`;
+  }
+
+  async function mgmtKeyRefreshProvisionedPanel(id) {
+    await mgmtKeyRenderDeviceCheckboxes('mgmt-key-new-devices-' + id);
+    await mgmtKeyRenderLiveKeys(id);
+    await mgmtKeyRenderStoredKeys(id);
+  }
+
+  async function mgmtKeyRenderDeviceCheckboxes(containerId) {
+    const devices = await mgmtKeyLoadDevices();
+    const el = document.getElementById(containerId);
+    if (!devices.length) {
+      el.innerHTML = '<span style="color:#f87171;font-size:12px">No devices registered.</span>';
+      return;
+    }
+    el.innerHTML = devices.map(d => `
+      <label class="label-check">
+        <input type="checkbox" value="${esc(d.id)}" data-key-type="${esc(d.key_type)}" data-public-key="${esc(d.public_key)}">
+        ${esc(d.name)} <span style="color:#555;font-size:10px">(${esc(d.key_type)})</span>
+      </label>`).join('');
+  }
+
+  // ── Browser device + local decrypt ──────────────────────────────────────
+  // Mirrors _loadBrowserDevice() / decryptDeviceKvPayload() in kv-entries.html —
+  // duplicated here (rather than shared) so this partial stays self-contained
+  // and doesn't risk regressing that already-shipped flow.
+  async function mgmtKeyLoadBrowserDevice() {
+    const db = await _openAdminDB();
+    const record = await _dbGet(db, 'device');
+    if (!record?.deviceId || !record?.privateKey?.usages?.includes('deriveBits')) return null;
+    return record;
+  }
+
+  async function mgmtKeyDecryptPayload(payload, privateKey) {
+    const encoder = new TextEncoder();
+    const ephPub = await crypto.subtle.importKey(
+      'raw', mgmtKeyB64Decode(payload.recipient.ephemeral_pub),
+      { name: 'ECDH', namedCurve: 'P-256' }, false, []
+    );
+    const sharedBits = await crypto.subtle.deriveBits({ name: 'ECDH', public: ephPub }, privateKey, 256);
+    const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+    const wrapKey = await crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: encoder.encode('kv-device-wrap') },
+      hkdfKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+    );
+    const dek = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(mgmtKeyB64Decode(payload.recipient.dek_nonce)) },
+      wrapKey, mgmtKeyB64Decode(payload.recipient.encrypted_dek)
+    );
+    const dekKey = await crypto.subtle.importKey('raw', dek, { name: 'AES-GCM' }, false, ['decrypt']);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(mgmtKeyB64Decode(payload.nonce)), additionalData: new Uint8Array(mgmtKeyB64Decode(payload.aad)) },
+      dekKey, mgmtKeyB64Decode(payload.ciphertext)
+    );
+    return new TextDecoder().decode(plaintext);
+  }
+
+  async function mgmtKeyDecryptManagementKey(id) {
+    const record = await mgmtKeyLoadBrowserDevice();
+    if (!record) {
+      throw new Error('This browser has no valid device key. Go to Admin → Device Registration to register first.');
+    }
+    const resp = await fetch('/api/admin/management-keys/' + encodeURIComponent(id) + '/devices/' + encodeURIComponent(record.deviceId));
+    if (!resp.ok) throw new Error('Failed to fetch encrypted management key: ' + resp.status);
+    const payload = await resp.json();
+    return mgmtKeyDecryptPayload(payload, record.privateKey);
+  }
+
+  // ── OpenRouter provisioning API — called directly from the browser ───────
+  // Requires https://openrouter.ai in the CSP connect-src (security_headers.rs).
+  // No `credentials: 'include'` — OpenRouter responds with a wildcard
+  // Access-Control-Allow-Origin, which is invalid for credentialed requests;
+  // the management key travels in the Authorization header instead.
+  const OPENROUTER_BASE = 'https://openrouter.ai/api/v1/keys';
+
+  async function mgmtKeyProviderList(mgmtKey) {
+    const resp = await fetch(OPENROUTER_BASE, { headers: { Authorization: 'Bearer ' + mgmtKey } });
+    if (!resp.ok) throw new Error('openrouter returned ' + resp.status + ': ' + await resp.text());
+    const parsed = await resp.json();
+    return (parsed.data || []).map(k => ({
+      providerKeyId: k.hash ?? k.id,
+      label: k.name,
+      disabled: !!k.disabled,
+    }));
+  }
+
+  async function mgmtKeyProviderCreate(mgmtKey, label, limit) {
+    const resp = await fetch(OPENROUTER_BASE + '/', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + mgmtKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: label, limit: limit ?? null }),
+    });
+    if (!resp.ok) throw new Error('openrouter returned ' + resp.status + ': ' + await resp.text());
+    const parsed = await resp.json();
+    const data = parsed.data || {};
+    return {
+      providerKeyId: data.hash ?? data.id,
+      label: data.name ?? label,
+      plaintextSecret: parsed.key,
+    };
+  }
+
+  async function mgmtKeyProviderRevoke(mgmtKey, providerKeyId) {
+    const resp = await fetch(OPENROUTER_BASE + '/' + encodeURIComponent(providerKeyId), {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + mgmtKey },
+    });
+    if (!resp.ok) throw new Error('openrouter returned ' + resp.status + ': ' + await resp.text());
+  }
+
+  // ── Live provider list + stored secrets ──────────────────────────────────
+  async function mgmtKeyRenderLiveKeys(id) {
+    const el = document.getElementById('mgmt-key-live-' + id);
+    let mgmtKey;
+    try {
+      mgmtKey = await mgmtKeyDecryptManagementKey(id);
+    } catch (err) {
+      el.innerHTML = `<p class="hint">Live provider list unavailable: ${esc(err.message)}</p>`;
+      return;
+    }
+    el.innerHTML = 'Loading live keys…';
+    let live;
+    try {
+      live = await mgmtKeyProviderList(mgmtKey);
+    } catch (err) {
+      el.innerHTML = `<p class="hint">Failed to list keys on the provider: ${esc(err.message)}</p>`;
+      return;
+    }
+    if (!live.length) { el.innerHTML = '<h3>Live on provider</h3><p><em>No keys on the provider yet.</em></p>'; return; }
+    el.innerHTML = `<h3>Live on provider</h3><table>
+      <thead><tr><th>Label</th><th>Provider key id</th><th>Status</th><th></th></tr></thead>
+      <tbody>${live.map(k => `
+        <tr>
+          <td>${esc(k.label)}</td>
+          <td><code>${esc(k.providerKeyId)}</code></td>
+          <td>${k.disabled
+            ? '<span class="badge badge-revoked">disabled</span>'
+            : '<span class="badge badge-active">active</span>'}</td>
+          <td><button class="btn-danger" onclick="mgmtKeyRevokeProviderKey('${esc(id)}', '${esc(k.providerKeyId)}')">Revoke</button></td>
+        </tr>`).join('')}
+      </tbody></table>`;
+  }
+
+  async function mgmtKeyRenderStoredKeys(id) {
+    const el = document.getElementById('mgmt-key-stored-' + id);
+    const resp = await fetch('/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys');
+    if (!resp.ok) { el.innerHTML = '<p class="hint">Failed to load stored secrets.</p>'; return; }
+    const rows = await resp.json();
+    if (!rows.length) { el.innerHTML = '<h3>Stored (recoverable) secrets</h3><p><em>None stored yet.</em></p>'; return; }
+    el.innerHTML = `<h3>Stored (recoverable) secrets</h3><table>
+      <thead><tr><th>Label</th><th>Provider key id</th><th>Status</th><th>Created</th><th></th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr>
+          <td>${esc(r.label)}</td>
+          <td><code>${esc(r.provider_key_id)}</code></td>
+          <td><span class="badge badge-${esc(r.status)}">${esc(r.status)}</span></td>
+          <td>${esc(r.created_at)}</td>
+          <td><button class="btn-secondary" onclick="mgmtKeyShowStored('${esc(id)}', '${esc(r.id)}')">Show</button></td>
+        </tr>`).join('')}
+      </tbody></table>`;
+  }
+
+  // ── Actions ───────────────────────────────────────────────────────────────
+  async function mgmtKeyProviderCreateFlow(id) {
+    const label = document.getElementById('mgmt-key-new-label-' + id).value.trim();
+    if (!label) { alert('Label is required.'); return; }
+    const limitStr = document.getElementById('mgmt-key-new-limit-' + id).value;
+    const limit = limitStr === '' ? null : Number(limitStr);
+
+    const checked = [...document.querySelectorAll('#mgmt-key-new-devices-' + id + ' input:checked')];
+    if (!checked.length) { alert('Select at least one device to encrypt the new secret for.'); return; }
+    const devices = checked.map(cb => ({ id: cb.value, key_type: cb.dataset.keyType, public_key: cb.dataset.publicKey }));
+
+    let mgmtKey;
+    try {
+      mgmtKey = await mgmtKeyDecryptManagementKey(id);
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+
+    let created;
+    try {
+      created = await mgmtKeyProviderCreate(mgmtKey, label, limit);
+    } catch (err) {
+      alert('Failed to create key on provider: ' + err.message);
+      return;
+    }
+
+    let payload;
+    try {
+      payload = await mgmtKeyEncryptToDevices('provisioned-key:' + created.providerKeyId, created.plaintextSecret, devices);
+    } catch (err) {
+      alert('Created on the provider but failed to encrypt for storage: ' + err.message +
+            '\nProvider key id: ' + created.providerKeyId + ' — secret shown once: ' + created.plaintextSecret);
+      return;
+    }
+
+    const resp = await fetch('/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider_key_id: created.providerKeyId, label: created.label, ...payload }),
+    });
+    if (!resp.ok) {
+      alert('Created on the provider but failed to store an encrypted copy (' + resp.status + ').\n' +
+            'Provider key id: ' + created.providerKeyId + ' — secret shown once: ' + created.plaintextSecret);
+      return;
+    }
+
+    alert('Created "' + created.label + '" (provider id: ' + created.providerKeyId + ').\nSecret (shown once): ' + created.plaintextSecret);
+    await mgmtKeyRefreshProvisionedPanel(id);
+  }
+
+  async function mgmtKeyRevokeProviderKey(id, providerKeyId) {
+    if (!confirm('Revoke ' + providerKeyId + ' on the provider?')) return;
+
+    let mgmtKey;
+    try {
+      mgmtKey = await mgmtKeyDecryptManagementKey(id);
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+    try {
+      await mgmtKeyProviderRevoke(mgmtKey, providerKeyId);
+    } catch (err) {
+      alert('Failed to revoke on provider: ' + err.message);
+      return;
+    }
+
+    // Best-effort: mark our stored record revoked too, if we have one.
+    try {
+      const resp = await fetch('/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys');
+      if (resp.ok) {
+        const rows = await resp.json();
+        const match = rows.find(r => r.provider_key_id === providerKeyId && r.status === 'active');
+        if (match) {
+          await fetch(
+            '/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys/' + encodeURIComponent(match.id) + '/revoke',
+            { method: 'POST' }
+          );
+        }
+      }
+    } catch { /* best-effort */ }
+
+    await mgmtKeyRefreshProvisionedPanel(id);
+  }
+
+  async function mgmtKeyShowStored(id, provisionedKeyId) {
+    const record = await mgmtKeyLoadBrowserDevice();
+    if (!record) {
+      alert('This browser has no valid device key. Go to Admin → Device Registration to register first.');
+      return;
+    }
+    const resp = await fetch(
+      '/api/admin/management-keys/' + encodeURIComponent(id) +
+      '/provisioned-keys/' + encodeURIComponent(provisionedKeyId) +
+      '/devices/' + encodeURIComponent(record.deviceId)
+    );
+    if (!resp.ok) { alert('Failed to fetch encrypted payload: ' + resp.status); return; }
+    const payload = await resp.json();
+    try {
+      alert(await mgmtKeyDecryptPayload(payload, record.privateKey));
+    } catch (err) {
+      alert('Decryption failed: ' + err.message);
+    }
+  }
+</script>

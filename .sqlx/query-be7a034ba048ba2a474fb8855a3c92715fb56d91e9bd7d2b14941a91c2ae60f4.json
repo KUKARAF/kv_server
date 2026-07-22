@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT key_type, ephemeral_pub, dek_nonce, encrypted_dek\n         FROM provisioned_key_recipients WHERE provisioned_key_id = ? AND device_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "key_type",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "ephemeral_pub",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "dek_nonce",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "encrypted_dek",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "be7a034ba048ba2a474fb8855a3c92715fb56d91e9bd7d2b14941a91c2ae60f4"
+}

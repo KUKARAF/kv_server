@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, provider, provider_key_id, label, status, created_at, revoked_at\n         FROM provisioned_keys WHERE management_key_id = ? ORDER BY created_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "provider",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "provider_key_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "label",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "status",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "revoked_at",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "a0767c785ae1c10401fdab36d01099389857619500c939449210e1aca467c24c"
+}

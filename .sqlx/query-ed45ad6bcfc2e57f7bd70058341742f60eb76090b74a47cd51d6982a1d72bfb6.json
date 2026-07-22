@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO management_key_bodies (management_key_id, nonce, ciphertext, aad)\n         VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "ed45ad6bcfc2e57f7bd70058341742f60eb76090b74a47cd51d6982a1d72bfb6"
+}

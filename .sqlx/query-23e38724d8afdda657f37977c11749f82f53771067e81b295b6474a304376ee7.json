@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO management_key_recipients\n                 (id, management_key_id, device_id, key_type, ephemeral_pub, dek_nonce, encrypted_dek)\n             VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "23e38724d8afdda657f37977c11749f82f53771067e81b295b6474a304376ee7"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT 1 as \"x: i32\" FROM management_keys WHERE id = ? AND owner_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "x: i32",
+        "ordinal": 0,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a5db2cb3b48540b04dc04bc4af51acf9ac68c9eb997cb44ae494e7133567bace"
+}

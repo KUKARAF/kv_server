@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE management_keys SET last_used_at = datetime('now') WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "5f8aa26dd6e3cdd815953ccec6ed99fe19affef1bb0137db36d325785169ec90"
+}

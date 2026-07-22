@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO provisioned_key_recipients\n                 (id, provisioned_key_id, device_id, key_type, ephemeral_pub, dek_nonce, encrypted_dek)\n             VALUES (?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "eee560773b51026b0be5f4793b495a259757f61701a43ebbdda0fddc7c06230e"
+}

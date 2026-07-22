@@ -6,6 +6,7 @@ mod devices;
 mod error;
 mod keys;
 mod kv;
+mod management_keys;
 mod middleware;
 mod notify;
 mod session_request;
@@ -95,6 +96,10 @@ async fn main() -> Result<()> {
         .nest("/api/session-request", session_request::public_router())
         .nest("/api/admin/shares", shares::admin_router())
         .nest("/api/share", shares::public_router())
+        .nest(
+            "/api/admin/management-keys",
+            management_keys::admin_router(),
+        )
         .nest("/api/admin", admin::router())
         .route(
             "/api/collect/:id",

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO provisioned_keys (id, management_key_id, provider, provider_key_id, label)\n         VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "b43d3ec89277029b33d0fd1cf2083cf2c78b7eecbc678501cf41ebd555857753"
+}

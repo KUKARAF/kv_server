@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT nonce, ciphertext, aad FROM management_key_bodies WHERE management_key_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "nonce",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "ciphertext",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "aad",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8ec88a0ecd2b77b5bb7a907f39c398b53663d93c6ac7d85c579887435ca443de"
+}

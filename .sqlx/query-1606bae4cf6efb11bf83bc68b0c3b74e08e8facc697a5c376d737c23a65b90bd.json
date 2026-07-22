@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO provisioned_key_bodies (provisioned_key_id, nonce, ciphertext, aad)\n         VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "1606bae4cf6efb11bf83bc68b0c3b74e08e8facc697a5c376d737c23a65b90bd"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT provider FROM management_keys WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "provider",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6aa5b2f20c3e9c3844026e10e4e536ba3f02aec52d6942024987aedc95712584"
+}

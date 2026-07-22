@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.nonce, b.ciphertext, b.aad\n         FROM provisioned_key_bodies b\n         JOIN provisioned_keys k ON k.id = b.provisioned_key_id\n         WHERE b.provisioned_key_id = ? AND k.management_key_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "nonce",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "ciphertext",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "aad",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "09ce726d1c460ef1ee923d99e0d74ba39f5a074133a3e25951f3b79bc5b2c8ef"
+}
