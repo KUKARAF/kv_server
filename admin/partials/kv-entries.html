@@ -7,6 +7,10 @@
       <label>Key <input name="key" required placeholder="DATABASE_URL"></label>
     </div>
     <label>Value <textarea name="value" required rows="2" placeholder="the value…"></textarea></label>
+    <div id="kv-generate-via-panel" style="display:none;margin-top:0.5rem;">
+      <div style="font-size:12px;color:#888;margin-bottom:0.35rem;">Generate value via:</div>
+      <div id="kv-generate-via-checkboxes" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;"></div>
+    </div>
     <div class="form-inline">
       <label>TTL (h) <input name="ttl_hours" type="number" step="0.1" min="0" placeholder="—" class="input-sm"></label>
       <label class="label-check"><input name="ttl_sliding" type="checkbox"> Sliding</label>
@@ -197,6 +201,107 @@
     }).join('');
   }
 
+  // ── Generate value via a stored management key ───────────────────────────
+  async function populateGenerateViaPicker() {
+    const resp = await fetch('/api/admin/management-keys');
+    if (!resp.ok) return;
+    const rows = await resp.json();
+    const active = rows.filter(r => r.status === 'active');
+    const panel = document.getElementById('kv-generate-via-panel');
+    const container = document.getElementById('kv-generate-via-checkboxes');
+    if (!active.length) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+    container.innerHTML = active.map(r => `
+      <label class="label-check">
+        <input type="checkbox" value="${esc(r.id)}" onchange="toggleGenerateVia(this)">
+        ${esc(r.provider === 'openrouter' ? 'OpenRouter' : r.provider)}${active.length > 1 ? ' (' + esc(r.label) + ')' : ''}
+      </label>`).join('');
+  }
+  populateGenerateViaPicker();
+
+  function toggleGenerateVia(cb) {
+    const form = cb.closest('form');
+    if (cb.checked) {
+      document.querySelectorAll('#kv-generate-via-checkboxes input').forEach(other => {
+        if (other !== cb) other.checked = false;
+      });
+      form.value.value = '';
+      form.value.disabled = true;
+      form.value.placeholder = 'will be generated on save…';
+    } else {
+      form.value.disabled = false;
+      form.value.placeholder = 'the value…';
+    }
+  }
+
+  // Same P-256 ECDH + HKDF + AES-GCM device-decrypt protocol as decryptDeviceKvPayload()
+  // above, just against a management-key envelope instead of a KV-entry envelope.
+  async function kvDecryptManagementKeyPayload(payload, privateKey) {
+    const encoder = new TextEncoder();
+    const ephPub = await crypto.subtle.importKey(
+      'raw', b64Decode(payload.recipient.ephemeral_pub),
+      { name: 'ECDH', namedCurve: 'P-256' }, false, []
+    );
+    const sharedBits = await crypto.subtle.deriveBits({ name: 'ECDH', public: ephPub }, privateKey, 256);
+    const hkdfKey = await crypto.subtle.importKey('raw', sharedBits, 'HKDF', false, ['deriveKey']);
+    const wrapKey = await crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: encoder.encode('kv-device-wrap') },
+      hkdfKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+    );
+    const dek = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(b64Decode(payload.recipient.dek_nonce)) },
+      wrapKey, b64Decode(payload.recipient.encrypted_dek)
+    );
+    const dekKey = await crypto.subtle.importKey('raw', dek, { name: 'AES-GCM' }, false, ['decrypt']);
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(b64Decode(payload.nonce)), additionalData: new Uint8Array(b64Decode(payload.aad)) },
+      dekKey, b64Decode(payload.ciphertext)
+    );
+    return new TextDecoder().decode(plaintext);
+  }
+
+  async function kvGenerateValueViaManagementKey(mgmtKeyId, label) {
+    const mkResp = await fetch('/api/admin/management-keys');
+    if (!mkResp.ok) throw new Error('failed to load management keys: ' + mkResp.status);
+    const mk = (await mkResp.json()).find(r => r.id === mgmtKeyId);
+    if (!mk) throw new Error('management key not found');
+    if (mk.provider !== 'openrouter') throw new Error('unsupported provider: ' + mk.provider);
+
+    const db = await _openAdminDB();
+    const record = await _dbGet(db, 'device');
+    if (!record?.deviceId || !record?.privateKey?.usages?.includes('deriveBits')) {
+      throw new Error('This browser has no valid device key. Register one in Devices first.');
+    }
+
+    const envResp = await fetch(
+      '/api/admin/management-keys/' + encodeURIComponent(mgmtKeyId) + '/devices/' + encodeURIComponent(record.deviceId)
+    );
+    if (!envResp.ok) throw new Error('failed to fetch encrypted management key: ' + envResp.status);
+    const mgmtKeySecret = await kvDecryptManagementKeyPayload(await envResp.json(), record.privateKey);
+
+    const createResp = await fetch('https://openrouter.ai/api/v1/keys/', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + mgmtKeySecret, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: label, limit: mk.default_limit ?? null }),
+    });
+    if (!createResp.ok) throw new Error('openrouter returned ' + createResp.status + ': ' + await createResp.text());
+    const created = await createResp.json();
+
+    // Per OpenRouter's docs, limit_reset is only documented on the update (PATCH)
+    // endpoint, not on create — so applying a default reset cadence takes a follow-up call.
+    if (mk.default_limit_reset) {
+      const providerKeyId = created.data?.hash ?? created.data?.id;
+      const patchResp = await fetch('https://openrouter.ai/api/v1/keys/' + encodeURIComponent(providerKeyId), {
+        method: 'PATCH',
+        headers: { Authorization: 'Bearer ' + mgmtKeySecret, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limit_reset: mk.default_limit_reset }),
+      });
+      if (!patchResp.ok) throw new Error('openrouter update (limit_reset) returned ' + patchResp.status + ': ' + await patchResp.text());
+    }
+
+    return created.key;
+  }
+
   async function addEntry(e) {
     e.preventDefault();
     const form = e.target;
@@ -206,6 +311,16 @@
     const approvalRequired = form.approval_required.checked;
     const zeroTrust = form.zero_trust.checked;
     const deviceEncrypted = form.device_encrypted.checked;
+
+    const generateViaId = document.querySelector('#kv-generate-via-checkboxes input:checked')?.value || null;
+    if (generateViaId) {
+      try {
+        form.value.value = await kvGenerateValueViaManagementKey(generateViaId, key);
+      } catch (err) {
+        alert('Failed to generate value: ' + err.message);
+        return false;
+      }
+    }
 
     if (deviceEncrypted) {
       await encryptToDevices(form, key);
@@ -305,6 +420,9 @@
       ['open_access', 'ttl_sliding', 'one_time', 'approval_required', 'zero_trust'].forEach(n => {
         form.querySelector('[name=' + n + ']').disabled = false;
       });
+      document.querySelectorAll('#kv-generate-via-checkboxes input').forEach(cb => cb.checked = false);
+      form.value.disabled = false;
+      form.value.placeholder = 'the value…';
       htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
       return false;
     }
@@ -355,6 +473,9 @@
     ['open_access', 'ttl_sliding', 'one_time', 'approval_required', 'zero_trust'].forEach(n => {
       form.querySelector('[name=' + n + ']').disabled = false;
     });
+    document.querySelectorAll('#kv-generate-via-checkboxes input').forEach(cb => cb.checked = false);
+    form.value.disabled = false;
+    form.value.placeholder = 'the value…';
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
     return false;
   }
