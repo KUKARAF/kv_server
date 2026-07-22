@@ -411,7 +411,7 @@
   }
 
   async function mgmtKeyProviderCreate(mgmtKey, label, limit, limitReset) {
-    const resp = await fetch(OPENROUTER_BASE + '/', {
+    const resp = await fetch(OPENROUTER_BASE, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + mgmtKey, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: label, limit: limit ?? null }),

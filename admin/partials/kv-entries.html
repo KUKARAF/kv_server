@@ -279,7 +279,7 @@
     if (!envResp.ok) throw new Error('failed to fetch encrypted management key: ' + envResp.status);
     const mgmtKeySecret = await kvDecryptManagementKeyPayload(await envResp.json(), record.privateKey);
 
-    const createResp = await fetch('https://openrouter.ai/api/v1/keys/', {
+    const createResp = await fetch('https://openrouter.ai/api/v1/keys', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + mgmtKeySecret, 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: label, limit: mk.default_limit ?? null }),
