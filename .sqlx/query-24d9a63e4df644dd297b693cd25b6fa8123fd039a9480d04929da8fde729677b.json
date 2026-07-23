@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO kv_entries\n             (key, owner_id, value, ttl_hours, ttl_sliding, expires_at, open_access,\n              zt_ciphertext, zt_wrapped_dek, zt_nonce, zt_aad, zt_prf_salt, zt_credential_id,\n              source_management_key_id, source_provider_key_id)\n         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n         ON CONFLICT(key, owner_id) DO UPDATE SET\n             value          = excluded.value,\n             ttl_hours      = excluded.ttl_hours,\n             ttl_sliding    = excluded.ttl_sliding,\n             expires_at     = excluded.expires_at,\n             open_access    = excluded.open_access,\n             zt_ciphertext  = excluded.zt_ciphertext,\n             zt_wrapped_dek = excluded.zt_wrapped_dek,\n             zt_nonce       = excluded.zt_nonce,\n             zt_aad         = excluded.zt_aad,\n             zt_prf_salt    = excluded.zt_prf_salt,\n             zt_credential_id = excluded.zt_credential_id,\n             source_management_key_id = excluded.source_management_key_id,\n             source_provider_key_id   = excluded.source_provider_key_id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 15
+    },
+    "nullable": []
+  },
+  "hash": "24d9a63e4df644dd297b693cd25b6fa8123fd039a9480d04929da8fde729677b"
+}

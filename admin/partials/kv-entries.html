@@ -260,7 +260,14 @@
     return new TextDecoder().decode(plaintext);
   }
 
-  async function kvGenerateValueViaManagementKey(mgmtKeyId, label) {
+  // When existingProviderKeyId is given, this doubles as the rotate path: fetch that key's
+  // *current* label/limit/limit_reset from the provider (not our stored defaults, which may
+  // be stale or never matched this specific key), delete it, then create the replacement
+  // with those values instead of `label`/the management key's defaults. Delete-then-create:
+  // there's a brief window with zero active keys, so a create failure after the delete has
+  // already happened must fail loudly (see the CRITICAL-prefixed errors below), matching the
+  // Management Keys panel's rotate flow.
+  async function kvGenerateValueViaManagementKey(mgmtKeyId, label, existingProviderKeyId = null) {
     const mkResp = await fetch('/api/admin/management-keys');
     if (!mkResp.ok) throw new Error('failed to load management keys: ' + mkResp.status);
     const mk = (await mkResp.json()).find(r => r.id === mgmtKeyId);
@@ -279,27 +286,56 @@
     if (!envResp.ok) throw new Error('failed to fetch encrypted management key: ' + envResp.status);
     const mgmtKeySecret = await kvDecryptManagementKeyPayload(await envResp.json(), record.privateKey);
 
+    let createLabel = label;
+    let createLimit = mk.default_limit ?? null;
+    let createLimitReset = mk.default_limit_reset ?? null;
+
+    if (existingProviderKeyId) {
+      const getResp = await fetch('https://openrouter.ai/api/v1/keys/' + encodeURIComponent(existingProviderKeyId), {
+        headers: { Authorization: 'Bearer ' + mgmtKeySecret },
+      });
+      if (!getResp.ok) {
+        throw new Error('failed to fetch current key info from provider — aborting rotation, nothing was changed: ' + getResp.status);
+      }
+      const info = (await getResp.json()).data || {};
+      createLabel = info.name ?? label;
+      createLimit = info.limit ?? null;
+      createLimitReset = info.limit_reset ?? null;
+
+      const delResp = await fetch('https://openrouter.ai/api/v1/keys/' + encodeURIComponent(existingProviderKeyId), {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer ' + mgmtKeySecret },
+      });
+      if (!delResp.ok) {
+        throw new Error('failed to delete old key on provider — aborting rotation, nothing was changed: ' + delResp.status);
+      }
+    }
+
+    const criticalPrefix = existingProviderKeyId
+      ? 'CRITICAL: the old key was already deleted on the provider, but creating its replacement failed — you now have NO active key for this identity. Retry manually. '
+      : '';
+
     const createResp = await fetch('https://openrouter.ai/api/v1/keys', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + mgmtKeySecret, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: label, limit: mk.default_limit ?? null }),
+      body: JSON.stringify({ name: createLabel, limit: createLimit }),
     });
-    if (!createResp.ok) throw new Error('openrouter returned ' + createResp.status + ': ' + await createResp.text());
+    if (!createResp.ok) throw new Error(criticalPrefix + 'openrouter returned ' + createResp.status + ': ' + await createResp.text());
     const created = await createResp.json();
+    const providerKeyId = created.data?.hash ?? created.data?.id;
 
     // Per OpenRouter's docs, limit_reset is only documented on the update (PATCH)
-    // endpoint, not on create — so applying a default reset cadence takes a follow-up call.
-    if (mk.default_limit_reset) {
-      const providerKeyId = created.data?.hash ?? created.data?.id;
+    // endpoint, not on create — so applying a reset cadence takes a follow-up call.
+    if (createLimitReset) {
       const patchResp = await fetch('https://openrouter.ai/api/v1/keys/' + encodeURIComponent(providerKeyId), {
         method: 'PATCH',
         headers: { Authorization: 'Bearer ' + mgmtKeySecret, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ limit_reset: mk.default_limit_reset }),
+        body: JSON.stringify({ limit_reset: createLimitReset }),
       });
-      if (!patchResp.ok) throw new Error('openrouter update (limit_reset) returned ' + patchResp.status + ': ' + await patchResp.text());
+      if (!patchResp.ok) throw new Error(criticalPrefix + 'openrouter update (limit_reset) returned ' + patchResp.status + ': ' + await patchResp.text());
     }
 
-    return created.key;
+    return { plaintextSecret: created.key, providerKeyId };
   }
 
   async function addEntry(e) {
@@ -313,9 +349,12 @@
     const deviceEncrypted = form.device_encrypted.checked;
 
     const generateViaId = document.querySelector('#kv-generate-via-checkboxes input:checked')?.value || null;
+    let generatedProviderKeyId = null;
     if (generateViaId) {
       try {
-        form.value.value = await kvGenerateValueViaManagementKey(generateViaId, key);
+        const result = await kvGenerateValueViaManagementKey(generateViaId, key);
+        form.value.value = result.plaintextSecret;
+        generatedProviderKeyId = result.providerKeyId;
       } catch (err) {
         alert('Failed to generate value: ' + err.message);
         return false;
@@ -433,6 +472,11 @@
       ttl_hours: ttlRaw ? parseFloat(ttlRaw) : null,
       ttl_sliding: form.ttl_sliding.checked,
       open_access: form.open_access.checked,
+      // Cleared (null) when not using generate-via, so a manual save drops any previous link
+      // — the value has diverged from "sourced from provider key X", so Rotate on it
+      // afterwards would be misleading.
+      source_management_key_id: generateViaId,
+      source_provider_key_id: generateViaId ? generatedProviderKeyId : null,
     };
 
     const resp = await fetch('/api/admin/kv', {
@@ -540,8 +584,11 @@
     }
   });
 
+  let _kvEntriesCache = [];
+
   function renderEntries(json, devices = []) {
     const entries = JSON.parse(json);
+    _kvEntriesCache = entries;
     const el = document.getElementById('entries-list');
     if (!entries.length) { el.innerHTML = '<p>No entries found.</p>'; return; }
     el.innerHTML = `<table>
@@ -561,6 +608,8 @@
           ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="openReEncryptModal('${esc(e.key)}',JSON.parse(this.dataset.ids))" data-ids="${recipJson}">Devices</button>`
           : ''}${!e.device_encrypted
           ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="shareEntry('${esc(e.key)}')">Share</button>`
+          : ''}${!e.device_encrypted && e.source_provider_key_id
+          ? `<button class="btn-secondary" style="font-size:11px;padding:2px 7px;margin-right:4px" onclick="kvRotateEntry('${esc(e.key)}')">Rotate key</button>`
           : ''}<button class="btn-icon" onclick="deleteEntry('${esc(e.key)}')" title="Delete">🗑️</button>`;
         return `
         <tr>
@@ -574,6 +623,45 @@
         </tr>`;
       }).join('')}
       </tbody></table>`;
+  }
+
+  async function kvRotateEntry(key) {
+    const entry = _kvEntriesCache.find(e => e.key === key);
+    if (!entry || !entry.source_management_key_id || !entry.source_provider_key_id) {
+      alert('No provider key associated with this entry.');
+      return;
+    }
+    if (!confirm('Rotate the provider key backing "' + key + '"? This deletes it on the provider and creates a replacement with the same limits.')) return;
+
+    let result;
+    try {
+      result = await kvGenerateValueViaManagementKey(entry.source_management_key_id, key, entry.source_provider_key_id);
+    } catch (err) {
+      alert('Rotation failed: ' + err.message);
+      return;
+    }
+
+    const resp = await fetch('/api/admin/kv', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        key,
+        value: result.plaintextSecret,
+        ttl_hours: entry.ttl_hours,
+        ttl_sliding: entry.ttl_sliding,
+        open_access: entry.open_access,
+        source_management_key_id: entry.source_management_key_id,
+        source_provider_key_id: result.providerKeyId,
+      }),
+    });
+    if (!resp.ok) {
+      alert('CRITICAL: the old key was already deleted on the provider and a new one was created, but saving it to this KV entry failed (HTTP ' + resp.status + ').\n' +
+            'New secret (shown once): ' + result.plaintextSecret);
+      return;
+    }
+
+    alert('Rotated "' + key + '" — the new secret is now stored as this entry\'s value.');
+    htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
   }
 
   async function createAndShowShare(kv_key, plaintext) {

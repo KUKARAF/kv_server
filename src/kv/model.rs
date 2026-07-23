@@ -43,6 +43,10 @@ pub struct KvMetaResponse {
     pub device_encrypted: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recipient_device_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_management_key_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_provider_key_id: Option<String>,
 }
 
 pub fn compute_expires_at(ttl_hours: Option<f64>) -> Option<String> {

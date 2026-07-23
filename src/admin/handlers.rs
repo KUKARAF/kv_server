@@ -492,6 +492,7 @@ pub async fn list_kv_entries(
                 r#"SELECT k.key, k.ttl_hours, k.ttl_sliding as "ttl_sliding: bool",
                         k.expires_at, k.open_access as "open_access: bool", k.created_at,
                         k.device_encrypted as "device_encrypted: bool",
+                        k.source_management_key_id, k.source_provider_key_id,
                         (SELECT json_group_array(dr.device_id)
                          FROM device_kv_recipients dr
                          WHERE dr.kv_key = k.key AND dr.owner_id = k.owner_id
@@ -521,6 +522,8 @@ pub async fn list_kv_entries(
                 } else {
                     None
                 },
+                source_management_key_id: r.source_management_key_id,
+                source_provider_key_id: r.source_provider_key_id,
             })
             .collect()
         }
@@ -528,6 +531,7 @@ pub async fn list_kv_entries(
             r#"SELECT k.key, k.ttl_hours, k.ttl_sliding as "ttl_sliding: bool",
                         k.expires_at, k.open_access as "open_access: bool", k.created_at,
                         k.device_encrypted as "device_encrypted: bool",
+                        k.source_management_key_id, k.source_provider_key_id,
                         (SELECT json_group_array(dr.device_id)
                          FROM device_kv_recipients dr
                          WHERE dr.kv_key = k.key AND dr.owner_id = k.owner_id
@@ -556,6 +560,8 @@ pub async fn list_kv_entries(
             } else {
                 None
             },
+            source_management_key_id: r.source_management_key_id,
+            source_provider_key_id: r.source_provider_key_id,
         })
         .collect(),
     };
@@ -621,8 +627,9 @@ pub async fn admin_write_kv(
     sqlx::query!(
         "INSERT INTO kv_entries
              (key, owner_id, value, ttl_hours, ttl_sliding, expires_at, open_access,
-              zt_ciphertext, zt_wrapped_dek, zt_nonce, zt_aad, zt_prf_salt, zt_credential_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              zt_ciphertext, zt_wrapped_dek, zt_nonce, zt_aad, zt_prf_salt, zt_credential_id,
+              source_management_key_id, source_provider_key_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(key, owner_id) DO UPDATE SET
              value          = excluded.value,
              ttl_hours      = excluded.ttl_hours,
@@ -634,7 +641,9 @@ pub async fn admin_write_kv(
              zt_nonce       = excluded.zt_nonce,
              zt_aad         = excluded.zt_aad,
              zt_prf_salt    = excluded.zt_prf_salt,
-             zt_credential_id = excluded.zt_credential_id",
+             zt_credential_id = excluded.zt_credential_id,
+             source_management_key_id = excluded.source_management_key_id,
+             source_provider_key_id   = excluded.source_provider_key_id",
         body.key,
         owner,
         body.value,
@@ -647,7 +656,9 @@ pub async fn admin_write_kv(
         body.zt_nonce,
         body.zt_aad,
         body.zt_prf_salt,
-        body.zt_credential_id
+        body.zt_credential_id,
+        body.source_management_key_id,
+        body.source_provider_key_id
     )
     .execute(&state.pool)
     .await?;

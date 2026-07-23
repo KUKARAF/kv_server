@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT k.key, k.ttl_hours, k.ttl_sliding as \"ttl_sliding: bool\",\n                        k.expires_at, k.open_access as \"open_access: bool\", k.created_at,\n                        k.device_encrypted as \"device_encrypted: bool\",\n                        k.source_management_key_id, k.source_provider_key_id,\n                        (SELECT json_group_array(dr.device_id)\n                         FROM device_kv_recipients dr\n                         WHERE dr.kv_key = k.key AND dr.owner_id = k.owner_id\n                        ) as \"recipient_device_ids_json: String\"\n                 FROM kv_entries k\n                 WHERE k.key LIKE ? AND k.owner_id = ?\n                   AND (k.expires_at IS NULL OR k.expires_at > datetime('now'))\n                 ORDER BY k.key",
+  "describe": {
+    "columns": [
+      {
+        "name": "key",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "ttl_hours",
+        "ordinal": 1,
+        "type_info": "Float"
+      },
+      {
+        "name": "ttl_sliding: bool",
+        "ordinal": 2,
+        "type_info": "Int64"
+      },
+      {
+        "name": "expires_at",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "open_access: bool",
+        "ordinal": 4,
+        "type_info": "Int64"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_encrypted: bool",
+        "ordinal": 6,
+        "type_info": "Int64"
+      },
+      {
+        "name": "source_management_key_id",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "source_provider_key_id",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "recipient_device_ids_json: String",
+        "ordinal": 9,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "ce3d913c58488bfd9efcadd54a5564458c6680de234aa0f2174019ef1359a793"
+}

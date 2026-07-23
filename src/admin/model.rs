@@ -77,6 +77,10 @@ pub struct AdminKvWriteRequest {
     pub zt_aad: Option<String>,
     pub zt_credential_id: Option<String>,
     pub zt_prf_salt: Option<String>,
+    // Set when this value came from "generate value via management key" — lets the KV
+    // Entries list offer a Rotate action. Cleared (send null) on any manual edit.
+    pub source_management_key_id: Option<String>,
+    pub source_provider_key_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -343,6 +343,8 @@ pub async fn list_entries(
                 created_at: r.created_at,
                 device_encrypted: None,
                 recipient_device_ids: None,
+                source_management_key_id: None,
+                source_provider_key_id: None,
             })
             .collect()
         }
@@ -367,6 +369,8 @@ pub async fn list_entries(
             created_at: r.created_at,
             device_encrypted: None,
             recipient_device_ids: None,
+            source_management_key_id: None,
+            source_provider_key_id: None,
         })
         .collect(),
     };
