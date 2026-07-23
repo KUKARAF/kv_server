@@ -3,7 +3,7 @@ pub mod model;
 
 use crate::state::AppState;
 use axum::{
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
     Router,
 };
 use std::sync::Arc;
@@ -29,7 +29,7 @@ pub fn admin_router() -> Router<Arc<AppState>> {
             get(handlers::get_provisioned_key_envelope),
         )
         .route(
-            "/:id/provisioned-keys/:pk_id/revoke",
-            post(handlers::revoke_provisioned_key),
+            "/:id/provisioned-keys/:pk_id",
+            delete(handlers::delete_provisioned_key),
         )
 }

@@ -388,7 +388,10 @@ pub async fn get_provisioned_key_envelope(
     })))
 }
 
-pub async fn revoke_provisioned_key(
+/// Hard delete — called after the caller has already deleted the key on the provider,
+/// so the stored encrypted copy is no longer recoverable-but-useless; bodies/recipients
+/// cascade via ON DELETE CASCADE.
+pub async fn delete_provisioned_key(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
     Path((management_key_id, provisioned_key_id)): Path<(String, String)>,
@@ -397,8 +400,7 @@ pub async fn revoke_provisioned_key(
     require_owned_management_key(&state, &management_key_id, owner_id).await?;
 
     let affected = sqlx::query!(
-        "UPDATE provisioned_keys SET status = 'revoked', revoked_at = datetime('now')
-         WHERE id = ? AND management_key_id = ? AND status = 'active'",
+        "DELETE FROM provisioned_keys WHERE id = ? AND management_key_id = ?",
         provisioned_key_id,
         management_key_id,
     )

@@ -570,20 +570,24 @@
       return;
     }
 
-    // Best-effort: mark our stored record revoked too, if we have one.
+    // Provider-side delete succeeded — clean up our local record if we have one. Must not
+    // fail silently: if we DO have a stored copy but can't delete it, that's a real
+    // inconsistency (a now-invalid secret left recoverable via Show) the user needs to know.
     try {
       const resp = await fetch('/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys');
-      if (resp.ok) {
-        const rows = await resp.json();
-        const match = rows.find(r => r.provider_key_id === providerKeyId && r.status === 'active');
-        if (match) {
-          await fetch(
-            '/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys/' + encodeURIComponent(match.id) + '/revoke',
-            { method: 'POST' }
-          );
-        }
+      if (!resp.ok) throw new Error('failed to list stored records: ' + resp.status);
+      const rows = await resp.json();
+      const match = rows.find(r => r.provider_key_id === providerKeyId);
+      if (match) {
+        const delResp = await fetch(
+          '/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys/' + encodeURIComponent(match.id),
+          { method: 'DELETE' }
+        );
+        if (!delResp.ok) throw new Error('failed to delete local record: ' + delResp.status);
       }
-    } catch { /* best-effort */ }
+    } catch (err) {
+      alert('Revoked on provider, but failed to clean up the local record: ' + err.message);
+    }
 
     await mgmtKeyRefreshProvisionedPanel(id);
   }

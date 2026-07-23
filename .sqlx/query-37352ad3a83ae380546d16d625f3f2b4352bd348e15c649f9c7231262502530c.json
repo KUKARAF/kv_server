@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM provisioned_keys WHERE id = ? AND management_key_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "37352ad3a83ae380546d16d625f3f2b4352bd348e15c649f9c7231262502530c"
+}
