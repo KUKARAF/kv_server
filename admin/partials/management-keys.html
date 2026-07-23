@@ -410,6 +410,21 @@
     }));
   }
 
+  async function mgmtKeyProviderGet(mgmtKey, providerKeyId) {
+    const resp = await fetch(OPENROUTER_BASE + '/' + encodeURIComponent(providerKeyId), {
+      headers: { Authorization: 'Bearer ' + mgmtKey },
+    });
+    if (!resp.ok) throw new Error('openrouter returned ' + resp.status + ': ' + await resp.text());
+    const parsed = await resp.json();
+    const data = parsed.data || {};
+    return {
+      providerKeyId: data.hash ?? data.id,
+      label: data.name,
+      limit: data.limit ?? null,
+      limitReset: data.limit_reset ?? null,
+    };
+  }
+
   async function mgmtKeyProviderCreate(mgmtKey, label, limit, limitReset) {
     const resp = await fetch(OPENROUTER_BASE, {
       method: 'POST',
@@ -477,7 +492,10 @@
           <td>${k.disabled
             ? '<span class="badge badge-revoked">disabled</span>'
             : '<span class="badge badge-active">active</span>'}</td>
-          <td><button class="btn-danger" onclick="mgmtKeyRevokeProviderKey('${esc(id)}', '${esc(k.providerKeyId)}')">Revoke</button></td>
+          <td>
+            <button class="btn-secondary" onclick="mgmtKeyRotateProviderKey('${esc(id)}', '${esc(k.providerKeyId)}')">Rotate</button>
+            <button class="btn-danger" onclick="mgmtKeyRevokeProviderKey('${esc(id)}', '${esc(k.providerKeyId)}')">Revoke</button>
+          </td>
         </tr>`).join('')}
       </tbody></table>`;
   }
@@ -553,6 +571,21 @@
     await mgmtKeyRefreshProvisionedPanel(id);
   }
 
+  // Deletes our local stored record for providerKeyId, if one exists. Throws on failure —
+  // callers decide how to report it (severity/wording differs between revoke and rotate).
+  async function mgmtKeyDeleteLocalRecord(id, providerKeyId) {
+    const resp = await fetch('/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys');
+    if (!resp.ok) throw new Error('failed to list stored records: ' + resp.status);
+    const rows = await resp.json();
+    const match = rows.find(r => r.provider_key_id === providerKeyId);
+    if (!match) return;
+    const delResp = await fetch(
+      '/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys/' + encodeURIComponent(match.id),
+      { method: 'DELETE' }
+    );
+    if (!delResp.ok) throw new Error('failed to delete local record: ' + delResp.status);
+  }
+
   async function mgmtKeyRevokeProviderKey(id, providerKeyId) {
     if (!confirm('Revoke ' + providerKeyId + ' on the provider?')) return;
 
@@ -574,21 +607,92 @@
     // fail silently: if we DO have a stored copy but can't delete it, that's a real
     // inconsistency (a now-invalid secret left recoverable via Show) the user needs to know.
     try {
-      const resp = await fetch('/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys');
-      if (!resp.ok) throw new Error('failed to list stored records: ' + resp.status);
-      const rows = await resp.json();
-      const match = rows.find(r => r.provider_key_id === providerKeyId);
-      if (match) {
-        const delResp = await fetch(
-          '/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys/' + encodeURIComponent(match.id),
-          { method: 'DELETE' }
-        );
-        if (!delResp.ok) throw new Error('failed to delete local record: ' + delResp.status);
-      }
+      await mgmtKeyDeleteLocalRecord(id, providerKeyId);
     } catch (err) {
       alert('Revoked on provider, but failed to clean up the local record: ' + err.message);
     }
 
+    await mgmtKeyRefreshProvisionedPanel(id);
+  }
+
+  async function mgmtKeyRotateProviderKey(id, providerKeyId) {
+    // Reuses the device picker already rendered in the "Create a key on the provider" form
+    // in this same panel, instead of prompting again.
+    const checked = [...document.querySelectorAll('#mgmt-key-new-devices-' + id + ' input:checked')];
+    if (!checked.length) {
+      alert('Select at least one device in "Create a key on the provider" below before rotating — the replacement key is encrypted for those devices.');
+      return;
+    }
+    if (!confirm('Rotate ' + providerKeyId + '? This deletes it on the provider and creates a replacement with the same label/limit/reset.')) return;
+    const devices = checked.map(cb => ({ id: cb.value, key_type: cb.dataset.keyType, public_key: cb.dataset.publicKey }));
+
+    let mgmtKey;
+    try {
+      mgmtKey = await mgmtKeyDecryptManagementKey(id);
+    } catch (err) {
+      alert(err.message);
+      return;
+    }
+
+    // Read the key's *current* limit/limit_reset from the provider itself — not our stored
+    // defaults, which may be stale or never matched this specific key.
+    let info;
+    try {
+      info = await mgmtKeyProviderGet(mgmtKey, providerKeyId);
+    } catch (err) {
+      alert('Failed to fetch current key info from provider — aborting rotation, nothing was changed: ' + err.message);
+      return;
+    }
+
+    // Delete old, then create new: brief window with zero active keys. If create-new then
+    // fails, that's the accepted risk of this ordering, so it must fail loudly (see below).
+    try {
+      await mgmtKeyProviderRevoke(mgmtKey, providerKeyId);
+    } catch (err) {
+      alert('Failed to delete old key on provider — aborting rotation, nothing was changed: ' + err.message);
+      return;
+    }
+
+    // Best-effort: local cleanup of the old record is non-fatal here — the user still needs
+    // the replacement key regardless of whether our bookkeeping for the old one succeeds.
+    try {
+      await mgmtKeyDeleteLocalRecord(id, providerKeyId);
+    } catch (err) {
+      alert('Deleted old key on provider, but failed to remove its local record: ' + err.message);
+    }
+
+    let created;
+    try {
+      created = await mgmtKeyProviderCreate(mgmtKey, info.label, info.limit, info.limitReset);
+    } catch (err) {
+      alert(
+        'CRITICAL: the old key was already deleted on the provider, but creating its ' +
+        'replacement failed — you now have NO active key for this identity. Retry manually.\n\n' + err.message
+      );
+      return;
+    }
+
+    let payload;
+    try {
+      payload = await mgmtKeyEncryptToDevices('provisioned-key:' + created.providerKeyId, created.plaintextSecret, devices);
+    } catch (err) {
+      alert('New key created on the provider but failed to encrypt for storage: ' + err.message +
+            '\nProvider key id: ' + created.providerKeyId + ' — secret shown once: ' + created.plaintextSecret);
+      return;
+    }
+
+    const resp = await fetch('/api/admin/management-keys/' + encodeURIComponent(id) + '/provisioned-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider_key_id: created.providerKeyId, label: created.label, ...payload }),
+    });
+    if (!resp.ok) {
+      alert('New key created on the provider but failed to store an encrypted copy (' + resp.status + ').\n' +
+            'Provider key id: ' + created.providerKeyId + ' — secret shown once: ' + created.plaintextSecret);
+      return;
+    }
+
+    alert('Rotated to "' + created.label + '" (new provider id: ' + created.providerKeyId + ').\nSecret (shown once): ' + created.plaintextSecret);
     await mgmtKeyRefreshProvisionedPanel(id);
   }
 
