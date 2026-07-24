@@ -453,6 +453,7 @@
         document.getElementById('share-url').textContent = shareUrl;
         document.getElementById('share-open').href = shareUrl;
         document.getElementById('share-reveal').classList.remove('hidden');
+        document.getElementById('share-reveal').scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
 
       form.reset();
@@ -509,6 +510,7 @@
         document.getElementById('share-url').textContent = shareUrl;
         document.getElementById('share-open').href = shareUrl;
         document.getElementById('share-reveal').classList.remove('hidden');
+        document.getElementById('share-reveal').scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
     }
 
@@ -694,6 +696,7 @@
     document.getElementById('share-url').textContent = shareUrl;
     document.getElementById('share-open').href = shareUrl;
     document.getElementById('share-reveal').classList.remove('hidden');
+    document.getElementById('share-reveal').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   async function shareEntry(key) {
