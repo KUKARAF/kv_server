@@ -30,17 +30,20 @@
   </form>
 
   <!-- Share reveal (one-time and approval-required) -->
-  <div id="share-reveal" class="share-reveal hidden">
-    <div class="share-reveal-header">
-      <span id="share-reveal-title">🔐 One-time share link generated</span>
-      <button type="button" class="btn-icon" onclick="document.getElementById('share-reveal').classList.add('hidden')">✕</button>
-    </div>
-    <p id="share-reveal-warn" class="share-reveal-warn">This link can only be used <strong>once</strong>. The value will be gone after retrieval.</p>
-    <div id="share-reveal-emoji" style="font-size:2.5rem;margin-bottom:.5rem;display:none;"></div>
-    <div class="share-reveal-url">
-      <code id="share-url"></code>
-      <button type="button" class="btn-secondary" onclick="copyShareUrl()">Copy</button>
-      <a id="share-open" href="#" target="_blank" class="btn">Open</a>
+  <!-- Modal (not inline) so it's visible regardless of scroll position in a long entries list -->
+  <div id="share-reveal-overlay" class="hidden" style="position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;display:flex;align-items:center;justify-content:center;">
+    <div id="share-reveal" class="share-reveal" style="max-width:520px;width:90%;max-height:80vh;overflow-y:auto;margin:0;">
+      <div class="share-reveal-header">
+        <span id="share-reveal-title">🔐 One-time share link generated</span>
+        <button type="button" class="btn-icon" onclick="document.getElementById('share-reveal-overlay').classList.add('hidden')">✕</button>
+      </div>
+      <p id="share-reveal-warn" class="share-reveal-warn">This link can only be used <strong>once</strong>. The value will be gone after retrieval.</p>
+      <div id="share-reveal-emoji" style="font-size:2.5rem;margin-bottom:.5rem;display:none;"></div>
+      <div class="share-reveal-url">
+        <code id="share-url"></code>
+        <button type="button" class="btn-secondary" onclick="copyShareUrl()">Copy</button>
+        <a id="share-open" href="#" target="_blank" class="btn">Open</a>
+      </div>
     </div>
   </div>
 
@@ -452,8 +455,7 @@
         document.getElementById('share-reveal-emoji').style.display = 'none';
         document.getElementById('share-url').textContent = shareUrl;
         document.getElementById('share-open').href = shareUrl;
-        document.getElementById('share-reveal').classList.remove('hidden');
-        document.getElementById('share-reveal').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        document.getElementById('share-reveal-overlay').classList.remove('hidden');
       }
 
       form.reset();
@@ -509,8 +511,7 @@
         document.getElementById('share-reveal-emoji').style.display = 'none';
         document.getElementById('share-url').textContent = shareUrl;
         document.getElementById('share-open').href = shareUrl;
-        document.getElementById('share-reveal').classList.remove('hidden');
-        document.getElementById('share-reveal').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        document.getElementById('share-reveal-overlay').classList.remove('hidden');
       }
     }
 
@@ -695,8 +696,7 @@
     document.getElementById('share-reveal-emoji').style.display = 'none';
     document.getElementById('share-url').textContent = shareUrl;
     document.getElementById('share-open').href = shareUrl;
-    document.getElementById('share-reveal').classList.remove('hidden');
-    document.getElementById('share-reveal').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    document.getElementById('share-reveal-overlay').classList.remove('hidden');
   }
 
   async function shareEntry(key) {
