@@ -80,9 +80,23 @@
         <p id="duration-hint" class="duration-hint"></p>
       </div>
 
+      <div class="duration-row">
+        <label for="confirm-code">Confirm code (ask the requester)</label>
+        <input
+          type="text"
+          id="confirm-code"
+          placeholder="paste the 3-emoji code"
+          autocomplete="off"
+          style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;padding:0.4rem 0.6rem;border-radius:5px;font-size:16px;box-sizing:border-box;"
+          oninput="document.getElementById('approve-btn').disabled = !this.value.trim()"
+        >
+        <p class="duration-hint">The requester's client printed/displayed this code — do not approve without it.</p>
+        <p id="confirm-error" class="duration-hint" style="color:#f87171;display:none;"></p>
+      </div>
+
       <div class="action-row">
         <button class="btn-danger" onclick="rejectRequest()">Reject</button>
-        <button class="btn" onclick="approveRequest()">Approve</button>
+        <button class="btn" id="approve-btn" onclick="approveRequest()" disabled>Approve</button>
       </div>
     </div>
   </div>
@@ -188,13 +202,20 @@
     // ── Approve / Reject ──────────────────────────────────────────────────────
     async function approveRequest() {
       const hours = parseInt(document.getElementById('duration').value, 10);
+      const confirmCode = document.getElementById('confirm-code').value.trim();
+      const errorEl = document.getElementById('confirm-error');
+      errorEl.style.display = 'none';
+
       const resp = await fetch('/api/admin/session-requests/' + requestId + '/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved_duration_hours: hours }),
+        body: JSON.stringify({ approved_duration_hours: hours, confirm_code: confirmCode }),
       });
       if (resp.ok) {
         showStatus('✅', 'Approved! Session token valid for ' + formatHours(hours) + '.');
+      } else if (resp.status === 403) {
+        errorEl.textContent = "Code doesn't match — confirm the code with the requester and try again.";
+        errorEl.style.display = 'block';
       } else {
         showStatus('❌', 'Approval failed (' + resp.status + ').');
       }

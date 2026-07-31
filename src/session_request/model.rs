@@ -13,6 +13,10 @@ pub struct CreateSessionRequestResponse {
     pub expires_at: String,
     /// Secret held only by the requester; required to poll for the session token.
     pub poll_secret: String,
+    /// Human-verifiable code the requester must relay to the approving admin
+    /// out-of-band; required (hashed) proof that an approval actually corresponds to
+    /// this specific requester, not just whoever's row the admin happens to click.
+    pub confirm_code: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,4 +43,5 @@ pub struct SessionRequestRow {
 #[derive(Debug, Deserialize)]
 pub struct ApproveSessionRequestBody {
     pub approved_duration_hours: Option<i64>,
+    pub confirm_code: String,
 }

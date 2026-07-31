@@ -1,7 +1,7 @@
 use crate::{
     auth::middleware::AdminAuth,
     error::AppError,
-    keys::generate::{generate_api_key, hash_key},
+    keys::generate::{generate_api_key, generate_emoji_sequence, hash_key},
     session_request::model::*,
     state::AppState,
 };
@@ -20,18 +20,25 @@ pub async fn create_request(
     let id = Uuid::new_v4().to_string();
     // Separate poll secret held only by the requester; stored hashed.
     let (poll_secret, poll_secret_hash) = generate_api_key();
+    // Human-verifiable code the requester relays to the admin out-of-band; the admin
+    // must submit it back at approval time so approving is bound to a secret only the
+    // real requester holds, not just to whichever pending row gets clicked.
+    let confirm_code = generate_emoji_sequence();
+    let confirm_code_hash = bcrypt::hash(&confirm_code, 6)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {e}")))?;
     let expires_at = sqlx::query_scalar!("SELECT datetime('now', '+15 minutes')")
         .fetch_one(&state.pool)
         .await?
         .unwrap_or_default();
 
     sqlx::query!(
-        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret, confirm_code_hash) VALUES (?, ?, ?, ?, ?, ?)",
         id,
         body.label,
         expires_at,
         body.requested_duration_hours,
-        poll_secret_hash
+        poll_secret_hash,
+        confirm_code_hash
     )
     .execute(&state.pool)
     .await?;
@@ -48,6 +55,7 @@ pub async fn create_request(
             url,
             expires_at,
             poll_secret,
+            confirm_code,
         }),
     ))
 }
@@ -152,16 +160,25 @@ pub async fn approve(
 
     let mut tx = state.pool.begin().await?;
 
-    let exists = sqlx::query_scalar!(
-        r#"SELECT 1 as "x: i32" FROM session_requests
-           WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')"#,
+    let row = sqlx::query!(
+        "SELECT confirm_code_hash FROM session_requests
+         WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
         id
     )
     .fetch_optional(&mut *tx)
-    .await?;
+    .await?
+    .ok_or(AppError::NotFound)?;
 
-    if exists.is_none() {
-        return Err(AppError::NotFound);
+    // Require proof that the approving admin actually confirmed the code with the
+    // real requester — without this, approval is bound only to a click on a
+    // self-reported label, which an unauthenticated attacker can spoof.
+    let confirm_hash = row.confirm_code_hash.ok_or(AppError::NotFound)?;
+    let matches = bcrypt::verify(&body.confirm_code, &confirm_hash)
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {e}")))?;
+    if !matches {
+        return Err(AppError::Forbidden(
+            "confirm code does not match".to_string(),
+        ));
     }
 
     let expires_offset = format!("+{} hours", duration_hours);
