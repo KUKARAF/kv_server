@@ -299,7 +299,14 @@ pub async fn create_cli_token(
     auth: AdminAuth,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<String>, AppError> {
-    let days = body["days"].as_i64().unwrap_or(1).clamp(1, 7);
+    // Request body is client-supplied JSON; use `.get()` rather than indexing
+    // so a missing/wrong-typed "days" field falls through to the default
+    // instead of risking a panic.
+    let days = body
+        .get("days")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1)
+        .clamp(1, 7);
     let owner = &auth.0.oidc_subject;
     let (plaintext, key_hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();

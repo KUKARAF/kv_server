@@ -1,0 +1,78 @@
+name: CI (required)
+
+# BLOCKING pipeline - a merge request cannot be merged while this fails.
+#
+# The panic-safety gate exists because of "Rust: Don't Panic" (No
+# Boilerplate, https://www.youtube.com/watch?v=usRlRCNIOG0). Chapter 9 of
+# the Rust book names three ways Rust code crashes at runtime:
+#   1. explicit panicking (`panic!`, and `.unwrap()`/`.expect()`, which
+#      panic internally)
+#   2. implicit panicking (e.g. indexing/slicing past the end of a
+#      collection)
+#   3. unwrapping an `Err`/`None` without handling it
+# The video's advice: "the solution is to get the local tooling and remote
+# CI to throw out all code that can crash." That's exactly what this job
+# does - it's not optional style preference, it's the merge gate.
+#
+# The specific lints (clippy::unwrap_used, expect_used, panic, todo,
+# unimplemented, unreachable, indexing_slicing) are declared `deny` in
+# Cargo.toml's [lints.clippy] - this workflow doesn't hardcode them, it
+# just runs `cargo clippy` and lets that config do the enforcing, so the
+# source of truth for "what's a blocking violation" lives in one place.
+#
+# Scoped to `--bins` (this crate has no library target, only binaries):
+# production code only, not test code - `indexing_slicing` has no "allow
+# in tests" knob in clippy.toml, so linting test code with it would be
+# noise unrelated to runtime safety.
+#
+# SQLX_OFFLINE=true: sqlx's query! macros normally need a live DB at
+# compile time to verify queries; this repo commits a `.sqlx/` query cache
+# so CI can build/clippy/test without standing up a database service.
+#
+# This is a new, separate workflow added alongside the repo's existing
+# build.yaml - it does not replace or modify it, nor .pre-commit-config.yaml.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-required-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SQLX_OFFLINE: "true"
+
+jobs:
+  rust:
+    name: Rust (fmt, build, test, panic-safety clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo build
+        run: cargo build --bins
+
+      - name: cargo test
+        run: cargo test
+
+      - name: cargo clippy (panic-safety gate, production code only)
+        # No `-D warnings` here (unlike rust_note): this repo has other,
+        # pre-existing non-panic-safety warnings (e.g. dead_code) out of
+        # this gate's scope. The panic-safety lints are `deny` in
+        # Cargo.toml's [lints.clippy], so clippy already exits non-zero on
+        # those specifically, without a blanket warnings-as-errors flag
+        # catching unrelated lints too.
+        run: cargo clippy --bins

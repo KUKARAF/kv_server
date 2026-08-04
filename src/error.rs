@@ -119,6 +119,13 @@ impl IntoResponse for AppError {
         let (status, message) = match &self {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
+            // Each of these variants is already handled by an early `return`
+            // above (RateLimited, Unauthorized, SessionExpired, Forbidden,
+            // PendingApproval, ZeroTrustRequired, KeyConflict), so this arm
+            // can never actually execute; it only exists because `match`
+            // requires exhaustiveness and the compiler can't see the
+            // earlier early returns as ruling these out.
+            #[allow(clippy::unreachable)]
             AppError::RateLimited
             | AppError::Unauthorized
             | AppError::SessionExpired

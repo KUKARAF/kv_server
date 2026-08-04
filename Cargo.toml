@@ -3,6 +3,26 @@ name = "kv_manager"
 version = "0.1.0"
 edition = "2021"
 
+# Panic-safety gate. From the "Rust: Don't Panic" video (No Boilerplate,
+# https://www.youtube.com/watch?v=usRlRCNIOG0): chapter 9 of the Rust book
+# names three ways Rust code crashes - (1) explicit `panic!`, (2) implicit
+# panics like out-of-bounds indexing, (3) unwrapping an `Err`/`None` - and
+# the fix is to have local tooling AND CI throw out any code that can hit
+# them. `deny` here only affects `cargo clippy` runs (never plain `cargo
+# build`/`check`), so it can't slow down or break routine compilation; it's
+# enforced by .github/workflows/ci-required.yml. Test code is exempted via
+# clippy.toml's `allow-*-in-tests` keys. `pedantic`/`nursery` (the video's
+# "teach you good habits" tier, explicitly not false-positive-free) are
+# deliberately NOT declared here - see ci-advisory.yml instead.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+
 [[bin]]
 name = "kv_manager"
 path = "src/main.rs"

@@ -43,6 +43,10 @@ pub async fn init_client(
 }
 
 fn sign(payload: &str, key: &str) -> String {
+    // HMAC construction is infallible for any key length (short keys are
+    // zero-padded, long keys are pre-hashed per RFC 2104), so this can never
+    // actually return Err — there is no meaningful error to propagate.
+    #[allow(clippy::expect_used)]
     let mut mac = HmacSha256::new_from_slice(key.as_bytes()).expect("HMAC accepts any key size");
     mac.update(payload.as_bytes());
     URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
@@ -68,9 +72,12 @@ fn decode_state_cookie(cookie_value: &str, signing_key: &str) -> Option<(String,
         return None;
     }
     let v: serde_json::Value = serde_json::from_str(&payload).ok()?;
-    let state = v["state"].as_str()?.to_string();
-    let pkce_verifier = v["pkce_verifier"].as_str()?.to_string();
-    let nonce = v["nonce"].as_str()?.to_string();
+    // Cookie-derived value; use `.get()` instead of indexing so a
+    // missing/malformed field cleanly falls through to `None` via `?`
+    // rather than risking a panic on attacker-controlled input.
+    let state = v.get("state")?.as_str()?.to_string();
+    let pkce_verifier = v.get("pkce_verifier")?.as_str()?.to_string();
+    let nonce = v.get("nonce")?.as_str()?.to_string();
     Some((state, pkce_verifier, nonce))
 }
 

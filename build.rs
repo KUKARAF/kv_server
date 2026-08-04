@@ -1,3 +1,12 @@
+// This is a build script: it runs at compile time on the developer's/CI's
+// machine, never in the shipped binary. A panic here just fails the build
+// immediately and visibly - a fundamentally different risk profile than the
+// runtime-crash concern the workspace's panic-safety lints exist for (see
+// [lints.clippy] in Cargo.toml and rust-advice.md's "Rust: Don't Panic"
+// notes), so this whole file is exempted per that video's own "whole files
+// can be exempted if you find these lints overly burdensome" guidance.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 fn main() {
     // Embed VERSION (major.minor.shortsha) at compile time.
     // Set by the Docker build-arg → ENV VERSION=... in the Dockerfile.

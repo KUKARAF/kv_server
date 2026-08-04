@@ -151,6 +151,9 @@ async fn healthz(
         .fetch_one(&state.pool)
         .await
     {
+        // All builder inputs below are static/hardcoded (fixed status,
+        // header name/value, body), so `build()` cannot fail.
+        #[allow(clippy::unwrap_used)]
         Ok(_) => Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json")
@@ -158,6 +161,7 @@ async fn healthz(
             .unwrap(),
         Err(e) => {
             tracing::error!("health check DB error: {e}");
+            #[allow(clippy::unwrap_used)]
             Response::builder()
                 .status(StatusCode::SERVICE_UNAVAILABLE)
                 .header("content-type", "application/json")
@@ -175,6 +179,8 @@ async fn version() -> &'static str {
 
 #[cfg(not(test))]
 async fn serve_favicon() -> Response<Body> {
+    // Static status/header/body — `build()` cannot fail.
+    #[allow(clippy::unwrap_used)]
     Response::builder()
         .status(StatusCode::MOVED_PERMANENTLY)
         .header("location", "https://static.osmosis.page/kv/kv_logo.svg")
@@ -218,6 +224,10 @@ async fn serve_admin_static(
 
 #[cfg(not(test))]
 fn serve_file(path: &str, content_type: &str) -> Response<Body> {
+    // `content_type` is always one of a few hardcoded literal MIME strings
+    // (see callers above) and status/body are static too, so `build()`
+    // cannot fail.
+    #[allow(clippy::unwrap_used)]
     match ADMIN_DIR.get_file(path) {
         Some(file) => Response::builder()
             .status(StatusCode::OK)

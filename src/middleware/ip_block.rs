@@ -66,6 +66,9 @@ pub async fn layer(
 
     if blocked {
         tracing::warn!(ip = %ip, "blocked IP rejected");
+        // All builder inputs are static/hardcoded (fixed status, header
+        // name/value, body), so `build()` cannot fail here.
+        #[allow(clippy::unwrap_used)]
         return Response::builder()
             .status(StatusCode::FORBIDDEN)
             .header("content-type", "application/json")

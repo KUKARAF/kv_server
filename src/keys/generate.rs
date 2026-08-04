@@ -25,7 +25,14 @@ pub fn generate_emoji_sequence() -> String {
     let indices = rand::seq::index::sample(&mut rng, EMOJI_POOL.len(), count);
     indices
         .iter()
-        .map(|i| EMOJI_POOL[i])
+        // `sample` guarantees every yielded index is < EMOJI_POOL.len(),
+        // so this indexing can never go out of bounds.
+        .map(|i| {
+            #[allow(clippy::indexing_slicing)]
+            {
+                EMOJI_POOL[i]
+            }
+        })
         .collect::<Vec<_>>()
         .join("")
 }

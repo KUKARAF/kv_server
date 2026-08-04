@@ -1,0 +1,10 @@
+# Panic-safety lints (see [lints.clippy] in Cargo.toml) are enforced in
+# production code; test code is exempt so prototyping/asserting in
+# `#[cfg(test)]` stays ergonomic. From the "Rust: Don't Panic" video (No
+# Boilerplate, https://www.youtube.com/watch?v=usRlRCNIOG0): "you can have
+# your cake and eat it too."
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true
