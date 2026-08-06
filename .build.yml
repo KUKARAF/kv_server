@@ -1,0 +1,18 @@
+image: debian/testing
+packages:
+  - jq
+  - hut
+  - python3
+  - curl
+secrets:
+  - b6a49b69-f6de-4b99-a68f-725db4c470b8 # OPENROUTER_API_KEY -> ~/.secrets/openrouter_api_key
+  - 624eda9d-7d8a-4926-a092-46088de9d65b # TODO_TICKET_TOKEN -> ~/.secrets/todo_ticket_token
+sources:
+  - https://git.sr.ht/~burning_wipf/kv_manager
+tasks:
+  - install-hermes: |
+      curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+  - ai-review: |
+      cd kv_manager
+      chmod +x .builds/ai-review.sh
+      ./.builds/ai-review.sh
