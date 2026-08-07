@@ -44,6 +44,8 @@ fi
 
 DIFF=$(git diff "$LAST_SHA".."$CURRENT_SHA" -- . ':(exclude).builds')
 
+REVIEW_COMPLETED=1
+
 if [ -z "$DIFF" ]; then
   echo "empty diff between $LAST_SHA and $CURRENT_SHA — nothing to review"
 else
@@ -72,13 +74,29 @@ else
 
   rm -f "$PROMPT_FILE"
 
-  if [ -s ticket.md ]; then
-    hut todo ticket create -t "$TRACKER" < ticket.md
+  # ticket.md's *existence* (not just non-emptiness) is the "review actually
+  # completed" signal — the skill is instructed to always write it, even
+  # empty, as its last action. No file at all means hermes crashed/timed out
+  # partway through, so we must not advance state (that commit needs a retry
+  # on the next push, not to be silently marked reviewed).
+  if [ -e ticket.md ]; then
+    if [ -s ticket.md ]; then
+      hut todo ticket create -t "$TRACKER" < ticket.md
+    else
+      echo "ticket.md empty — no findings this run"
+    fi
   else
-    echo "ticket.md empty or absent — no findings this run"
+    echo "hermes did not write ticket.md — review did not complete for $CURRENT_SHA; not advancing state" >&2
+    echo "review failed to complete for commit $CURRENT_SHA (hermes did not write ticket.md) — will retry on next push" \
+      | hut todo ticket comment -t "$TRACKER" "$STATE_TICKET"
+    REVIEW_COMPLETED=0
   fi
 
   rm -f good.md ticket.md
 fi
 
-echo "state: last-reviewed-sha=$CURRENT_SHA" | hut todo ticket comment -t "$TRACKER" "$STATE_TICKET"
+if [ "$REVIEW_COMPLETED" = "1" ]; then
+  echo "state: last-reviewed-sha=$CURRENT_SHA" | hut todo ticket comment -t "$TRACKER" "$STATE_TICKET"
+else
+  exit 1
+fi

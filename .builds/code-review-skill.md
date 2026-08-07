@@ -21,18 +21,26 @@ will be given a git diff. Your job:
    - `ticket.md`: genuine actionable findings only — real correctness bugs,
      security problems, or changes that are risky in a way that isn't
      obviously intentional. This file, if non-empty, gets automatically
-     filed as a ticket for a human to read, verbatim, so:
-       - If you have NO actionable findings, leave `ticket.md` completely
-         empty (zero bytes), or don't create it at all. Do NOT write
-         placeholder text like "no issues found" or "LGTM" into it — any
-         non-empty content in this file becomes a real ticket, so only put
-         genuine findings there. An empty `ticket.md` is a valid, expected,
-         common outcome, not a failure.
+     filed as a ticket for a human to read, verbatim. You MUST create this
+     file every single time, even when you have nothing to report — its
+     mere existence is how the pipeline knows your review actually ran to
+     completion, as opposed to crashing or timing out partway through. So:
+       - If you have NO actionable findings, still call `write_file` on
+         `ticket.md` with empty content (zero bytes) — do NOT skip creating
+         it. Do NOT write placeholder text like "no issues found" or "LGTM"
+         into it either — any non-empty content in this file becomes a real
+         ticket, so only put genuine findings there. An empty (but
+         *created*) `ticket.md` is a valid, expected, common outcome, not a
+         failure.
        - If you have findings, format `ticket.md` as: first line is a short
          subject line summarizing the most severe finding (include a
          severity tag, e.g. `[high] urlencoding() no longer escapes '&',
          allows query injection`), then a blank line, then the full body —
          one finding per section if there are several, each with what the
          problem is, why it matters, and the relevant file/line.
+       - Write `ticket.md` LAST, after you've finished all reading and
+         exploring — its existence is treated as "the review finished,"
+         so creating it early and then continuing to explore would be
+         misleading.
 3. Do not attempt to fix anything or run any commands. Reading files and
    writing exactly these two files are the only things you should do here.
