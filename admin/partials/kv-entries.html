@@ -217,7 +217,7 @@
     container.innerHTML = active.map(r => `
       <label class="label-check">
         <input type="checkbox" value="${esc(r.id)}" onchange="toggleGenerateVia(this)">
-        ${esc(r.provider === 'openrouter' ? 'OpenRouter' : r.provider)}${active.length > 1 ? ' (' + esc(r.label) + ')' : ''}
+        ${esc(r.provider === 'openrouter' ? 'OpenRouter' : r.provider)}${active.length > 1 ? ' (' + esc(r.label) + ')' : ''}${r.provider === 'priority-notify' ? ' — name the entry NOTIFY_API_KEY' : ''}
       </label>`).join('');
   }
   populateGenerateViaPicker();
@@ -275,7 +275,7 @@
     if (!mkResp.ok) throw new Error('failed to load management keys: ' + mkResp.status);
     const mk = (await mkResp.json()).find(r => r.id === mgmtKeyId);
     if (!mk) throw new Error('management key not found');
-    if (mk.provider !== 'openrouter') throw new Error('unsupported provider: ' + mk.provider);
+    if (mk.provider !== 'openrouter' && mk.provider !== 'priority-notify') throw new Error('unsupported provider: ' + mk.provider);
 
     const db = await _openAdminDB();
     const record = await _dbGet(db, 'device');
@@ -288,6 +288,34 @@
     );
     if (!envResp.ok) throw new Error('failed to fetch encrypted management key: ' + envResp.status);
     const mgmtKeySecret = await kvDecryptManagementKeyPayload(await envResp.json(), record.privateKey);
+
+    // priority-notify: send tokens have no limit/reset. Provision a fresh write-scope token
+    // (rotate = delete-then-create) whose plaintext becomes this KV entry's value — e.g. the
+    // reserved NOTIFY_API_KEY that notify::send reads to POST notifications.
+    if (mk.provider === 'priority-notify') {
+      const NOTIFY_TOKENS_BASE = 'https://notifications.osmosis.page/api/tokens';
+      if (existingProviderKeyId) {
+        const delResp = await fetch(NOTIFY_TOKENS_BASE + '/' + encodeURIComponent(existingProviderKeyId), {
+          method: 'DELETE',
+          headers: { Authorization: 'Bearer ' + mgmtKeySecret },
+        });
+        // 404 = already gone; anything else non-2xx aborts before we create a replacement.
+        if (!delResp.ok && delResp.status !== 404) {
+          throw new Error('failed to delete old token on provider — aborting rotation, nothing was changed: ' + delResp.status);
+        }
+      }
+      const criticalPrefix = existingProviderKeyId
+        ? 'CRITICAL: the old token was already deleted on the provider, but creating its replacement failed — you now have NO active send token for this identity. Retry manually. '
+        : '';
+      const createResp = await fetch(NOTIFY_TOKENS_BASE + '/', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + mgmtKeySecret, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: label, device_type: 'other', scope: 'write' }),
+      });
+      if (!createResp.ok) throw new Error(criticalPrefix + 'priority-notify returned ' + createResp.status + ': ' + await createResp.text());
+      const created = await createResp.json();
+      return { plaintextSecret: created.token, providerKeyId: created.id };
+    }
 
     let createLabel = label;
     let createLimit = mk.default_limit ?? null;

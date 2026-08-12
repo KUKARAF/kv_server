@@ -13,8 +13,9 @@
     <div class="form-row-2">
       <label>Label <input name="label" required placeholder="openrouter prod"></label>
       <label>Provider
-        <select name="provider">
+        <select name="provider" onchange="mgmtKeyOnProviderChange(this)">
           <option value="openrouter">OpenRouter</option>
+          <option value="priority-notify">priority-notify</option>
         </select>
       </label>
     </div>
@@ -22,7 +23,7 @@
       <input name="secret" type="password" required autocomplete="off" placeholder="sk-or-...">
     </label>
 
-    <div class="form-row-2">
+    <div class="form-row-2" id="mgmt-key-limit-fields">
       <label>Default limit (USD, optional)
         <input name="default_limit" type="number" step="any" placeholder="—">
       </label>
@@ -308,16 +309,19 @@
     const resetOptions = ['', 'daily', 'weekly', 'monthly'].map(v =>
       `<option value="${v}" ${(mk.default_limit_reset || '') === v ? 'selected' : ''}>${v || 'None'}</option>`
     ).join('');
+    // Providers with no spend limit (priority-notify) keep the inputs in the DOM — so the
+    // create flow can read them without a null deref — but hidden and ignored on create.
+    const hideLimits = !mgmtKeyProviderHasLimits(mk.provider) ? ' style="display:none"' : '';
     return `
       <div class="panel" style="margin-bottom:0.75rem;">
         <h3>Create a key on the provider</h3>
         <div class="form-row-2">
           <label>Label <input id="mgmt-key-new-label-${esc(id)}" placeholder="my-app"></label>
-          <label>Limit (optional)
+          <label${hideLimits}>Limit (optional)
             <input id="mgmt-key-new-limit-${esc(id)}" type="number" step="any" value="${limitVal}">
           </label>
         </div>
-        <label>Limit reset <select id="mgmt-key-new-reset-${esc(id)}">${resetOptions}</select></label>
+        <label${hideLimits}>Limit reset <select id="mgmt-key-new-reset-${esc(id)}">${resetOptions}</select></label>
         <p class="label-sm">Encrypt the generated secret for <span class="hint">(select at least one)</span></p>
         <div id="mgmt-key-new-devices-${esc(id)}" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">Loading devices…</div>
         <button type="button" style="margin-top:0.75rem;" onclick="mgmtKeyProviderCreateFlow('${esc(id)}')">Create on provider</button>
@@ -392,14 +396,34 @@
     return mgmtKeyDecryptPayload(payload, record.privateKey);
   }
 
-  // ── OpenRouter provisioning API — called directly from the browser ───────
-  // Requires https://openrouter.ai in the CSP connect-src (security_headers.rs).
-  // No `credentials: 'include'` — OpenRouter responds with a wildcard
-  // Access-Control-Allow-Origin, which is invalid for credentialed requests;
-  // the management key travels in the Authorization header instead.
+  // ── Provider provisioning APIs — called directly from the browser ────────
+  // Each provider's origin must be in the CSP connect-src (security_headers.rs):
+  // https://openrouter.ai and https://notifications.osmosis.page. No
+  // `credentials: 'include'` — providers send a wildcard Access-Control-Allow-Origin,
+  // invalid for credentialed requests; the management key travels in the
+  // Authorization header instead. The provider is looked up from the mgmt-key row
+  // (`_mgmtKeysCache`) so every call dispatches to the right API + response shape.
   const OPENROUTER_BASE = 'https://openrouter.ai/api/v1/keys';
+  // priority-notify manages "send tokens"; create/list use a trailing slash, delete does not.
+  const NOTIFY_TOKENS_BASE = 'https://notifications.osmosis.page/api/tokens';
 
-  async function mgmtKeyProviderList(mgmtKey) {
+  // Providers without a spend limit / reset cadence (priority-notify tokens have neither).
+  const MGMT_PROVIDER_HAS_LIMITS = { openrouter: true, 'priority-notify': false };
+  function mgmtKeyProviderHasLimits(provider) { return MGMT_PROVIDER_HAS_LIMITS[provider] !== false; }
+
+  // Resolve a mgmt-key row id to its provider string (defaults to openrouter for safety).
+  function mgmtKeyProviderOf(id) {
+    const mk = _mgmtKeysCache.find(r => r.id === id);
+    return (mk && mk.provider) || 'openrouter';
+  }
+
+  async function mgmtKeyProviderList(provider, mgmtKey) {
+    if (provider === 'priority-notify') {
+      const resp = await fetch(NOTIFY_TOKENS_BASE + '/', { headers: { Authorization: 'Bearer ' + mgmtKey } });
+      if (!resp.ok) throw new Error('priority-notify returned ' + resp.status + ': ' + await resp.text());
+      const parsed = await resp.json();
+      return (parsed || []).map(t => ({ providerKeyId: t.id, label: t.name, disabled: false }));
+    }
     const resp = await fetch(OPENROUTER_BASE, { headers: { Authorization: 'Bearer ' + mgmtKey } });
     if (!resp.ok) throw new Error('openrouter returned ' + resp.status + ': ' + await resp.text());
     const parsed = await resp.json();
@@ -410,7 +434,12 @@
     }));
   }
 
-  async function mgmtKeyProviderGet(mgmtKey, providerKeyId) {
+  async function mgmtKeyProviderGet(provider, mgmtKey, providerKeyId) {
+    if (provider === 'priority-notify') {
+      // No single-token GET endpoint — derive the token's label from the list.
+      const found = (await mgmtKeyProviderList(provider, mgmtKey)).find(t => t.providerKeyId === providerKeyId);
+      return { providerKeyId, label: (found && found.label) || null, limit: null, limitReset: null };
+    }
     const resp = await fetch(OPENROUTER_BASE + '/' + encodeURIComponent(providerKeyId), {
       headers: { Authorization: 'Bearer ' + mgmtKey },
     });
@@ -425,7 +454,18 @@
     };
   }
 
-  async function mgmtKeyProviderCreate(mgmtKey, label, limit, limitReset) {
+  async function mgmtKeyProviderCreate(provider, mgmtKey, label, limit, limitReset) {
+    if (provider === 'priority-notify') {
+      const resp = await fetch(NOTIFY_TOKENS_BASE + '/', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + mgmtKey, 'Content-Type': 'application/json' },
+        // priority-notify tokens have no limit/reset; scope 'write' is the send scope.
+        body: JSON.stringify({ name: label, device_type: 'other', scope: 'write' }),
+      });
+      if (!resp.ok) throw new Error('priority-notify returned ' + resp.status + ': ' + await resp.text());
+      const data = await resp.json();
+      return { providerKeyId: data.id, label: data.name ?? label, plaintextSecret: data.token };
+    }
     const resp = await fetch(OPENROUTER_BASE, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + mgmtKey, 'Content-Type': 'application/json' },
@@ -456,12 +496,33 @@
     };
   }
 
-  async function mgmtKeyProviderRevoke(mgmtKey, providerKeyId) {
+  async function mgmtKeyProviderRevoke(provider, mgmtKey, providerKeyId) {
+    if (provider === 'priority-notify') {
+      const resp = await fetch(NOTIFY_TOKENS_BASE + '/' + encodeURIComponent(providerKeyId), {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer ' + mgmtKey },
+      });
+      // 404 means the token is already gone — treat as success (safe during rotation).
+      if (resp.status === 404) return;
+      if (!resp.ok) throw new Error('priority-notify returned ' + resp.status + ': ' + await resp.text());
+      return;
+    }
     const resp = await fetch(OPENROUTER_BASE + '/' + encodeURIComponent(providerKeyId), {
       method: 'DELETE',
       headers: { Authorization: 'Bearer ' + mgmtKey },
     });
     if (!resp.ok) throw new Error('openrouter returned ' + resp.status + ': ' + await resp.text());
+  }
+
+  // Toggle provider-specific fields on the "Store a management key" form.
+  function mgmtKeyOnProviderChange(sel) {
+    const form = sel.closest('form');
+    const provider = sel.value;
+    const limitFields = document.getElementById('mgmt-key-limit-fields');
+    if (limitFields) limitFields.style.display = mgmtKeyProviderHasLimits(provider) ? '' : 'none';
+    if (form && form.secret) {
+      form.secret.placeholder = provider === 'priority-notify' ? 'priority-notify management token' : 'sk-or-...';
+    }
   }
 
   // ── Live provider list + stored secrets ──────────────────────────────────
@@ -477,7 +538,7 @@
     el.innerHTML = 'Loading live keys…';
     let live;
     try {
-      live = await mgmtKeyProviderList(mgmtKey);
+      live = await mgmtKeyProviderList(mgmtKeyProviderOf(id), mgmtKey);
     } catch (err) {
       el.innerHTML = `<p class="hint">Failed to list keys on the provider: ${esc(err.message)}</p>`;
       return;
@@ -541,7 +602,7 @@
 
     let created;
     try {
-      created = await mgmtKeyProviderCreate(mgmtKey, label, limit, limitReset);
+      created = await mgmtKeyProviderCreate(mgmtKeyProviderOf(id), mgmtKey, label, limit, limitReset);
     } catch (err) {
       alert('Failed to create key on provider: ' + err.message);
       return;
@@ -597,7 +658,7 @@
       return;
     }
     try {
-      await mgmtKeyProviderRevoke(mgmtKey, providerKeyId);
+      await mgmtKeyProviderRevoke(mgmtKeyProviderOf(id), mgmtKey, providerKeyId);
     } catch (err) {
       alert('Failed to revoke on provider: ' + err.message);
       return;
@@ -638,7 +699,7 @@
     // defaults, which may be stale or never matched this specific key.
     let info;
     try {
-      info = await mgmtKeyProviderGet(mgmtKey, providerKeyId);
+      info = await mgmtKeyProviderGet(mgmtKeyProviderOf(id), mgmtKey, providerKeyId);
     } catch (err) {
       alert('Failed to fetch current key info from provider — aborting rotation, nothing was changed: ' + err.message);
       return;
@@ -647,7 +708,7 @@
     // Delete old, then create new: brief window with zero active keys. If create-new then
     // fails, that's the accepted risk of this ordering, so it must fail loudly (see below).
     try {
-      await mgmtKeyProviderRevoke(mgmtKey, providerKeyId);
+      await mgmtKeyProviderRevoke(mgmtKeyProviderOf(id), mgmtKey, providerKeyId);
     } catch (err) {
       alert('Failed to delete old key on provider — aborting rotation, nothing was changed: ' + err.message);
       return;
@@ -663,7 +724,7 @@
 
     let created;
     try {
-      created = await mgmtKeyProviderCreate(mgmtKey, info.label, info.limit, info.limitReset);
+      created = await mgmtKeyProviderCreate(mgmtKeyProviderOf(id), mgmtKey, info.label, info.limit, info.limitReset);
     } catch (err) {
       alert(
         'CRITICAL: the old key was already deleted on the provider, but creating its ' +

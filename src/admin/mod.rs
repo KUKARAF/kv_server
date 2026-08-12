@@ -64,9 +64,6 @@ pub fn router() -> Router<Arc<AppState>> {
         )
         .route("/kv/:key/value", get(handlers::admin_get_kv_value))
         .route("/kv/:key", delete(handlers::admin_delete_kv))
-        .route("/notify/rotate", post(handlers::notify_rotate))
-        .route("/notify/tokens", get(handlers::notify_list_tokens))
-        .route("/notify/tokens/:id", delete(handlers::notify_revoke_token))
         .nest("/webauthn", webauthn::admin_router())
         .nest("/session-requests", crate::session_request::admin_router())
 }

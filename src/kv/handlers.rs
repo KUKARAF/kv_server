@@ -204,10 +204,9 @@ pub async fn upsert_entry(
     log_access(&state, &headers, addr, &auth, &key);
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
 
-    // Reserved keys: only the hardcoded admin may set the priority-notify credentials
-    // (NOTIFY_API_KEY / NOTIFY_MANAGEMENT_KEY) — defense-in-depth; the notify reads are
-    // already admin-scoped.
-    if crate::notify::RESERVED_ADMIN_KEYS.contains(&key.as_str()) {
+    // Reserved key: only the hardcoded admin may set NOTIFY_API_KEY (defense-in-depth;
+    // the notify read is already admin-scoped).
+    if key == "NOTIFY_API_KEY" {
         let admin = crate::notify::admin_owner_id(&state.pool)
             .await
             .ok_or_else(|| AppError::Forbidden("reserved key".to_string()))?;

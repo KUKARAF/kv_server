@@ -84,9 +84,6 @@ async fn main() -> Result<()> {
     if oidc_failed {
         tokio::spawn(tasks::oidc_retry::run(Arc::clone(&state)));
     }
-    // One-time send-token bootstrap: provisions NOTIFY_API_KEY from NOTIFY_MANAGEMENT_KEY if
-    // the send token is missing. No-ops (and never blocks) when either is absent. Spawns itself.
-    notify::bootstrap_send_token(state.pool.clone());
 
     let app = Router::new()
         .route("/health", get(health))
