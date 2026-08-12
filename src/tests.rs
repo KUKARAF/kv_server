@@ -981,8 +981,8 @@ mod session_request_tests {
         (status, json)
     }
 
-    async fn approve(app: &Router, token: &str, id: &str, confirm_code: &str) -> u16 {
-        let body = serde_json::json!({ "confirm_code": confirm_code });
+    async fn approve(app: &Router, token: &str, id: &str, approval_token: &str) -> u16 {
+        let body = serde_json::json!({ "approval_token": approval_token });
         app.clone()
             .oneshot(
                 Request::builder()
@@ -1030,15 +1030,44 @@ mod session_request_tests {
         assert_eq!(status, 201, "create must return 201");
         let id = created["id"].as_str().unwrap().to_string();
         let poll_secret = created["poll_secret"].as_str().unwrap().to_string();
-        let confirm_code = created["confirm_code"].as_str().unwrap().to_string();
+        // The create response must NOT leak the approval token in the clear.
+        assert!(
+            created.get("confirm_code").is_none() && created.get("approval_token").is_none(),
+            "create must not return a plaintext approval token"
+        );
 
-        // Before approval: pending, no envelope.
+        // Before approval: pending, no session envelope, but the wrapped approval token is
+        // present. Decrypt it with the device key to recover the token the human relays.
         let (s, pending) = poll(&app, &id, &poll_secret).await;
         assert_eq!(s, 200);
         assert_eq!(pending["status"].as_str().unwrap(), "pending");
         assert!(pending["envelope"].is_null());
+        assert!(
+            !pending["approval_envelope"].is_null(),
+            "pending poll must carry the wrapped approval token"
+        );
+        let approval_token = String::from_utf8(decrypt_envelope(
+            &device_secret,
+            &pending["approval_envelope"],
+        ))
+        .unwrap();
 
-        assert_eq!(approve(&app, &admin, &id, &confirm_code).await, 204);
+        // Idempotent: re-polling while pending re-serves the same approval envelope (not
+        // consumed), so a device can re-display the token.
+        let (s2, pending2) = poll(&app, &id, &poll_secret).await;
+        assert_eq!(s2, 200);
+        assert_eq!(pending2["status"].as_str().unwrap(), "pending");
+        assert_eq!(
+            String::from_utf8(decrypt_envelope(
+                &device_secret,
+                &pending2["approval_envelope"]
+            ))
+            .unwrap(),
+            approval_token,
+            "approval token must be re-fetchable while pending"
+        );
+
+        assert_eq!(approve(&app, &admin, &id, &approval_token).await, 204);
 
         // DB must hold the wrap, never a plaintext token.
         let plaintext: Option<String> =
@@ -1102,16 +1131,20 @@ mod session_request_tests {
         assert_eq!(status, 404, "unknown device_id must be rejected");
     }
 
-    /// Approval still requires the confirm code; a wrong one is forbidden and mints nothing.
+    /// Approval requires the one-time approval token; a wrong one is forbidden and mints
+    /// nothing — the row stays pending.
     #[tokio::test]
-    async fn approve_with_wrong_confirm_code_is_forbidden() {
+    async fn approve_with_wrong_approval_token_is_forbidden() {
         let (app, state) = build_session_app().await;
         let admin = insert_session_key(&state.pool, "active", None).await;
         let (device_id, _) = insert_x25519_device(&state.pool, TEST_OWNER).await;
         let (_, created) = create_req(&app, &device_id).await;
         let id = created["id"].as_str().unwrap().to_string();
 
-        assert_eq!(approve(&app, &admin, &id, "🐟🐟🐟 wrong").await, 403);
+        assert_eq!(
+            approve(&app, &admin, &id, "kv_not-the-real-token").await,
+            403
+        );
         let status: String = sqlx::query_scalar("SELECT status FROM session_requests WHERE id = ?")
             .bind(&id)
             .fetch_one(&state.pool)
@@ -1119,7 +1152,7 @@ mod session_request_tests {
             .unwrap();
         assert_eq!(
             status, "pending",
-            "a failed confirm must not approve the row"
+            "a failed approval token must not approve the row"
         );
     }
 

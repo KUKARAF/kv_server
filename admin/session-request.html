@@ -81,16 +81,17 @@
       </div>
 
       <div class="duration-row">
-        <label for="confirm-code">Confirm code (ask the requester)</label>
+        <label for="approval-token">Approval code (ask the requester)</label>
         <input
           type="text"
-          id="confirm-code"
-          placeholder="paste the 3-emoji code"
+          id="approval-token"
+          placeholder="paste the approval code shown on the requesting device"
           autocomplete="off"
+          spellcheck="false"
           style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;padding:0.4rem 0.6rem;border-radius:5px;font-size:16px;box-sizing:border-box;"
           oninput="document.getElementById('approve-btn').disabled = !this.value.trim()"
         >
-        <p class="duration-hint">The requester's client printed/displayed this code — do not approve without it.</p>
+        <p class="duration-hint">The requesting device decrypted and displayed this one-time approval code — do not approve without it.</p>
         <p id="confirm-error" class="duration-hint" style="color:#f87171;display:none;"></p>
       </div>
 
@@ -202,19 +203,19 @@
     // ── Approve / Reject ──────────────────────────────────────────────────────
     async function approveRequest() {
       const hours = parseInt(document.getElementById('duration').value, 10);
-      const confirmCode = document.getElementById('confirm-code').value.trim();
+      const approvalToken = document.getElementById('approval-token').value.trim();
       const errorEl = document.getElementById('confirm-error');
       errorEl.style.display = 'none';
 
       const resp = await fetch('/api/admin/session-requests/' + requestId + '/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved_duration_hours: hours, confirm_code: confirmCode }),
+        body: JSON.stringify({ approved_duration_hours: hours, approval_token: approvalToken }),
       });
       if (resp.ok) {
         showStatus('✅', 'Approved! Session token valid for ' + formatHours(hours) + '.');
       } else if (resp.status === 403) {
-        errorEl.textContent = "Code doesn't match — confirm the code with the requester and try again.";
+        errorEl.textContent = "Approval code doesn't match — confirm the code with the requester and try again.";
         errorEl.style.display = 'block';
       } else {
         showStatus('❌', 'Approval failed (' + resp.status + ').');

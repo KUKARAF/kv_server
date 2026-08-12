@@ -1,7 +1,7 @@
 use crate::{
     auth::middleware::AdminAuth,
     error::AppError,
-    keys::generate::{generate_api_key, generate_emoji_sequence, hash_key},
+    keys::generate::{generate_api_key, hash_key},
     session_request::model::*,
     state::AppState,
 };
@@ -20,25 +20,31 @@ pub async fn create_request(
     let id = Uuid::new_v4().to_string();
     // Separate poll secret held only by the requester; stored hashed.
     let (poll_secret, poll_secret_hash) = generate_api_key();
-    // Human-verifiable code the requester relays to the admin out-of-band; the admin
-    // must submit it back at approval time so approving is bound to a secret only the
-    // real requester holds, not just to whichever pending row gets clicked.
-    let confirm_code = generate_emoji_sequence();
-    let confirm_code_hash = bcrypt::hash(&confirm_code, 6)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {e}")))?;
+    // One-time approval token. Only its hash is stored; the plaintext is ECDH-wrapped to the
+    // request's device below and never persisted in the clear. The admin must submit this
+    // token back at approval time, so approving is bound to a secret only whoever holds the
+    // device's private key can recover — not just to whichever pending row gets clicked.
+    let (approval_token, approval_token_hash) = generate_api_key();
 
-    // The token will be ECDH-wrapped to this device at approval; the device must exist so
-    // we have a public key to wrap to. No auth needed here — naming another owner's device
-    // only wraps the token to *their* key, which is useless to anyone else.
-    let device_exists = sqlx::query_scalar!(
-        r#"SELECT 1 as "x: i32" FROM devices WHERE id = ?"#,
+    // The token is ECDH-wrapped to this device now; the device must exist so we have a public
+    // key to wrap to. No auth needed here — naming another owner's device only wraps the token
+    // to *their* key, which is useless to anyone else.
+    let device = sqlx::query!(
+        "SELECT key_type, public_key FROM devices WHERE id = ?",
         body.device_id
     )
     .fetch_optional(&state.pool)
-    .await?;
-    if device_exists.is_none() {
-        return Err(AppError::NotFound);
-    }
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let approval_env = crate::crypto::wrap_for_device(
+        &device.key_type,
+        &device.public_key,
+        &id,
+        approval_token.as_bytes(),
+    )?;
+    let approval_envelope = serde_json::to_string(&SessionEnvelope::from(approval_env))
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize approval envelope: {e}")))?;
 
     let expires_at = sqlx::query_scalar!("SELECT datetime('now', '+15 minutes')")
         .fetch_one(&state.pool)
@@ -46,14 +52,15 @@ pub async fn create_request(
         .unwrap_or_default();
 
     sqlx::query!(
-        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret, confirm_code_hash, device_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret, device_id, approval_token_hash, approval_envelope) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         id,
         body.label,
         expires_at,
         body.requested_duration_hours,
         poll_secret_hash,
-        confirm_code_hash,
-        body.device_id
+        body.device_id,
+        approval_token_hash,
+        approval_envelope
     )
     .execute(&state.pool)
     .await?;
@@ -70,7 +77,6 @@ pub async fn create_request(
             url,
             expires_at,
             poll_secret,
-            confirm_code,
         }),
     ))
 }
@@ -81,7 +87,7 @@ pub async fn poll_status(
     Query(q): Query<PollQuery>,
 ) -> Result<Json<PollStatusResponse>, AppError> {
     let row = sqlx::query!(
-        "SELECT status, poll_secret,
+        "SELECT status, poll_secret, approval_envelope,
                 wrap_key_type, wrap_nonce, wrap_ciphertext, wrap_aad,
                 wrap_ephemeral_pub, wrap_dek_nonce, wrap_encrypted_dek
          FROM session_requests WHERE id = ?",
@@ -100,9 +106,22 @@ pub async fn poll_status(
     }
 
     if row.status != "approved" {
+        // While pending, hand back the wrapped approval token idempotently (NOT consumed) so
+        // the device can decrypt and (re-)display it for the human to relay to the admin.
+        let approval_envelope = row
+            .approval_envelope
+            .as_deref()
+            .map(serde_json::from_str::<SessionEnvelope>)
+            .transpose()
+            .map_err(|e| {
+                AppError::Internal(anyhow::anyhow!(
+                    "stored approval envelope is malformed: {e}"
+                ))
+            })?;
         return Ok(Json(PollStatusResponse {
             status: row.status,
             envelope: None,
+            approval_envelope,
         }));
     }
 
@@ -124,6 +143,7 @@ pub async fn poll_status(
         return Ok(Json(PollStatusResponse {
             status: "delivered".to_string(),
             envelope: None,
+            approval_envelope: None,
         }));
     }
 
@@ -167,6 +187,7 @@ pub async fn poll_status(
     Ok(Json(PollStatusResponse {
         status: "approved".to_string(),
         envelope,
+        approval_envelope: None,
     }))
 }
 
@@ -219,7 +240,7 @@ pub async fn approve(
     let mut tx = state.pool.begin().await?;
 
     let row = sqlx::query!(
-        "SELECT confirm_code_hash, device_id FROM session_requests
+        "SELECT approval_token_hash, device_id FROM session_requests
          WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
         id
     )
@@ -227,15 +248,15 @@ pub async fn approve(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    // Require proof that the approving admin actually confirmed the code with the
-    // real requester — without this, approval is bound only to a click on a
-    // self-reported label, which an unauthenticated attacker can spoof.
-    let confirm_hash = row.confirm_code_hash.ok_or(AppError::NotFound)?;
-    let matches = bcrypt::verify(&body.confirm_code, &confirm_hash)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {e}")))?;
-    if !matches {
+    // Require the one-time approval token the requester recovered from their device and
+    // relayed out-of-band — without this, approval is bound only to a click on a
+    // self-reported label, which an unauthenticated attacker can spoof. Compare sha256
+    // hashes (constant-length hex); only whoever holds the device private key could have
+    // decrypted the token, so a match proves the admin confirmed with the real requester.
+    let token_hash = row.approval_token_hash.ok_or(AppError::NotFound)?;
+    if hash_key(&body.approval_token) != token_hash {
         return Err(AppError::Forbidden(
-            "confirm code does not match".to_string(),
+            "approval token does not match".to_string(),
         ));
     }
 
