@@ -21,6 +21,9 @@ pub struct Config {
 
     pub webauthn_rp_id: String,
     pub webauthn_rp_origin: String,
+    /// Extra origin accepted in WebAuthn ceremonies for the Android app, e.g.
+    /// `android:apk-key-hash:<base64url>`. Unset ⇒ web origins only.
+    pub webauthn_android_origin: Option<String>,
 
     pub daily_rate_limit: u32,
     pub auth_failure_threshold: u32,
@@ -58,6 +61,9 @@ impl Config {
                 .unwrap_or_else(|_| "localhost".to_string()),
             webauthn_rp_origin: env::var("WEBAUTHN_RP_ORIGIN")
                 .unwrap_or_else(|_| "http://localhost:3000".to_string()),
+            webauthn_android_origin: env::var("WEBAUTHN_ANDROID_ORIGIN")
+                .ok()
+                .filter(|s| !s.is_empty()),
 
             session_signing_key: env::var("SESSION_SIGNING_KEY").unwrap_or_else(|_| {
                 use rand::RngCore;

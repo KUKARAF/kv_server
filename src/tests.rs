@@ -34,6 +34,7 @@ fn test_config() -> Config {
         session_signing_key: "a".repeat(64),
         webauthn_rp_id: "localhost".to_string(),
         webauthn_rp_origin: "http://localhost:3000".to_string(),
+        webauthn_android_origin: None,
         daily_rate_limit: 100,
         auth_failure_threshold: 50,
         auth_block_base_secs: 3600,

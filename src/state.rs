@@ -64,7 +64,11 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(pool: SqlitePool, config: Config, oidc_client: Option<CoreClient>) -> Arc<Self> {
-        let webauthn = build_webauthn(&config.webauthn_rp_id, &config.webauthn_rp_origin);
+        let webauthn = build_webauthn(
+            &config.webauthn_rp_id,
+            &config.webauthn_rp_origin,
+            config.webauthn_android_origin.as_deref(),
+        );
         Arc::new(AppState {
             pool,
             config,
@@ -80,14 +84,24 @@ impl AppState {
     }
 }
 
-fn build_webauthn(rp_id: &str, rp_origin: &str) -> Option<Webauthn> {
+fn build_webauthn(rp_id: &str, rp_origin: &str, android_origin: Option<&str>) -> Option<Webauthn> {
     let origin = url::Url::parse(rp_origin)
         .map_err(|e| tracing::warn!("WEBAUTHN_RP_ORIGIN invalid, Zero Trust disabled: {e}"))
         .ok()?;
-    webauthn_rs::WebauthnBuilder::new(rp_id, &origin)
+    let mut builder = webauthn_rs::WebauthnBuilder::new(rp_id, &origin)
         .map_err(|e| tracing::warn!("WebauthnBuilder failed, Zero Trust disabled: {e}"))
         .ok()?
-        .rp_name("KV Manager")
+        .rp_name("KV Manager");
+    // The Android app reports an app-specific origin (android:apk-key-hash:<b64url>)
+    // rather than a web origin; accept it too when configured so kv_apk passkey
+    // ceremonies verify. A malformed value is ignored rather than disabling WebAuthn.
+    if let Some(ao) = android_origin {
+        match url::Url::parse(ao) {
+            Ok(url) => builder = builder.append_allowed_origin(&url),
+            Err(e) => tracing::warn!("WEBAUTHN_ANDROID_ORIGIN invalid, ignoring: {e}"),
+        }
+    }
+    builder
         .build()
         .map_err(|e| tracing::warn!("Webauthn build failed, Zero Trust disabled: {e}"))
         .ok()
