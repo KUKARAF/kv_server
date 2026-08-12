@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT status, poll_secret,\n                wrap_key_type, wrap_nonce, wrap_ciphertext, wrap_aad,\n                wrap_ephemeral_pub, wrap_dek_nonce, wrap_encrypted_dek\n         FROM session_requests WHERE id = ?",
+  "query": "SELECT status, poll_secret, approval_envelope,\n                wrap_key_type, wrap_nonce, wrap_ciphertext, wrap_aad,\n                wrap_ephemeral_pub, wrap_dek_nonce, wrap_encrypted_dek\n         FROM session_requests WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -14,38 +14,43 @@
         "type_info": "Text"
       },
       {
-        "name": "wrap_key_type",
+        "name": "approval_envelope",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "wrap_nonce",
+        "name": "wrap_key_type",
         "ordinal": 3,
         "type_info": "Text"
       },
       {
-        "name": "wrap_ciphertext",
+        "name": "wrap_nonce",
         "ordinal": 4,
         "type_info": "Text"
       },
       {
-        "name": "wrap_aad",
+        "name": "wrap_ciphertext",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "wrap_ephemeral_pub",
+        "name": "wrap_aad",
         "ordinal": 6,
         "type_info": "Text"
       },
       {
-        "name": "wrap_dek_nonce",
+        "name": "wrap_ephemeral_pub",
         "ordinal": 7,
         "type_info": "Text"
       },
       {
-        "name": "wrap_encrypted_dek",
+        "name": "wrap_dek_nonce",
         "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "wrap_encrypted_dek",
+        "ordinal": 9,
         "type_info": "Text"
       }
     ],
@@ -61,8 +66,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "6beb2c1e247d072fe04a59aabeebd8d46b74fe795b9abcd97c891c3222da6b47"
+  "hash": "bc4ed69901f634d611633676ce9874f2bd2d713b1bd47d81cc4d43e77c178e5c"
 }

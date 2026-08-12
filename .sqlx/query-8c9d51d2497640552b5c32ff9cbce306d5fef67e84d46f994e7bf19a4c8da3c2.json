@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT confirm_code_hash, device_id FROM session_requests\n         WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
+  "query": "SELECT approval_token_hash, device_id FROM session_requests\n         WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
   "describe": {
     "columns": [
       {
-        "name": "confirm_code_hash",
+        "name": "approval_token_hash",
         "ordinal": 0,
         "type_info": "Text"
       },
@@ -22,5 +22,5 @@
       true
     ]
   },
-  "hash": "4b8b25486e9685f70ee6a0184423669e40f4ab0db692b6e23fa225848320b4ea"
+  "hash": "8c9d51d2497640552b5c32ff9cbce306d5fef67e84d46f994e7bf19a4c8da3c2"
 }
