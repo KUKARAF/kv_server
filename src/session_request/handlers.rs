@@ -26,19 +26,34 @@ pub async fn create_request(
     let confirm_code = generate_emoji_sequence();
     let confirm_code_hash = bcrypt::hash(&confirm_code, 6)
         .map_err(|e| AppError::Internal(anyhow::anyhow!("bcrypt error: {e}")))?;
+
+    // The token will be ECDH-wrapped to this device at approval; the device must exist so
+    // we have a public key to wrap to. No auth needed here — naming another owner's device
+    // only wraps the token to *their* key, which is useless to anyone else.
+    let device_exists = sqlx::query_scalar!(
+        r#"SELECT 1 as "x: i32" FROM devices WHERE id = ?"#,
+        body.device_id
+    )
+    .fetch_optional(&state.pool)
+    .await?;
+    if device_exists.is_none() {
+        return Err(AppError::NotFound);
+    }
+
     let expires_at = sqlx::query_scalar!("SELECT datetime('now', '+15 minutes')")
         .fetch_one(&state.pool)
         .await?
         .unwrap_or_default();
 
     sqlx::query!(
-        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret, confirm_code_hash) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret, confirm_code_hash, device_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
         id,
         body.label,
         expires_at,
         body.requested_duration_hours,
         poll_secret_hash,
-        confirm_code_hash
+        confirm_code_hash,
+        body.device_id
     )
     .execute(&state.pool)
     .await?;
@@ -66,7 +81,10 @@ pub async fn poll_status(
     Query(q): Query<PollQuery>,
 ) -> Result<Json<PollStatusResponse>, AppError> {
     let row = sqlx::query!(
-        "SELECT status, plaintext_token, poll_secret FROM session_requests WHERE id = ?",
+        "SELECT status, poll_secret,
+                wrap_key_type, wrap_nonce, wrap_ciphertext, wrap_aad,
+                wrap_ephemeral_pub, wrap_dek_nonce, wrap_encrypted_dek
+         FROM session_requests WHERE id = ?",
         id
     )
     .fetch_optional(&state.pool)
@@ -84,14 +102,17 @@ pub async fn poll_status(
     if row.status != "approved" {
         return Ok(Json(PollStatusResponse {
             status: row.status,
-            session_token: None,
+            envelope: None,
         }));
     }
 
-    // Atomically claim the token: transition approved → delivered and clear plaintext
+    // Atomically claim the token: transition approved → delivered and clear the wrapped
+    // envelope so it can only be read once.
     let updated = sqlx::query!(
         "UPDATE session_requests
-         SET status = 'delivered', plaintext_token = NULL
+         SET status = 'delivered',
+             wrap_key_type = NULL, wrap_nonce = NULL, wrap_ciphertext = NULL, wrap_aad = NULL,
+             wrap_ephemeral_pub = NULL, wrap_dek_nonce = NULL, wrap_encrypted_dek = NULL
          WHERE id = ? AND status = 'approved'",
         id
     )
@@ -102,13 +123,50 @@ pub async fn poll_status(
     if updated == 0 {
         return Ok(Json(PollStatusResponse {
             status: "delivered".to_string(),
-            session_token: None,
+            envelope: None,
         }));
     }
 
+    // We won the claim, so this poller gets the one-time envelope. All wrap_* columns are
+    // written together at approval, so if one is present they all are.
+    let envelope = match (
+        row.wrap_key_type,
+        row.wrap_nonce,
+        row.wrap_ciphertext,
+        row.wrap_aad,
+        row.wrap_ephemeral_pub,
+        row.wrap_dek_nonce,
+        row.wrap_encrypted_dek,
+    ) {
+        (
+            Some(key_type),
+            Some(nonce),
+            Some(ciphertext),
+            Some(aad),
+            Some(ephemeral_pub),
+            Some(dek_nonce),
+            Some(encrypted_dek),
+        ) => Some(SessionEnvelope {
+            nonce,
+            ciphertext,
+            aad,
+            recipient: EnvelopeRecipient {
+                key_type,
+                ephemeral_pub,
+                dek_nonce,
+                encrypted_dek,
+            },
+        }),
+        _ => {
+            return Err(AppError::Internal(anyhow::anyhow!(
+                "approved session_request {id} missing wrap columns"
+            )))
+        }
+    };
+
     Ok(Json(PollStatusResponse {
         status: "approved".to_string(),
-        session_token: row.plaintext_token,
+        envelope,
     }))
 }
 
@@ -161,7 +219,7 @@ pub async fn approve(
     let mut tx = state.pool.begin().await?;
 
     let row = sqlx::query!(
-        "SELECT confirm_code_hash FROM session_requests
+        "SELECT confirm_code_hash, device_id FROM session_requests
          WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
         id
     )
@@ -181,6 +239,25 @@ pub async fn approve(
         ));
     }
 
+    // Wrap the freshly minted token to the request's device public key, so the delivered
+    // token is unusable without that device's private key. The device is captured at create
+    // time; if it's gone (deleted between request and approval) we can't deliver securely.
+    let device_id = row.device_id.ok_or(AppError::NotFound)?;
+    let device = sqlx::query!(
+        "SELECT key_type, public_key FROM devices WHERE id = ?",
+        device_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let envelope = crate::crypto::wrap_for_device(
+        &device.key_type,
+        &device.public_key,
+        &id,
+        plaintext.as_bytes(),
+    )?;
+
     let expires_offset = format!("+{} hours", duration_hours);
     sqlx::query!(
         "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
@@ -196,14 +273,21 @@ pub async fn approve(
     let updated = sqlx::query!(
         "UPDATE session_requests
          SET status = 'approved',
-             plaintext_token = ?,
              session_key_id = ?,
              approved_by = ?,
-             approved_at = datetime('now')
+             approved_at = datetime('now'),
+             wrap_key_type = ?, wrap_nonce = ?, wrap_ciphertext = ?, wrap_aad = ?,
+             wrap_ephemeral_pub = ?, wrap_dek_nonce = ?, wrap_encrypted_dek = ?
          WHERE id = ? AND status = 'pending'",
-        plaintext,
         key_id,
         owner,
+        envelope.key_type,
+        envelope.nonce,
+        envelope.ciphertext,
+        envelope.aad,
+        envelope.ephemeral_pub,
+        envelope.dek_nonce,
+        envelope.encrypted_dek,
         id
     )
     .execute(&mut *tx)

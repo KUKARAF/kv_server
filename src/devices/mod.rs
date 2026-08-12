@@ -9,7 +9,9 @@ use axum::{
 use std::sync::Arc;
 
 pub fn router() -> Router<Arc<AppState>> {
-    Router::new().route("/", post(handlers::register))
+    Router::new()
+        .route("/register/begin", post(handlers::register_begin))
+        .route("/register/finish", post(handlers::register_finish))
 }
 
 pub fn admin_router() -> Router<Arc<AppState>> {

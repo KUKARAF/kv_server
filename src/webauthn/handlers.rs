@@ -381,7 +381,7 @@ pub async fn delete_credential(
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async fn load_passkeys_for_owner(
+pub(crate) async fn load_passkeys_for_owner(
     state: &AppState,
     owner_id: &str,
     only_credential_id: Option<&str>,

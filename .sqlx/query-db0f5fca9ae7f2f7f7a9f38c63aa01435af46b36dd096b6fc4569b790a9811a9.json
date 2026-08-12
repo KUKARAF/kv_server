@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_requests\n         SET status = 'approved',\n             session_key_id = ?,\n             approved_by = ?,\n             approved_at = datetime('now'),\n             wrap_key_type = ?, wrap_nonce = ?, wrap_ciphertext = ?, wrap_aad = ?,\n             wrap_ephemeral_pub = ?, wrap_dek_nonce = ?, wrap_encrypted_dek = ?\n         WHERE id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "db0f5fca9ae7f2f7f7a9f38c63aa01435af46b36dd096b6fc4569b790a9811a9"
+}

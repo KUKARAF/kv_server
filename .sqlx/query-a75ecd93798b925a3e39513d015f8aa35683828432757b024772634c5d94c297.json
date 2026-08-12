@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_requests\n         SET status = 'delivered',\n             wrap_key_type = NULL, wrap_nonce = NULL, wrap_ciphertext = NULL, wrap_aad = NULL,\n             wrap_ephemeral_pub = NULL, wrap_dek_nonce = NULL, wrap_encrypted_dek = NULL\n         WHERE id = ? AND status = 'approved'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "a75ecd93798b925a3e39513d015f8aa35683828432757b024772634c5d94c297"
+}

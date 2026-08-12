@@ -1,6 +1,7 @@
 mod admin;
 mod auth;
 mod config;
+mod crypto;
 mod db;
 mod devices;
 mod error;

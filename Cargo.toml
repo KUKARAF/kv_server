@@ -79,6 +79,11 @@ toml = "0.8"
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 aes-gcm = "0.10"
 hkdf = "0.12"
+# Server-side device-wrap (session_request approval → src/crypto.rs). Must stay
+# byte-compatible with kv_cli/src/crypto.rs, so versions/features mirror it exactly.
+p256 = { version = "0.13", features = ["ecdh", "pkcs8"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+zeroize = "1"
 
 [build-dependencies]
 serde_json = "1"

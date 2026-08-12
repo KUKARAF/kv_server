@@ -302,7 +302,7 @@ async fn auth_counter_behaviour(
 // ── unauthenticated → 401 ───────────────────────────────────────────────────
 #[case(
     "POST",
-    "/api/devices",
+    "/api/devices/register/begin",
     Some(r#"{"name":"t","public_key":"dGVzdA=="}"#),
     false,
     401
@@ -310,12 +310,14 @@ async fn auth_counter_behaviour(
 #[case("GET", "/api/admin/devices", None, false, 401)]
 #[case("DELETE", "/api/admin/devices/nonexistent", None, false, 401)]
 // ── authenticated → handler response ────────────────────────────────────────
+// Enrolment is WebAuthn-gated: an authenticated admin with no registered hardware key
+// is forbidden from enrolling a device (403), rather than the old one-shot 201.
 #[case(
     "POST",
-    "/api/devices",
+    "/api/devices/register/begin",
     Some(r#"{"name":"t","public_key":"dGVzdA=="}"#),
     true,
-    201
+    403
 )]
 #[case("GET", "/api/admin/devices", None, true, 200)]
 #[case("DELETE", "/api/admin/devices/nonexistent", None, true, 404)]
@@ -860,5 +862,291 @@ mod check_kv_access_tests {
     fn empty_allowlist_forbids_everything() {
         let keys: Option<Vec<String>> = Some(vec![]);
         assert!(check_kv_access(&keys, "anything").is_err());
+    }
+}
+
+// ── Device-bound session request tests ─────────────────────────────────────────
+//
+// The approval flow must deliver the session token ECDH-wrapped to a registered device,
+// never in plaintext, and device enrolment must be gated behind a WebAuthn assertion.
+mod session_request_tests {
+    use super::*;
+    use crate::keys::generate::hash_key;
+    use aes_gcm::{
+        aead::{Aead, KeyInit, Payload},
+        Aes256Gcm, Key, Nonce,
+    };
+    use axum::body::to_bytes;
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use hkdf::Hkdf;
+    use rand_core::OsRng;
+    use sha2::Sha256;
+    use x25519_dalek::{PublicKey, StaticSecret};
+
+    async fn build_session_app() -> (Router, Arc<AppState>) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let state = AppState::new(pool, test_config(), None);
+        let app = Router::new()
+            .nest("/session-request", crate::session_request::public_router())
+            .nest(
+                "/api/admin/session-requests",
+                crate::session_request::admin_router(),
+            )
+            .nest("/api/devices", devices::router())
+            .with_state(Arc::clone(&state));
+        (app, state)
+    }
+
+    /// Insert a device row directly with a fresh X25519 keypair, returning its id and the
+    /// private key (enrolment itself needs a real authenticator, tested separately).
+    async fn insert_x25519_device(pool: &SqlitePool, owner: &str) -> (String, StaticSecret) {
+        let secret = StaticSecret::random_from_rng(OsRng);
+        let public = PublicKey::from(&secret);
+        let pub_b64 = STANDARD.encode(public.as_bytes());
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO devices (id, owner_id, name, public_key, key_type)
+             VALUES (?, ?, 'test-device', ?, 'x25519')",
+        )
+        .bind(&id)
+        .bind(owner)
+        .bind(&pub_b64)
+        .execute(pool)
+        .await
+        .unwrap();
+        (id, secret)
+    }
+
+    /// Client-side unwrap of the poll envelope, mirroring `decrypt_device_kv`.
+    fn decrypt_envelope(secret: &StaticSecret, env: &serde_json::Value) -> Vec<u8> {
+        let r = &env["recipient"];
+        let eph: [u8; 32] = STANDARD
+            .decode(r["ephemeral_pub"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let shared = secret.diffie_hellman(&PublicKey::from(eph));
+        let hk = Hkdf::<Sha256>::new(Some(&[0u8; 32]), shared.as_bytes());
+        let mut wrap_key = [0u8; 32];
+        hk.expand(b"kv-device-wrap", &mut wrap_key).unwrap();
+        let dek = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&wrap_key))
+            .decrypt(
+                Nonce::from_slice(&STANDARD.decode(r["dek_nonce"].as_str().unwrap()).unwrap()),
+                STANDARD
+                    .decode(r["encrypted_dek"].as_str().unwrap())
+                    .unwrap()
+                    .as_ref(),
+            )
+            .unwrap();
+        Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&dek))
+            .decrypt(
+                Nonce::from_slice(&STANDARD.decode(env["nonce"].as_str().unwrap()).unwrap()),
+                Payload {
+                    msg: &STANDARD
+                        .decode(env["ciphertext"].as_str().unwrap())
+                        .unwrap(),
+                    aad: &STANDARD.decode(env["aad"].as_str().unwrap()).unwrap(),
+                },
+            )
+            .unwrap()
+    }
+
+    async fn create_req(app: &Router, device_id: &str) -> (u16, serde_json::Value) {
+        let body = serde_json::json!({
+            "label": "hermes-agent",
+            "requested_duration_hours": 24,
+            "device_id": device_id,
+        });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/session-request")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status().as_u16();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    async fn approve(app: &Router, token: &str, id: &str, confirm_code: &str) -> u16 {
+        let body = serde_json::json!({ "confirm_code": confirm_code });
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/admin/session-requests/{id}/approve"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    }
+
+    async fn poll(app: &Router, id: &str, secret: &str) -> (u16, serde_json::Value) {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/session-request/{id}/status?secret={secret}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status().as_u16();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        (status, json)
+    }
+
+    /// End-to-end: approve wraps the token to the device; poll delivers an envelope that
+    /// decrypts to the *real* session token (its hash matches the minted api_key), and the
+    /// DB never holds a usable plaintext token.
+    #[tokio::test]
+    async fn approved_token_is_device_wrapped_and_decrypts() {
+        let (app, state) = build_session_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (device_id, device_secret) = insert_x25519_device(&state.pool, TEST_OWNER).await;
+
+        let (status, created) = create_req(&app, &device_id).await;
+        assert_eq!(status, 201, "create must return 201");
+        let id = created["id"].as_str().unwrap().to_string();
+        let poll_secret = created["poll_secret"].as_str().unwrap().to_string();
+        let confirm_code = created["confirm_code"].as_str().unwrap().to_string();
+
+        // Before approval: pending, no envelope.
+        let (s, pending) = poll(&app, &id, &poll_secret).await;
+        assert_eq!(s, 200);
+        assert_eq!(pending["status"].as_str().unwrap(), "pending");
+        assert!(pending["envelope"].is_null());
+
+        assert_eq!(approve(&app, &admin, &id, &confirm_code).await, 204);
+
+        // DB must hold the wrap, never a plaintext token.
+        let plaintext: Option<String> =
+            sqlx::query_scalar("SELECT plaintext_token FROM session_requests WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert!(plaintext.is_none(), "plaintext_token must never be written");
+        let wrap_ct: Option<String> =
+            sqlx::query_scalar("SELECT wrap_ciphertext FROM session_requests WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert!(wrap_ct.is_some(), "wrap_ciphertext must be populated");
+
+        // Poll delivers the envelope; it decrypts to the real token.
+        let (s, approved) = poll(&app, &id, &poll_secret).await;
+        assert_eq!(s, 200);
+        assert_eq!(approved["status"].as_str().unwrap(), "approved");
+        let token =
+            String::from_utf8(decrypt_envelope(&device_secret, &approved["envelope"])).unwrap();
+
+        let minted_hash: String = sqlx::query_scalar(
+            "SELECT key_hash FROM api_keys WHERE id =
+             (SELECT session_key_id FROM session_requests WHERE id = ?)",
+        )
+        .bind(&id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            hash_key(&token),
+            minted_hash,
+            "decrypted token must be the minted session key"
+        );
+
+        // Second poll: consumed, envelope cleared.
+        let (s, delivered) = poll(&app, &id, &poll_secret).await;
+        assert_eq!(s, 200);
+        assert_eq!(delivered["status"].as_str().unwrap(), "delivered");
+        assert!(delivered["envelope"].is_null());
+        let wrap_ct_after: Option<String> =
+            sqlx::query_scalar("SELECT wrap_ciphertext FROM session_requests WHERE id = ?")
+                .bind(&id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert!(
+            wrap_ct_after.is_none(),
+            "envelope must be cleared on delivery"
+        );
+    }
+
+    /// A create referencing a non-existent device is rejected (nothing to wrap to).
+    #[tokio::test]
+    async fn create_with_unknown_device_is_rejected() {
+        let (app, _state) = build_session_app().await;
+        let (status, _) = create_req(&app, "no-such-device").await;
+        assert_eq!(status, 404, "unknown device_id must be rejected");
+    }
+
+    /// Approval still requires the confirm code; a wrong one is forbidden and mints nothing.
+    #[tokio::test]
+    async fn approve_with_wrong_confirm_code_is_forbidden() {
+        let (app, state) = build_session_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (device_id, _) = insert_x25519_device(&state.pool, TEST_OWNER).await;
+        let (_, created) = create_req(&app, &device_id).await;
+        let id = created["id"].as_str().unwrap().to_string();
+
+        assert_eq!(approve(&app, &admin, &id, "🐟🐟🐟 wrong").await, 403);
+        let status: String = sqlx::query_scalar("SELECT status FROM session_requests WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            status, "pending",
+            "a failed confirm must not approve the row"
+        );
+    }
+
+    /// Enrolment gate: with no registered hardware key, begin is forbidden — a stolen OIDC
+    /// session alone cannot add a device.
+    #[tokio::test]
+    async fn device_enrolment_requires_a_passkey() {
+        let (app, state) = build_session_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let body = serde_json::json!({
+            "name": "laptop", "public_key": "AAAA", "key_type": "x25519",
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/devices/register/begin")
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status().as_u16(),
+            403,
+            "enrolment without a hardware key must be forbidden"
+        );
     }
 }

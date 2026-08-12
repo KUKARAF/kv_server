@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT confirm_code_hash, device_id FROM session_requests\n         WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
+  "describe": {
+    "columns": [
+      {
+        "name": "confirm_code_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "4b8b25486e9685f70ee6a0184423669e40f4ab0db692b6e23fa225848320b4ea"
+}

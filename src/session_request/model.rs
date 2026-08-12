@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 pub struct CreateSessionRequestBody {
     pub label: Option<String>,
     pub requested_duration_hours: Option<i64>,
+    /// Registered device the approved session token will be ECDH-wrapped to. Required:
+    /// the approval is only usable by whoever holds this device's private key.
+    pub device_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -27,7 +30,28 @@ pub struct PollQuery {
 #[derive(Debug, Serialize)]
 pub struct PollStatusResponse {
     pub status: String,
-    pub session_token: Option<String>,
+    /// Present only in the single `approved` response that claims the token. The token is
+    /// delivered ECDH-wrapped to the request's device; decrypt with the device private key
+    /// using the same routine as device-KV (`kv_cli`/`kv_apk` `decrypt_device_kv`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub envelope: Option<SessionEnvelope>,
+}
+
+/// Device-KV envelope carrying the wrapped session token (all fields base64).
+#[derive(Debug, Serialize)]
+pub struct SessionEnvelope {
+    pub nonce: String,
+    pub ciphertext: String,
+    pub aad: String,
+    pub recipient: EnvelopeRecipient,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EnvelopeRecipient {
+    pub key_type: String,
+    pub ephemeral_pub: String,
+    pub dek_nonce: String,
+    pub encrypted_dek: String,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]

@@ -34,6 +34,17 @@ pub struct AuthChallengeEntry {
     pub prf_salt: Vec<u8>,
 }
 
+/// Pending device-enrolment state. Registering a device requires a verified WebAuthn
+/// assertion (a physical key touch), so the device fields are stashed here at `begin` and
+/// only inserted at `finish` once the assertion checks out.
+pub struct DeviceRegChallengeEntry {
+    pub state: PasskeyAuthentication,
+    pub owner_id: String,
+    pub name: String,
+    pub public_key: String,
+    pub key_type: String,
+}
+
 pub struct AppState {
     pub pool: SqlitePool,
     pub config: Config,
@@ -47,6 +58,8 @@ pub struct AppState {
     pub webauthn_auth_challenges: DashMap<String, AuthChallengeEntry>,
     /// challenge_id -> PRF-only challenge state (for admin creation flow)
     pub webauthn_prf_challenges: DashMap<String, (Vec<Passkey>, Vec<u8>)>,
+    /// challenge_id -> pending device enrolment state (WebAuthn-gated)
+    pub device_reg_challenges: DashMap<String, DeviceRegChallengeEntry>,
 }
 
 impl AppState {
@@ -62,6 +75,7 @@ impl AppState {
             webauthn_reg_challenges: DashMap::new(),
             webauthn_auth_challenges: DashMap::new(),
             webauthn_prf_challenges: DashMap::new(),
+            device_reg_challenges: DashMap::new(),
         })
     }
 }
