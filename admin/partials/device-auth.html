@@ -5,6 +5,7 @@
       <button class="btn-secondary" style="font-size:0.8em;" onclick="addPhone()">Add phone</button>
       <button class="btn-secondary" style="font-size:0.8em;" onclick="toggleCliPanel()">Add CLI</button>
       <button class="btn-secondary" style="font-size:0.8em;" onclick="addWeb()">Add web</button>
+      <button class="btn-secondary" style="font-size:0.8em;" onclick="addOtherClient()">Add other client</button>
       <button class="btn-secondary" style="font-size:0.8em;" onclick="loadDevices()">Refresh</button>
     </div>
   </div>
@@ -38,6 +39,49 @@
     <p class="share-reveal-warn">Valid for <strong>180 days</strong>. Scan once — navigating away loses the code.</p>
     <div style="display:flex;justify-content:center;padding:1rem;">
       <div id="phone-qr-canvas" style="background:#fff;padding:12px;display:inline-block;"></div>
+    </div>
+  </div>
+
+  <div id="other-client-reveal" class="share-reveal hidden" style="margin-top:1rem;">
+    <div class="share-reveal-header">
+      <span>🖥️ Add other client</span>
+      <button type="button" class="btn-icon" onclick="closeOtherClient()">✕</button>
+    </div>
+    <div style="padding:1rem 1.25rem;">
+      <p class="share-reveal-warn" style="margin-top:0;">
+        Enrol a headless client (e.g. online_pykv or kv_cli) that generated its own keypair.
+        Paste its <strong>public key</strong> below — the private key stays on the remote machine.
+      </p>
+      <label style="display:block;margin-bottom:0.75rem;font-size:13px;color:var(--muted);">
+        Device name
+        <input id="other-client-name" type="text" placeholder="bigboy-hermes"
+               style="width:100%;margin-top:0.25rem;box-sizing:border-box;">
+      </label>
+      <label style="display:block;margin-bottom:0.75rem;font-size:13px;color:var(--muted);">
+        Key type
+        <select id="other-client-keytype" style="width:100%;margin-top:0.25rem;box-sizing:border-box;">
+          <option value="x25519">x25519</option>
+          <option value="p256">p256</option>
+        </select>
+      </label>
+      <label style="display:block;margin-bottom:0.75rem;font-size:13px;color:var(--muted);">
+        Public key (base64)
+        <textarea id="other-client-pubkey" rows="3" placeholder="base64 public key printed by the client"
+                  style="width:100%;margin-top:0.25rem;box-sizing:border-box;word-break:break-all;font-family:monospace;font-size:12px;"></textarea>
+      </label>
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <button id="other-client-enrol-btn" class="btn-secondary" style="font-size:0.85em;" onclick="enrolOtherClient()">Enrol</button>
+      </div>
+      <div id="other-client-result" style="display:none;margin-top:1rem;padding-top:1rem;border-top:1px solid var(--border);">
+        <p style="margin:0 0 0.5rem;font-size:13px;color:var(--muted);">
+          Enrolled. Paste this <strong>device_id</strong> into the client's config
+          (e.g. <code>~/.config/kv/config.toml</code>):
+        </p>
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+          <code id="other-client-id-value" style="flex:1;word-break:break-all;font-size:13px;color:var(--accent);"></code>
+          <button class="btn-secondary" style="font-size:0.85em;" onclick="copyOtherClientId()">Copy</button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -148,6 +192,52 @@
 
   function closePhoneQr() {
     document.getElementById('phone-qr-reveal').classList.add('hidden');
+  }
+
+  function addOtherClient() {
+    const el = document.getElementById('other-client-reveal');
+    el.classList.remove('hidden');
+    document.getElementById('other-client-name').value = '';
+    document.getElementById('other-client-keytype').value = 'x25519';
+    document.getElementById('other-client-pubkey').value = '';
+    document.getElementById('other-client-result').style.display = 'none';
+    document.getElementById('other-client-id-value').textContent = '';
+  }
+
+  function closeOtherClient() {
+    document.getElementById('other-client-reveal').classList.add('hidden');
+  }
+
+  async function enrolOtherClient() {
+    const name = document.getElementById('other-client-name').value.trim();
+    const keyType = document.getElementById('other-client-keytype').value;
+    const publicKey = document.getElementById('other-client-pubkey').value.trim();
+
+    if (!name) { showToast('Enter a device name.', { type: 'error' }); return; }
+    if (!publicKey) { showToast('Paste the client\'s public key.', { type: 'error' }); return; }
+    if (!keyType) { showToast('Choose a key type.', { type: 'error' }); return; }
+
+    const btn = document.getElementById('other-client-enrol-btn');
+    btn.disabled = true;
+    try {
+      // WebAuthn-gated enrolment of an externally-generated public key. No keypair is
+      // generated here and nothing is written to IndexedDB — the private key stays on
+      // the remote client (contrast with the browser-keypair path in addWeb()).
+      const { id } = await enrolDevice(name, publicKey, keyType);
+      document.getElementById('other-client-id-value').textContent = id;
+      document.getElementById('other-client-result').style.display = '';
+      showToast('Client enrolled. Copy the device_id into its config.', { type: 'success' });
+      loadDevices();
+    } catch (e) {
+      showToast(e.message, { type: 'error' });
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function copyOtherClientId() {
+    navigator.clipboard.writeText(document.getElementById('other-client-id-value').textContent);
+    showToast('device_id copied', { type: 'success' });
   }
 
   loadDevices();
