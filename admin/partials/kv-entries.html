@@ -214,11 +214,22 @@
     const container = document.getElementById('kv-generate-via-checkboxes');
     if (!active.length) { panel.style.display = 'none'; return; }
     panel.style.display = 'block';
-    container.innerHTML = active.map(r => `
-      <label class="label-check">
+    container.innerHTML = active.map(r => {
+      const providerName = r.provider === 'openrouter' ? 'OpenRouter' : r.provider;
+      // Only append the label when it adds information (differs from the provider name) —
+      // avoids the redundant "priority-notify (priority-notify)".
+      const suffix = (active.length > 1 && r.label && r.label !== providerName)
+        ? ' (' + esc(r.label) + ')' : '';
+      // priority-notify: explain the required entry name via a hover tooltip, not inline text.
+      const tip = r.provider === 'priority-notify'
+        ? ' title="to allow this server to use priority notify for warnings set name NOTIFY_API_KEY and save"'
+        : '';
+      return `
+      <label class="label-check"${tip}>
         <input type="checkbox" value="${esc(r.id)}" onchange="toggleGenerateVia(this)">
-        ${esc(r.provider === 'openrouter' ? 'OpenRouter' : r.provider)}${active.length > 1 ? ' (' + esc(r.label) + ')' : ''}${r.provider === 'priority-notify' ? ' — name the entry NOTIFY_API_KEY' : ''}
-      </label>`).join('');
+        ${esc(providerName)}${suffix}
+      </label>`;
+    }).join('');
   }
   populateGenerateViaPicker();
 
