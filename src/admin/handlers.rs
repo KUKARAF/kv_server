@@ -1145,3 +1145,53 @@ pub async fn dismiss_faux_approval(
     }
     Ok(StatusCode::NO_CONTENT)
 }
+
+// ── priority-notify send-token lifecycle ──────────────────────────────────────
+//
+// These manage the `NOTIFY_API_KEY` send token via the stored `NOTIFY_MANAGEMENT_KEY`
+// (see src/notify.rs). If the management key isn't provisioned yet, return 409 with a clear
+// message rather than a generic 500.
+
+fn notify_mgmt_missing() -> AppError {
+    AppError::Conflict(
+        "NOTIFY_MANAGEMENT_KEY is not set — store it first (priority-notify UI → management key)"
+            .to_string(),
+    )
+}
+
+/// Rotate NOTIFY_API_KEY (create-before-revoke). Admin only.
+pub async fn notify_rotate(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+) -> Result<StatusCode, AppError> {
+    if !crate::notify::has_management_key(&state.pool).await {
+        return Err(notify_mgmt_missing());
+    }
+    crate::notify::rotate_send_token(&state.pool).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// List the tokens the management key can see (no plaintext). Admin only.
+pub async fn notify_list_tokens(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+) -> Result<Json<Vec<crate::notify::TokenInfo>>, AppError> {
+    if !crate::notify::has_management_key(&state.pool).await {
+        return Err(notify_mgmt_missing());
+    }
+    let tokens = crate::notify::list_provisioned_tokens(&state.pool).await?;
+    Ok(Json(tokens))
+}
+
+/// Revoke a specific token id. A 404 from priority-notify is treated as already-gone. Admin only.
+pub async fn notify_revoke_token(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    if !crate::notify::has_management_key(&state.pool).await {
+        return Err(notify_mgmt_missing());
+    }
+    crate::notify::revoke_provisioned_token(&state.pool, &id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
