@@ -9,6 +9,7 @@
   <title>Admin — kv.osmosis.page</title>
   <script src="https://unpkg.com/htmx.org@2.0.3" integrity="sha384-0895/pl2MU10Hqc6jd4RvrthNlDiE9U1tWmX7WRESftEDRosgxNsQG/Ze9YMRzHq" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script src="/admin/js/utils.js"></script>
   <link rel="stylesheet" href="/admin/style.css">
   <script defer src="https://analytics.osmosis.page/script.js" data-website-id="9fba5aab-afb5-42e5-b84e-799a84a3a6a8"></script>
 </head>
@@ -209,17 +210,8 @@
           const spki = await crypto.subtle.exportKey('spki', record.publicKey);
           const b64  = btoa(String.fromCharCode(...new Uint8Array(spki)));
           const name = document.getElementById('stale-device-name').value.trim() || 'browser';
-          const resp = await fetch('/api/devices', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, public_key: b64, key_type: 'p256' }),
-          });
-          if (!resp.ok) {
-            const err = await resp.text();
-            showToast(`Re-enroll failed: ${err}`, { type: 'error' });
-            return;
-          }
-          const data = await resp.json();
+          // WebAuthn-gated: prompts for a passkey touch before re-enrolling (see utils.js).
+          const data = await enrolDevice(name, b64, 'p256');
           await _dbPut(db, 'device', { ...record, deviceId: data.id });
           overlay.remove();
           showToast('Re-enrolled successfully', { type: 'success' });

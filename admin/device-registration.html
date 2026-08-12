@@ -39,7 +39,8 @@
       <div class="device-icon">💻</div>
       <h1>Register this device</h1>
       <p class="device-meta">
-        A key pair will be generated in your browser. The private key never leaves this device.
+        A key pair will be generated in your browser — the private key never leaves this device.
+        You'll be asked to confirm with a registered passkey to authorize the enrolment.
       </p>
       <label for="device-name" style="font-size:13px;color:#aaa;">Device name</label>
       <input id="device-name" type="text" placeholder="e.g. Rafał's laptop"
@@ -55,6 +56,7 @@
     </div>
   </div>
 
+  <script src="/admin/js/utils.js"></script>
   <script>
     // ── Auth guard ────────────────────────────────────────────────────────────
     const _fetch = window.fetch;
@@ -138,22 +140,11 @@
         const spkiBuffer = await crypto.subtle.exportKey('spki', publicKey);
         const publicKeyB64 = btoa(String.fromCharCode(...new Uint8Array(spkiBuffer)));
 
-        btn.textContent = 'Registering…';
+        btn.textContent = 'Touch your passkey…';
 
-        const resp = await fetch('/api/devices', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, public_key: publicKeyB64, key_type: 'p256' }),
-        });
-
-        if (!resp.ok) {
-          if (resp.status === 409) {
-            throw new Error(`A device named "${name}" is already registered. Choose a different name or delete the existing device from the admin panel first.`);
-          }
-          throw new Error('Server returned ' + resp.status);
-        }
-
-        const { id } = await resp.json();
+        // Enrolment is WebAuthn-gated: the server issues a passkey challenge that must be
+        // signed here before the device is accepted (see enrolDevice in utils.js).
+        const { id } = await enrolDevice(name, publicKeyB64, 'p256');
 
         // Store device ID + both keys in IndexedDB.
         // The private CryptoKey object can live here even though extractable=false.
