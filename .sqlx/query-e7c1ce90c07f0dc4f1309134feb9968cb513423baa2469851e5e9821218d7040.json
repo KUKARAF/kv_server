@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.owner_id FROM session_requests sr\n         JOIN devices d ON d.id = sr.device_id\n         WHERE sr.id = ? AND sr.status = 'pending'",
+  "describe": {
+    "columns": [
+      {
+        "name": "owner_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "e7c1ce90c07f0dc4f1309134feb9968cb513423baa2469851e5e9821218d7040"
+}

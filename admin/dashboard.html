@@ -328,10 +328,9 @@
 
       for (const r of data) {
         if (!knownSessionRequests.has(r.id)) {
-          const name = r.label ? `<strong>${esc(r.label)}</strong>` : 'Unknown client';
-          // Link to the review page only — approving requires submitting the one-time
-          // approval code the requester relays from their device, so there is deliberately
-          // no one-click Approve here.
+          // Show the device's real, registered name — never the request's self-reported
+          // label, which is attacker-controlled and not a trust signal.
+          const name = r.device_name ? `<strong>${esc(r.device_name)}</strong>` : 'Unknown device';
           showToast(
             `🔐 Session request: ${name} — <a href="/admin/session-request.html?id=${esc(r.id)}" style="color:#93c5fd">Review →</a>`,
             { id: 'session-req-' + r.id, persistent: true, type: 'warning' }

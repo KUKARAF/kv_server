@@ -981,8 +981,8 @@ mod session_request_tests {
         (status, json)
     }
 
-    async fn approve(app: &Router, token: &str, id: &str, approval_token: &str) -> u16 {
-        let body = serde_json::json!({ "approval_token": approval_token });
+    async fn approve(app: &Router, token: &str, id: &str) -> u16 {
+        let body = serde_json::json!({});
         app.clone()
             .oneshot(
                 Request::builder()
@@ -991,6 +991,22 @@ mod session_request_tests {
                     .header("Authorization", format!("Bearer {token}"))
                     .header("content-type", "application/json")
                     .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+            .as_u16()
+    }
+
+    async fn reject(app: &Router, token: &str, id: &str) -> u16 {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/admin/session-requests/{id}/reject"))
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
                     .unwrap(),
             )
             .await
@@ -1030,44 +1046,19 @@ mod session_request_tests {
         assert_eq!(status, 201, "create must return 201");
         let id = created["id"].as_str().unwrap().to_string();
         let poll_secret = created["poll_secret"].as_str().unwrap().to_string();
-        // The create response must NOT leak the approval token in the clear.
+        // The create response must NOT leak any approval secret in the clear.
         assert!(
             created.get("confirm_code").is_none() && created.get("approval_token").is_none(),
             "create must not return a plaintext approval token"
         );
 
-        // Before approval: pending, no session envelope, but the wrapped approval token is
-        // present. Decrypt it with the device key to recover the token the human relays.
+        // Before approval: pending, no session envelope.
         let (s, pending) = poll(&app, &id, &poll_secret).await;
         assert_eq!(s, 200);
         assert_eq!(pending["status"].as_str().unwrap(), "pending");
         assert!(pending["envelope"].is_null());
-        assert!(
-            !pending["approval_envelope"].is_null(),
-            "pending poll must carry the wrapped approval token"
-        );
-        let approval_token = String::from_utf8(decrypt_envelope(
-            &device_secret,
-            &pending["approval_envelope"],
-        ))
-        .unwrap();
 
-        // Idempotent: re-polling while pending re-serves the same approval envelope (not
-        // consumed), so a device can re-display the token.
-        let (s2, pending2) = poll(&app, &id, &poll_secret).await;
-        assert_eq!(s2, 200);
-        assert_eq!(pending2["status"].as_str().unwrap(), "pending");
-        assert_eq!(
-            String::from_utf8(decrypt_envelope(
-                &device_secret,
-                &pending2["approval_envelope"]
-            ))
-            .unwrap(),
-            approval_token,
-            "approval token must be re-fetchable while pending"
-        );
-
-        assert_eq!(approve(&app, &admin, &id, &approval_token).await, 204);
+        assert_eq!(approve(&app, &admin, &id).await, 204);
 
         // DB must hold the wrap, never a plaintext token.
         let plaintext: Option<String> =
@@ -1131,20 +1122,20 @@ mod session_request_tests {
         assert_eq!(status, 404, "unknown device_id must be rejected");
     }
 
-    /// Approval requires the one-time approval token; a wrong one is forbidden and mints
-    /// nothing — the row stays pending.
+    /// Approval requires the admin to own the request's device; an admin approving/rejecting
+    /// someone else's device is forbidden and the row stays pending — this is the actual
+    /// binding replacing the old human-relayed approval token: the admin's decision is
+    /// grounded in the device's real, owner-scoped identity, not a self-reported label.
     #[tokio::test]
-    async fn approve_with_wrong_approval_token_is_forbidden() {
+    async fn approve_and_reject_by_non_owner_are_forbidden() {
         let (app, state) = build_session_app().await;
         let admin = insert_session_key(&state.pool, "active", None).await;
-        let (device_id, _) = insert_x25519_device(&state.pool, TEST_OWNER).await;
+        let (device_id, _) = insert_x25519_device(&state.pool, "someone-else").await;
         let (_, created) = create_req(&app, &device_id).await;
         let id = created["id"].as_str().unwrap().to_string();
 
-        assert_eq!(
-            approve(&app, &admin, &id, "kv_not-the-real-token").await,
-            403
-        );
+        assert_eq!(approve(&app, &admin, &id).await, 403);
+        assert_eq!(reject(&app, &admin, &id).await, 403);
         let status: String = sqlx::query_scalar("SELECT status FROM session_requests WHERE id = ?")
             .bind(&id)
             .fetch_one(&state.pool)
@@ -1152,8 +1143,64 @@ mod session_request_tests {
             .unwrap();
         assert_eq!(
             status, "pending",
-            "a failed approval token must not approve the row"
+            "a non-owner's approve/reject must not change the row"
         );
+    }
+
+    /// `list_pending`/`get_request` surface the device's real, immutable name (not the
+    /// attacker-controlled `label`) and flag whether the caller owns that device.
+    #[tokio::test]
+    async fn pending_requests_expose_device_name_and_ownership() {
+        let (app, state) = build_session_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (own_device, _) = insert_x25519_device(&state.pool, TEST_OWNER).await;
+        let (foreign_device, _) = insert_x25519_device(&state.pool, "someone-else").await;
+
+        let (_, own_created) = create_req(&app, &own_device).await;
+        let own_id = own_created["id"].as_str().unwrap().to_string();
+        create_req(&app, &foreign_device).await;
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/admin/session-requests")
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let list: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let rows = list.as_array().unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "list_pending must only show the admin's own devices' requests"
+        );
+        assert_eq!(rows[0]["id"].as_str().unwrap(), own_id);
+        assert_eq!(rows[0]["device_name"].as_str().unwrap(), "test-device");
+        assert!(rows[0]["is_own_device"].as_bool().unwrap());
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/admin/session-requests/{own_id}"))
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(detail["device_name"].as_str().unwrap(), "test-device");
+        assert!(detail["is_own_device"].as_bool().unwrap());
     }
 
     /// Enrolment gate: with no registered hardware key, begin is forbidden — a stolen OIDC

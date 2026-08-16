@@ -31,12 +31,6 @@ pub struct PollStatusResponse {
     /// using the same routine as device-KV (`kv_cli`/`kv_apk` `decrypt_device_kv`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub envelope: Option<SessionEnvelope>,
-    /// Present while `pending`: the one-time approval token ECDH-wrapped to the request's
-    /// device. Served idempotently (NOT consumed) so the device can re-fetch and re-display
-    /// the token. The device decrypts it with its private key (same routine as `envelope`)
-    /// and the human relays the plaintext token to the approving admin.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approval_envelope: Option<SessionEnvelope>,
 }
 
 /// Device-KV envelope carrying a wrapped token (all fields base64). `Deserialize` so the
@@ -76,19 +70,23 @@ impl From<crate::crypto::Envelope> for SessionEnvelope {
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SessionRequestRow {
     pub id: String,
+    /// Attacker-controlled, free-text, self-reported by whoever called `create_request` —
+    /// cosmetic only. Never use this to decide whether to approve; use `device_name`, which
+    /// is the device's real, immutable, owner-scoped identity.
     pub label: Option<String>,
     pub status: String,
     pub requested_at: String,
     pub expires_at: String,
     pub requested_duration_hours: Option<i64>,
+    /// The requested device's real, immutable name (set at WebAuthn-gated registration).
+    /// `None` only for the theoretical case of a request with no device bound.
+    pub device_name: Option<String>,
+    /// Whether the device belongs to the admin making this request — computed server-side
+    /// from the authenticated session, never derived from anything client-supplied.
+    pub is_own_device: bool,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ApproveSessionRequestBody {
     pub approved_duration_hours: Option<i64>,
-    /// The one-time approval token, relayed by the requester from their device (which
-    /// decrypted it out of the pending `approval_envelope`). Its sha256 must match the
-    /// stored `approval_token_hash` or approval is forbidden — binding approval to a secret
-    /// only the real requester's device could recover, not just a click on a pending row.
-    pub approval_token: String,
 }

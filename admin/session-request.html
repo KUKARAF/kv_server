@@ -39,6 +39,7 @@
     .status-msg { text-align: center; padding: 2rem; }
     .status-msg .status-icon { font-size: 3rem; margin-bottom: 1rem; }
     .open-in-app { display: block; text-align: center; margin-top: 1rem; color: #93c5fd; font-size: 13px; }
+    .ownership-warning { background: #2a1414; border: 1px solid #7f1d1d; color: #f87171; border-radius: 6px; padding: 0.75rem 0.9rem; font-size: 13px; margin-top: 1.25rem; }
   </style>
 </head>
 <body class="login-page">
@@ -59,12 +60,17 @@
 
     <div id="approve-view" class="hidden">
       <div class="device-icon">🔑</div>
-      <h1>Session requested</h1>
-      <p id="request-label" class="device-meta" style="font-size:14px;color:#e0e0e0;margin-bottom:0.25rem;"></p>
+      <h1 id="request-device-name">Session requested</h1>
+      <p id="request-label" class="device-meta hidden" style="font-size:12px;"></p>
       <p class="device-meta">
         Requested <span id="requested-at"></span> &nbsp;·&nbsp;
         Expires in <span id="countdown" class="countdown"></span>
       </p>
+
+      <div id="ownership-warning" class="ownership-warning hidden">
+        ⚠️ This device is not registered to your account — you cannot approve or reject
+        this request.
+      </div>
 
       <div class="duration-row">
         <label for="duration">Session duration</label>
@@ -80,24 +86,9 @@
         <p id="duration-hint" class="duration-hint"></p>
       </div>
 
-      <div class="duration-row">
-        <label for="approval-token">Approval code (ask the requester)</label>
-        <input
-          type="text"
-          id="approval-token"
-          placeholder="paste the approval code shown on the requesting device"
-          autocomplete="off"
-          spellcheck="false"
-          style="width:100%;background:#0d0d0d;border:1px solid #333;color:#e0e0e0;padding:0.4rem 0.6rem;border-radius:5px;font-size:16px;box-sizing:border-box;"
-          oninput="document.getElementById('approve-btn').disabled = !this.value.trim()"
-        >
-        <p class="duration-hint">The requesting device decrypted and displayed this one-time approval code — do not approve without it.</p>
-        <p id="confirm-error" class="duration-hint" style="color:#f87171;display:none;"></p>
-      </div>
-
       <div class="action-row">
-        <button class="btn-danger" onclick="rejectRequest()">Reject</button>
-        <button class="btn" id="approve-btn" onclick="approveRequest()" disabled>Approve</button>
+        <button class="btn-danger" id="reject-btn" onclick="rejectRequest()">Reject</button>
+        <button class="btn" id="approve-btn" onclick="approveRequest()">Approve</button>
       </div>
     </div>
   </div>
@@ -147,8 +138,12 @@
         return;
       }
 
+      document.getElementById('request-device-name').textContent =
+        data.device_name ? data.device_name : 'Unknown device';
       if (data.label) {
-        document.getElementById('request-label').textContent = data.label;
+        const labelEl = document.getElementById('request-label');
+        labelEl.textContent = 'claims to be: ' + data.label;
+        labelEl.classList.remove('hidden');
       }
       document.getElementById('requested-at').textContent = data.requested_at;
       startCountdown(data.expires_at);
@@ -159,6 +154,12 @@
       if (requested) {
         document.getElementById('duration-hint').textContent =
           'Client requested ' + formatHours(requested);
+      }
+
+      if (!data.is_own_device) {
+        document.getElementById('ownership-warning').classList.remove('hidden');
+        document.getElementById('approve-btn').disabled = true;
+        document.getElementById('reject-btn').disabled = true;
       }
 
       document.getElementById('loading').classList.add('hidden');
@@ -203,20 +204,16 @@
     // ── Approve / Reject ──────────────────────────────────────────────────────
     async function approveRequest() {
       const hours = parseInt(document.getElementById('duration').value, 10);
-      const approvalToken = document.getElementById('approval-token').value.trim();
-      const errorEl = document.getElementById('confirm-error');
-      errorEl.style.display = 'none';
 
       const resp = await fetch('/api/admin/session-requests/' + requestId + '/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved_duration_hours: hours, approval_token: approvalToken }),
+        body: JSON.stringify({ approved_duration_hours: hours }),
       });
       if (resp.ok) {
         showStatus('✅', 'Approved! Session token valid for ' + formatHours(hours) + '.');
       } else if (resp.status === 403) {
-        errorEl.textContent = "Approval code doesn't match — confirm the code with the requester and try again.";
-        errorEl.style.display = 'block';
+        showStatus('❌', "You don't have permission to approve this device's request.");
       } else {
         showStatus('❌', 'Approval failed (' + resp.status + ').');
       }
@@ -226,6 +223,8 @@
       const resp = await fetch('/api/admin/session-requests/' + requestId + '/reject', { method: 'POST' });
       if (resp.ok) {
         showStatus('✗', 'Request rejected.');
+      } else if (resp.status === 403) {
+        showStatus('❌', "You don't have permission to reject this device's request.");
       } else {
         showStatus('❌', 'Rejection failed (' + resp.status + ').');
       }

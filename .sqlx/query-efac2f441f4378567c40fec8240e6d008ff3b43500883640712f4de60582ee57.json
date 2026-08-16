@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT device_id FROM session_requests\n         WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
+  "describe": {
+    "columns": [
+      {
+        "name": "device_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "efac2f441f4378567c40fec8240e6d008ff3b43500883640712f4de60582ee57"
+}

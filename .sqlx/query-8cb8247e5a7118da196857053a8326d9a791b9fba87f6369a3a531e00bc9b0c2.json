@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, label, status, requested_at, expires_at, requested_duration_hours\n         FROM session_requests WHERE id = ?",
+  "query": "SELECT sr.id, sr.label, sr.status, sr.requested_at, sr.expires_at,\n                sr.requested_duration_hours, d.name AS device_name\n         FROM session_requests sr\n         LEFT JOIN devices d ON d.id = sr.device_id\n         WHERE sr.status = 'pending' AND sr.expires_at > datetime('now') AND d.owner_id = ?\n         ORDER BY sr.requested_at DESC",
   "describe": {
     "columns": [
       {
@@ -32,6 +32,11 @@
         "name": "requested_duration_hours",
         "ordinal": 5,
         "type_info": "Int64"
+      },
+      {
+        "name": "device_name",
+        "ordinal": 6,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -43,8 +48,9 @@
       false,
       false,
       false,
-      true
+      true,
+      false
     ]
   },
-  "hash": "4cf45bb7eeee9945842e2d1184f6d4763be91ecdfaf485658f415a5aa083afbc"
+  "hash": "8cb8247e5a7118da196857053a8326d9a791b9fba87f6369a3a531e00bc9b0c2"
 }

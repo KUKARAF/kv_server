@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT key_type, public_key FROM devices WHERE id = ?",
+  "query": "SELECT key_type, public_key, owner_id FROM devices WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -12,6 +12,11 @@
         "name": "public_key",
         "ordinal": 1,
         "type_info": "Text"
+      },
+      {
+        "name": "owner_id",
+        "ordinal": 2,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -19,8 +24,9 @@
     },
     "nullable": [
       false,
+      false,
       false
     ]
   },
-  "hash": "9709ce31eb3e183c8b087295bb1ca828dd5f7ea87bce7b32b4da53276ecafb60"
+  "hash": "20c541f3299b4a20f72ba1d10d51adbad519e330c1d1d16749fe1a8ed5481af9"
 }

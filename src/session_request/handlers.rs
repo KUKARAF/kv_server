@@ -20,31 +20,14 @@ pub async fn create_request(
     let id = Uuid::new_v4().to_string();
     // Separate poll secret held only by the requester; stored hashed.
     let (poll_secret, poll_secret_hash) = generate_api_key();
-    // One-time approval token. Only its hash is stored; the plaintext is ECDH-wrapped to the
-    // request's device below and never persisted in the clear. The admin must submit this
-    // token back at approval time, so approving is bound to a secret only whoever holds the
-    // device's private key can recover — not just to whichever pending row gets clicked.
-    let (approval_token, approval_token_hash) = generate_api_key();
 
-    // The token is ECDH-wrapped to this device now; the device must exist so we have a public
-    // key to wrap to. No auth needed here — naming another owner's device only wraps the token
-    // to *their* key, which is useless to anyone else.
-    let device = sqlx::query!(
-        "SELECT key_type, public_key FROM devices WHERE id = ?",
-        body.device_id
-    )
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or(AppError::NotFound)?;
-
-    let approval_env = crate::crypto::wrap_for_device(
-        &device.key_type,
-        &device.public_key,
-        &id,
-        approval_token.as_bytes(),
-    )?;
-    let approval_envelope = serde_json::to_string(&SessionEnvelope::from(approval_env))
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("serialize approval envelope: {e}")))?;
+    // The device must already exist — no auth needed here, since the eventual session token
+    // is ECDH-wrapped to this device's public key regardless of who approves, and the admin
+    // approval page trusts the device's own registered name, not anything in this request body.
+    sqlx::query!("SELECT id FROM devices WHERE id = ?", body.device_id)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     let expires_at = sqlx::query_scalar!("SELECT datetime('now', '+15 minutes')")
         .fetch_one(&state.pool)
@@ -52,15 +35,13 @@ pub async fn create_request(
         .unwrap_or_default();
 
     sqlx::query!(
-        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret, device_id, approval_token_hash, approval_envelope) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret, device_id) VALUES (?, ?, ?, ?, ?, ?)",
         id,
         body.label,
         expires_at,
         body.requested_duration_hours,
         poll_secret_hash,
         body.device_id,
-        approval_token_hash,
-        approval_envelope
     )
     .execute(&state.pool)
     .await?;
@@ -87,7 +68,7 @@ pub async fn poll_status(
     Query(q): Query<PollQuery>,
 ) -> Result<Json<PollStatusResponse>, AppError> {
     let row = sqlx::query!(
-        "SELECT status, poll_secret, approval_envelope,
+        "SELECT status, poll_secret,
                 wrap_key_type, wrap_nonce, wrap_ciphertext, wrap_aad,
                 wrap_ephemeral_pub, wrap_dek_nonce, wrap_encrypted_dek
          FROM session_requests WHERE id = ?",
@@ -106,22 +87,9 @@ pub async fn poll_status(
     }
 
     if row.status != "approved" {
-        // While pending, hand back the wrapped approval token idempotently (NOT consumed) so
-        // the device can decrypt and (re-)display it for the human to relay to the admin.
-        let approval_envelope = row
-            .approval_envelope
-            .as_deref()
-            .map(serde_json::from_str::<SessionEnvelope>)
-            .transpose()
-            .map_err(|e| {
-                AppError::Internal(anyhow::anyhow!(
-                    "stored approval envelope is malformed: {e}"
-                ))
-            })?;
         return Ok(Json(PollStatusResponse {
             status: row.status,
             envelope: None,
-            approval_envelope,
         }));
     }
 
@@ -143,7 +111,6 @@ pub async fn poll_status(
         return Ok(Json(PollStatusResponse {
             status: "delivered".to_string(),
             envelope: None,
-            approval_envelope: None,
         }));
     }
 
@@ -187,43 +154,71 @@ pub async fn poll_status(
     Ok(Json(PollStatusResponse {
         status: "approved".to_string(),
         envelope,
-        approval_envelope: None,
     }))
 }
 
 pub async fn list_pending(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
 ) -> Result<Json<Vec<SessionRequestRow>>, AppError> {
-    let rows = sqlx::query_as!(
-        SessionRequestRow,
-        "SELECT id, label, status, requested_at, expires_at, requested_duration_hours
-         FROM session_requests
-         WHERE status = 'pending' AND expires_at > datetime('now')
-         ORDER BY requested_at DESC"
+    let owner = &auth.0.oidc_subject;
+    let rows = sqlx::query!(
+        "SELECT sr.id, sr.label, sr.status, sr.requested_at, sr.expires_at,
+                sr.requested_duration_hours, d.name AS device_name
+         FROM session_requests sr
+         LEFT JOIN devices d ON d.id = sr.device_id
+         WHERE sr.status = 'pending' AND sr.expires_at > datetime('now') AND d.owner_id = ?
+         ORDER BY sr.requested_at DESC",
+        owner
     )
     .fetch_all(&state.pool)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|r| SessionRequestRow {
+        id: r.id,
+        label: r.label,
+        status: r.status,
+        requested_at: r.requested_at,
+        expires_at: r.expires_at,
+        requested_duration_hours: r.requested_duration_hours,
+        device_name: Some(r.device_name),
+        is_own_device: true,
+    })
+    .collect();
 
     Ok(Json(rows))
 }
 
 pub async fn get_request(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<Json<SessionRequestRow>, AppError> {
-    let row = sqlx::query_as!(
-        SessionRequestRow,
-        "SELECT id, label, status, requested_at, expires_at, requested_duration_hours
-         FROM session_requests WHERE id = ?",
+    let owner = &auth.0.oidc_subject;
+    let row = sqlx::query!(
+        "SELECT sr.id, sr.label, sr.status, sr.requested_at, sr.expires_at,
+                sr.requested_duration_hours, d.name AS device_name, d.owner_id AS device_owner_id
+         FROM session_requests sr
+         LEFT JOIN devices d ON d.id = sr.device_id
+         WHERE sr.id = ?",
         id
     )
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
-    Ok(Json(row))
+    let is_own_device = row.device_owner_id.as_deref() == Some(owner.as_str());
+
+    Ok(Json(SessionRequestRow {
+        id: row.id,
+        label: row.label,
+        status: row.status,
+        requested_at: row.requested_at,
+        expires_at: row.expires_at,
+        requested_duration_hours: row.requested_duration_hours,
+        device_name: row.device_name,
+        is_own_device,
+    }))
 }
 
 pub async fn approve(
@@ -240,7 +235,7 @@ pub async fn approve(
     let mut tx = state.pool.begin().await?;
 
     let row = sqlx::query!(
-        "SELECT approval_token_hash, device_id FROM session_requests
+        "SELECT device_id FROM session_requests
          WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
         id
     )
@@ -248,29 +243,26 @@ pub async fn approve(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    // Require the one-time approval token the requester recovered from their device and
-    // relayed out-of-band — without this, approval is bound only to a click on a
-    // self-reported label, which an unauthenticated attacker can spoof. Compare sha256
-    // hashes (constant-length hex); only whoever holds the device private key could have
-    // decrypted the token, so a match proves the admin confirmed with the real requester.
-    let token_hash = row.approval_token_hash.ok_or(AppError::NotFound)?;
-    if hash_key(&body.approval_token) != token_hash {
-        return Err(AppError::Forbidden(
-            "approval token does not match".to_string(),
-        ));
-    }
-
     // Wrap the freshly minted token to the request's device public key, so the delivered
     // token is unusable without that device's private key. The device is captured at create
     // time; if it's gone (deleted between request and approval) we can't deliver securely.
     let device_id = row.device_id.ok_or(AppError::NotFound)?;
     let device = sqlx::query!(
-        "SELECT key_type, public_key FROM devices WHERE id = ?",
+        "SELECT key_type, public_key, owner_id FROM devices WHERE id = ?",
         device_id
     )
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    // Only the device's own owner may approve a session request for it — the admin's decision
+    // is grounded in the device's real, immutable registered identity, not a self-reported
+    // label an unauthenticated caller could spoof.
+    if device.owner_id != *owner {
+        return Err(AppError::Forbidden(
+            "you do not own this request's device".to_string(),
+        ));
+    }
 
     let envelope = crate::crypto::wrap_for_device(
         &device.key_type,
@@ -325,9 +317,29 @@ pub async fn approve(
 
 pub async fn reject(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    let owner = &auth.0.oidc_subject;
+
+    // Same ownership check as `approve` — an admin may only reject requests targeting a
+    // device they themselves own, not any pending request on the server.
+    let device_owner = sqlx::query_scalar!(
+        "SELECT d.owner_id FROM session_requests sr
+         JOIN devices d ON d.id = sr.device_id
+         WHERE sr.id = ? AND sr.status = 'pending'",
+        id
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if device_owner != *owner {
+        return Err(AppError::Forbidden(
+            "you do not own this request's device".to_string(),
+        ));
+    }
+
     let updated = sqlx::query!(
         "UPDATE session_requests
          SET status = 'rejected', rejected_at = datetime('now')
