@@ -40,6 +40,7 @@
     .status-msg .status-icon { font-size: 3rem; margin-bottom: 1rem; }
     .open-in-app { display: block; text-align: center; margin-top: 1rem; color: #93c5fd; font-size: 13px; }
     .ownership-warning { background: #2a1414; border: 1px solid #7f1d1d; color: #f87171; border-radius: 6px; padding: 0.75rem 0.9rem; font-size: 13px; margin-top: 1.25rem; }
+    .request-link { font-family: monospace; font-size: 11px; color: #93c5fd; word-break: break-all; user-select: all; background: #0d0d0d; border: 1px solid #333; border-radius: 5px; padding: 0.5rem 0.6rem; margin-top: 0.3rem; }
   </style>
 </head>
 <body class="login-page">
@@ -70,6 +71,11 @@
       <div id="ownership-warning" class="ownership-warning hidden">
         ⚠️ This device is not registered to your account — you cannot approve or reject
         this request.
+      </div>
+
+      <div class="duration-row">
+        <label>Request link (compare against what your device is showing)</label>
+        <p id="request-link" class="request-link"></p>
       </div>
 
       <div class="duration-row">
@@ -146,6 +152,7 @@
         labelEl.classList.remove('hidden');
       }
       document.getElementById('requested-at').textContent = data.requested_at;
+      document.getElementById('request-link').textContent = location.href;
       startCountdown(data.expires_at);
 
       const sel = document.getElementById('duration');
