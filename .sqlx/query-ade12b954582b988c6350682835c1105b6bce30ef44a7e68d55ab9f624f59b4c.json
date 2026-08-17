@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT status, poll_secret_hash, resulting_device_id FROM device_proposals WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "status",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "poll_secret_hash",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "resulting_device_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "ade12b954582b988c6350682835c1105b6bce30ef44a7e68d55ab9f624f59b4c"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE device_proposals SET status = 'expired'\n         WHERE status = 'pending' AND expires_at <= datetime('now')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "fde2c4409f01e1203d46df0fe50418f5a041f664cf4228fe756b1a15530494b1"
+}

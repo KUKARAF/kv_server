@@ -6,6 +6,10 @@ use std::sync::Arc;
 pub struct SessionClaims {
     pub oidc_subject: String,
     pub email: Option<String>,
+    /// Some only for a session token minted via session_request approval — lets a device
+    /// ask "who am I" (see admin::handlers::whoami). None for OIDC cookies and other
+    /// non-device-bound credentials.
+    pub device_id: Option<String>,
 }
 
 pub struct AdminAuth(pub SessionClaims);
@@ -42,6 +46,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
             return Ok(AdminAuth(SessionClaims {
                 oidc_subject: "dev".to_string(),
                 email: Some("dev@localhost".to_string()),
+                device_id: None,
             }));
         }
 
@@ -54,7 +59,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         // distinguishable from a genuinely unknown token: the former is a benign
         // re-auth (SessionExpired, uncounted), the latter a real failure.
         let row = sqlx::query!(
-            "SELECT owner_id, label, expires_at
+            "SELECT owner_id, label, expires_at, device_id
              FROM api_keys
              WHERE key_hash = ? AND type IN ('session', 'approval') AND status = 'active'",
             key_hash
@@ -76,6 +81,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         Ok(AdminAuth(SessionClaims {
             oidc_subject: row.owner_id,
             email: Some(row.label),
+            device_id: row.device_id,
         }))
     }
 }

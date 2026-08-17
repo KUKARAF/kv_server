@@ -957,11 +957,46 @@ mod session_request_tests {
             .unwrap()
     }
 
-    async fn create_req(app: &Router, device_id: &str) -> (u16, serde_json::Value) {
+    /// Requests a challenge for `device_id`, decrypts it with `device_secret` (proving
+    /// possession, exactly as a real client must), and only then calls `create_request` —
+    /// mirrors the real two-step flow end to end. Returns `create_request`'s response,
+    /// except when the challenge step itself fails (e.g. unknown device), in which case
+    /// that failure is returned instead — same shape callers already expect.
+    async fn create_req(
+        app: &Router,
+        device_id: &str,
+        device_secret: &StaticSecret,
+    ) -> (u16, serde_json::Value) {
+        let challenge_body = serde_json::json!({ "device_id": device_id });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/session-request/challenge")
+                    .header("content-type", "application/json")
+                    .body(Body::from(challenge_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status().as_u16();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let challenge: serde_json::Value =
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        if status != 201 {
+            return (status, challenge);
+        }
+
+        let challenge_id = challenge["challenge_id"].as_str().unwrap().to_string();
+        let nonce =
+            String::from_utf8(decrypt_envelope(device_secret, &challenge["envelope"])).unwrap();
+
         let body = serde_json::json!({
             "label": "hermes-agent",
             "requested_duration_hours": 24,
-            "device_id": device_id,
+            "challenge_id": challenge_id,
+            "nonce": nonce,
         });
         let resp = app
             .clone()
@@ -1042,7 +1077,7 @@ mod session_request_tests {
         let admin = insert_session_key(&state.pool, "active", None).await;
         let (device_id, device_secret) = insert_x25519_device(&state.pool, TEST_OWNER).await;
 
-        let (status, created) = create_req(&app, &device_id).await;
+        let (status, created) = create_req(&app, &device_id, &device_secret).await;
         assert_eq!(status, 201, "create must return 201");
         let id = created["id"].as_str().unwrap().to_string();
         let poll_secret = created["poll_secret"].as_str().unwrap().to_string();
@@ -1118,8 +1153,146 @@ mod session_request_tests {
     #[tokio::test]
     async fn create_with_unknown_device_is_rejected() {
         let (app, _state) = build_session_app().await;
-        let (status, _) = create_req(&app, "no-such-device").await;
+        let dummy_secret = StaticSecret::random_from_rng(OsRng);
+        let (status, _) = create_req(&app, "no-such-device", &dummy_secret).await;
         assert_eq!(status, 404, "unknown device_id must be rejected");
+    }
+
+    /// A challenge is single-use: submitting the same decrypted nonce twice only ever
+    /// creates one pending request.
+    #[tokio::test]
+    async fn challenge_cannot_be_replayed() {
+        let (app, state) = build_session_app().await;
+        let (device_id, device_secret) = insert_x25519_device(&state.pool, TEST_OWNER).await;
+
+        let challenge_body = serde_json::json!({ "device_id": device_id });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/session-request/challenge")
+                    .header("content-type", "application/json")
+                    .body(Body::from(challenge_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let challenge: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let challenge_id = challenge["challenge_id"].as_str().unwrap().to_string();
+        let nonce =
+            String::from_utf8(decrypt_envelope(&device_secret, &challenge["envelope"])).unwrap();
+
+        let make_request = || {
+            serde_json::json!({
+                "challenge_id": challenge_id,
+                "nonce": nonce,
+            })
+        };
+
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/session-request")
+                    .header("content-type", "application/json")
+                    .body(Body::from(make_request().to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            first.status().as_u16(),
+            201,
+            "first submission must succeed"
+        );
+
+        let second = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/session-request")
+                    .header("content-type", "application/json")
+                    .body(Body::from(make_request().to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            second.status().as_u16(),
+            404,
+            "a consumed challenge must not create a second request"
+        );
+    }
+
+    /// A wrong nonce (right challenge id, wrong plaintext) is rejected identically to an
+    /// unknown challenge — no distinguishing signal for an attacker guessing.
+    #[tokio::test]
+    async fn create_request_rejects_wrong_nonce() {
+        let (app, state) = build_session_app().await;
+        let (device_id, _) = insert_x25519_device(&state.pool, TEST_OWNER).await;
+
+        let challenge_body = serde_json::json!({ "device_id": device_id });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/session-request/challenge")
+                    .header("content-type", "application/json")
+                    .body(Body::from(challenge_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let challenge: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let challenge_id = challenge["challenge_id"].as_str().unwrap().to_string();
+
+        let body =
+            serde_json::json!({ "challenge_id": challenge_id, "nonce": "kv_not-the-real-nonce" });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/session-request")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 404, "wrong nonce must be rejected");
+    }
+
+    /// The old create_request contract (bare device_id, no challenge) no longer parses.
+    #[tokio::test]
+    async fn create_request_rejects_old_device_id_body() {
+        let (app, state) = build_session_app().await;
+        let (device_id, _) = insert_x25519_device(&state.pool, TEST_OWNER).await;
+
+        let body = serde_json::json!({
+            "label": "hermes-agent",
+            "requested_duration_hours": 24,
+            "device_id": device_id,
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/session-request")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !resp.status().is_success(),
+            "the old device_id-only body must be rejected now that challenge_id/nonce are required"
+        );
     }
 
     /// Approval requires the admin to own the request's device; an admin approving/rejecting
@@ -1130,8 +1303,8 @@ mod session_request_tests {
     async fn approve_and_reject_by_non_owner_are_forbidden() {
         let (app, state) = build_session_app().await;
         let admin = insert_session_key(&state.pool, "active", None).await;
-        let (device_id, _) = insert_x25519_device(&state.pool, "someone-else").await;
-        let (_, created) = create_req(&app, &device_id).await;
+        let (device_id, device_secret) = insert_x25519_device(&state.pool, "someone-else").await;
+        let (_, created) = create_req(&app, &device_id, &device_secret).await;
         let id = created["id"].as_str().unwrap().to_string();
 
         assert_eq!(approve(&app, &admin, &id).await, 403);
@@ -1153,12 +1326,13 @@ mod session_request_tests {
     async fn pending_requests_expose_device_name_and_ownership() {
         let (app, state) = build_session_app().await;
         let admin = insert_session_key(&state.pool, "active", None).await;
-        let (own_device, _) = insert_x25519_device(&state.pool, TEST_OWNER).await;
-        let (foreign_device, _) = insert_x25519_device(&state.pool, "someone-else").await;
+        let (own_device, own_secret) = insert_x25519_device(&state.pool, TEST_OWNER).await;
+        let (foreign_device, foreign_secret) =
+            insert_x25519_device(&state.pool, "someone-else").await;
 
-        let (_, own_created) = create_req(&app, &own_device).await;
+        let (_, own_created) = create_req(&app, &own_device, &own_secret).await;
         let own_id = own_created["id"].as_str().unwrap().to_string();
-        create_req(&app, &foreign_device).await;
+        create_req(&app, &foreign_device, &foreign_secret).await;
 
         let resp = app
             .clone()
@@ -1229,5 +1403,295 @@ mod session_request_tests {
             403,
             "enrolment without a hardware key must be forbidden"
         );
+    }
+}
+
+mod device_proposal_tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    async fn build_proposal_app() -> (Router, Arc<AppState>) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let state = AppState::new(pool, test_config(), None);
+        let app = Router::new()
+            .nest("/api/devices", devices::router())
+            .nest(
+                "/api/admin/device-proposals",
+                devices::proposal_admin_router(),
+            )
+            .with_state(Arc::clone(&state));
+        (app, state)
+    }
+
+    async fn propose(app: &Router, name: &str) -> (u16, serde_json::Value) {
+        let body = serde_json::json!({ "name": name, "public_key": "AAAA", "key_type": "x25519" });
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/devices/propose")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status().as_u16();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    /// End-to-end: propose (unauthenticated) → admin lists it → link (simulating a
+    /// register_finish that already happened) → the proposer polls and receives the
+    /// assigned device_id automatically — no manual key/id handling anywhere in the loop.
+    #[tokio::test]
+    async fn propose_list_link_and_poll_round_trip() {
+        let (app, state) = build_proposal_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+
+        let (status, created) = propose(&app, "bigboy").await;
+        assert_eq!(status, 201);
+        let id = created["id"].as_str().unwrap().to_string();
+        let poll_secret = created["poll_secret"].as_str().unwrap().to_string();
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/admin/device-proposals")
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let list: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 1);
+        assert_eq!(list[0]["name"].as_str().unwrap(), "bigboy");
+
+        // Simulate the WebAuthn ceremony (register_begin/finish) having already created a
+        // real device row — that ceremony itself is covered by session_request_tests's
+        // device_enrolment_requires_a_passkey and devices' own tests, not re-exercised here.
+        let device_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO devices (id, owner_id, name, public_key, key_type)
+             VALUES (?, ?, 'bigboy', 'AAAA', 'x25519')",
+        )
+        .bind(&device_id)
+        .bind(TEST_OWNER)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let link_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/admin/device-proposals/{id}/link"))
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "device_id": device_id }).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(link_resp.status().as_u16(), 204);
+
+        let poll_resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/devices/propose/{id}/status?secret={poll_secret}"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(poll_resp.status().as_u16(), 200);
+        let bytes = to_bytes(poll_resp.into_body(), usize::MAX).await.unwrap();
+        let status_json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(status_json["status"].as_str().unwrap(), "confirmed");
+        assert_eq!(status_json["device_id"].as_str().unwrap(), device_id);
+    }
+
+    /// Listing is deliberately owner-agnostic: no device row (and therefore no owner) exists
+    /// yet at proposal time, so two different admins both see the same pending proposal —
+    /// intentional for this single/small-user deployment, not a bug.
+    #[tokio::test]
+    async fn listing_is_owner_agnostic() {
+        let (app, state) = build_proposal_app().await;
+        let admin_a = insert_session_key(&state.pool, "active", None).await;
+        let admin_b = {
+            let (plaintext, hash) = generate_api_key();
+            let id = Uuid::new_v4().to_string();
+            sqlx::query(
+                "INSERT INTO api_keys (id, key_hash, label, type, status, owner_id)
+                 VALUES (?, ?, 'k', 'session', 'active', 'someone-else')",
+            )
+            .bind(&id)
+            .bind(&hash)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+            plaintext
+        };
+
+        propose(&app, "shared-toast").await;
+
+        for token in [&admin_a, &admin_b] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("GET")
+                        .uri("/api/admin/device-proposals")
+                        .header("Authorization", format!("Bearer {token}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status().as_u16(), 200);
+            let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            let list: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(
+                list.as_array().unwrap().len(),
+                1,
+                "every admin must see the pending proposal"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reject_removes_proposal_from_listing() {
+        let (app, state) = build_proposal_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (_, created) = propose(&app, "throwaway").await;
+        let id = created["id"].as_str().unwrap().to_string();
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/admin/device-proposals/{id}/reject"))
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 204);
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/admin/device-proposals")
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let list: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 0);
+    }
+}
+
+mod whoami_tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    async fn build_whoami_app() -> (Router, Arc<AppState>) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let state = AppState::new(pool, test_config(), None);
+        let app = Router::new()
+            .nest("/api/admin", crate::admin::router())
+            .with_state(Arc::clone(&state));
+        (app, state)
+    }
+
+    async fn whoami(app: &Router, token: &str) -> serde_json::Value {
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/api/admin/session/whoami")
+                    .header("Authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn non_device_bound_session_returns_null() {
+        let (app, state) = build_whoami_app().await;
+        let token = insert_session_key(&state.pool, "active", None).await;
+        let resp = whoami(&app, &token).await;
+        assert!(resp["device_id"].is_null());
+        assert!(resp["device_name"].is_null());
+    }
+
+    #[tokio::test]
+    async fn device_bound_session_returns_its_device_name() {
+        let (app, state) = build_whoami_app().await;
+        let device_id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO devices (id, owner_id, name, public_key, key_type)
+             VALUES (?, ?, 'bigboy', 'AAAA', 'x25519')",
+        )
+        .bind(&device_id)
+        .bind(TEST_OWNER)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let (plaintext, hash) = generate_api_key();
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO api_keys (id, key_hash, label, type, status, owner_id, device_id)
+             VALUES (?, ?, 'session', 'session', 'active', ?, ?)",
+        )
+        .bind(&id)
+        .bind(&hash)
+        .bind(TEST_OWNER)
+        .bind(&device_id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let resp = whoami(&app, &plaintext).await;
+        assert_eq!(resp["device_id"].as_str().unwrap(), device_id);
+        assert_eq!(resp["device_name"].as_str().unwrap(), "bigboy");
     }
 }

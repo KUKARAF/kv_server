@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO session_request_challenges (id, device_id, nonce_hash, expires_at) VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "85fdb788f2fc9520994f40c0eaf4af4840ec5f73d216554f66154b3f22be2c43"
+}

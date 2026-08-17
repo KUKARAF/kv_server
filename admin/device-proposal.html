@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+  <title>Confirm Device — KV Manager</title>
+  <link rel="stylesheet" href="/admin/style.css">
+  <style>
+    .device-box {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 2.5rem;
+      max-width: 480px;
+      width: 100%;
+    }
+    .device-icon { font-size: 3rem; text-align: center; margin-bottom: 0.75rem; }
+    .device-box h1 { font-size: 1.3rem; text-align: center; margin-bottom: 0.5rem; }
+    .device-meta { color: #888; font-size: 12px; text-align: center; margin-bottom: 1.5rem; }
+    .field-row { margin-top: 1.25rem; }
+    .field-row label { display: block; color: #888; font-size: 12px; margin-bottom: 0.4rem; }
+    .field-row input {
+      width: 100%;
+      background: #0d0d0d;
+      border: 1px solid #333;
+      color: #e0e0e0;
+      padding: 0.4rem 0.6rem;
+      border-radius: 5px;
+      font-size: 15px;
+      box-sizing: border-box;
+    }
+    .pubkey {
+      font-family: monospace;
+      font-size: 11px;
+      color: #93c5fd;
+      word-break: break-all;
+      background: #0d0d0d;
+      border: 1px solid #333;
+      border-radius: 5px;
+      padding: 0.5rem 0.6rem;
+    }
+    .action-row { display: flex; gap: 0.75rem; margin-top: 1.5rem; justify-content: flex-end; }
+    .btn-danger { background: #dc2626; color: #fff; padding: 0.4rem 1rem; border-radius: 5px; border: none; cursor: pointer; font-size: 13px; }
+    .btn-danger:hover { background: #b91c1c; }
+    .status-msg { text-align: center; padding: 2rem; }
+    .status-msg .status-icon { font-size: 3rem; margin-bottom: 1rem; }
+  </style>
+</head>
+<body class="login-page">
+  <div class="device-box">
+    <div class="share-brand"><img src="https://static.osmosis.page/kv/kv_logo.svg" alt="KV Manager" class="share-brand-logo"></div>
+
+    <div id="loading">
+      <div class="device-icon">⏳</div>
+      <h1>Loading…</h1>
+    </div>
+
+    <div id="status-view" class="hidden">
+      <div class="status-msg">
+        <div class="status-icon" id="status-icon"></div>
+        <p id="status-text"></p>
+      </div>
+    </div>
+
+    <div id="confirm-view" class="hidden">
+      <div class="device-icon">💻</div>
+      <h1>Device wants to register</h1>
+      <p class="device-meta">
+        Requested <span id="requested-at"></span> &nbsp;·&nbsp;
+        Expires in <span id="countdown" style="color:#f59e0b;font-weight:600;"></span>
+      </p>
+
+      <div class="field-row">
+        <label for="device-name">Name</label>
+        <input id="device-name" type="text" autocomplete="off" spellcheck="false">
+      </div>
+
+      <div class="field-row">
+        <label>Public key (<span id="key-type"></span>)</label>
+        <p id="public-key" class="pubkey"></p>
+      </div>
+
+      <div class="action-row">
+        <button class="btn-danger" onclick="rejectProposal()">Reject</button>
+        <button class="btn" id="confirm-btn" onclick="confirmProposal()">Confirm &amp; Register</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/admin/js/utils.js"></script>
+  <script>
+    // ── Auth guard ────────────────────────────────────────────────────────────
+    const _fetch = window.fetch;
+    window.fetch = async (...args) => {
+      const resp = await _fetch(...args);
+      if (resp.status === 401) { window.location.href = '/auth/login?return=' + encodeURIComponent(location.href); }
+      return resp;
+    };
+
+    // ── Init ──────────────────────────────────────────────────────────────────
+    const params = new URLSearchParams(location.search);
+    const proposalId = params.get('id');
+    let proposal = null;
+
+    if (!proposalId) {
+      showStatus('❌', 'No proposal ID provided.');
+    } else {
+      loadProposal();
+    }
+
+    async function loadProposal() {
+      const resp = await fetch('/api/admin/device-proposals/' + proposalId);
+      if (resp.status === 404) { showStatus('❌', 'Proposal not found or already resolved.'); return; }
+      if (!resp.ok) { showStatus('❌', 'Failed to load proposal (' + resp.status + ').'); return; }
+
+      proposal = await resp.json();
+
+      document.getElementById('device-name').value = proposal.name;
+      document.getElementById('key-type').textContent = proposal.key_type;
+      document.getElementById('public-key').textContent = proposal.public_key;
+      document.getElementById('requested-at').textContent = proposal.requested_at;
+      startCountdown(proposal.expires_at);
+
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('confirm-view').classList.remove('hidden');
+    }
+
+    function showStatus(icon, text) {
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('confirm-view').classList.add('hidden');
+      document.getElementById('status-icon').textContent = icon;
+      document.getElementById('status-text').textContent = text;
+      document.getElementById('status-view').classList.remove('hidden');
+    }
+
+    function startCountdown(expiresAt) {
+      const el = document.getElementById('countdown');
+      function tick() {
+        const diff = Math.max(0, new Date(expiresAt + 'Z') - Date.now());
+        const m = Math.floor(diff / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        el.textContent = m + ':' + String(s).padStart(2, '0');
+        if (diff <= 0) { showStatus('⏰', 'This proposal has expired.'); }
+      }
+      tick();
+      setInterval(tick, 1000);
+    }
+
+    // ── Confirm / Reject ─────────────────────────────────────────────────────
+    async function confirmProposal() {
+      const name = document.getElementById('device-name').value.trim();
+      if (!name) { document.getElementById('device-name').focus(); return; }
+
+      const btn = document.getElementById('confirm-btn');
+      btn.disabled = true;
+      btn.textContent = 'Touch your passkey…';
+
+      try {
+        // Real security gate: the existing WebAuthn ceremony, completely unchanged — this
+        // proposal only removed the manual public-key copy/paste, not the passkey touch.
+        const { id: device_id } = await enrolDevice(name, proposal.public_key, proposal.key_type);
+
+        const linkResp = await fetch('/api/admin/device-proposals/' + proposalId + '/link', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_id }),
+        });
+        if (!linkResp.ok) {
+          throw new Error('Device was registered, but linking the proposal failed (error ' + linkResp.status + ').');
+        }
+
+        showStatus('✅', 'Device registered! The requesting client will pick up its id automatically.');
+      } catch (e) {
+        console.error(e);
+        btn.disabled = false;
+        btn.textContent = 'Confirm & Register';
+        showStatus('❌', e.message);
+      }
+    }
+
+    async function rejectProposal() {
+      const resp = await fetch('/api/admin/device-proposals/' + proposalId + '/reject', { method: 'POST' });
+      if (resp.ok) {
+        showStatus('✗', 'Proposal rejected.');
+      } else {
+        showStatus('❌', 'Rejection failed (' + resp.status + ').');
+      }
+    }
+  </script>
+</body>
+</html>

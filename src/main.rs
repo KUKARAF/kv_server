@@ -94,6 +94,10 @@ async fn main() -> Result<()> {
         .nest("/webauthn", webauthn::router())
         .nest("/api/devices", devices::router())
         .nest("/api/admin/devices", devices::admin_router())
+        .nest(
+            "/api/admin/device-proposals",
+            devices::proposal_admin_router(),
+        )
         .nest("/api/session-request", session_request::public_router())
         .nest("/api/admin/shares", shares::admin_router())
         .nest("/api/share", shares::public_router())

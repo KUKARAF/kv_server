@@ -1,20 +1,20 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id FROM devices WHERE id = ?",
+  "query": "SELECT datetime('now', '+30 minutes')",
   "describe": {
     "columns": [
       {
-        "name": "id",
+        "name": "datetime('now', '+30 minutes')",
         "ordinal": 0,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       true
     ]
   },
-  "hash": "de0418a45962f12c495df715070acad015e363a9dcf19150eb05057dca7e2079"
+  "hash": "76c11c03abcb07eda15f399a3abffda58d3f818a3dcfd6d527fc08ae028d8339"
 }

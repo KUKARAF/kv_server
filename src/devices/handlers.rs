@@ -2,11 +2,12 @@ use crate::{
     auth::middleware::AdminAuth,
     devices::model::*,
     error::AppError,
+    keys::generate::{generate_api_key, hash_key},
     state::{AppState, DeviceRegChallengeEntry},
     webauthn::handlers::load_passkeys_for_owner,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
 };
@@ -176,6 +177,164 @@ pub async fn delete(
     .rows_affected();
 
     if affected == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Self-service enrollment step 1 (unauthenticated, mirrors session_request::create_request):
+/// a headless client generates its own keypair and proposes itself, so a human never has to
+/// manually copy the public key into the web panel. Nothing is trusted yet — an admin must
+/// still confirm via the real WebAuthn ceremony (`register_begin`/`register_finish`) below.
+pub async fn propose(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<ProposeDeviceBody>,
+) -> Result<(StatusCode, Json<ProposeDeviceResponse>), AppError> {
+    let id = Uuid::new_v4().to_string();
+    let (poll_secret, poll_secret_hash) = generate_api_key();
+
+    let expires_at = sqlx::query_scalar!("SELECT datetime('now', '+30 minutes')")
+        .fetch_one(&state.pool)
+        .await?
+        .unwrap_or_default();
+
+    sqlx::query!(
+        "INSERT INTO device_proposals (id, name, public_key, key_type, poll_secret_hash, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?)",
+        id,
+        body.name,
+        body.public_key,
+        body.key_type,
+        poll_secret_hash,
+        expires_at,
+    )
+    .execute(&state.pool)
+    .await?;
+
+    let url = format!(
+        "{}/admin/device-proposal.html?id={}",
+        state.config.public_base_url, id
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(ProposeDeviceResponse {
+            id,
+            url,
+            expires_at,
+            poll_secret,
+        }),
+    ))
+}
+
+/// Self-service enrollment step 2: the proposer polls for the device_id an admin assigned
+/// by confirming. Not a secret capability (knowing your own device_id grants nothing), so
+/// unlike session-token delivery this can be polled idempotently after confirmation.
+pub async fn poll_proposal_status(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<ProposalPollQuery>,
+) -> Result<Json<ProposalPollResponse>, AppError> {
+    let row = sqlx::query!(
+        "SELECT status, poll_secret_hash, resulting_device_id FROM device_proposals WHERE id = ?",
+        id
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if hash_key(&q.secret) != row.poll_secret_hash {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(Json(ProposalPollResponse {
+        status: row.status,
+        device_id: row.resulting_device_id,
+    }))
+}
+
+/// Admin-facing: list pending proposals. Deliberately owner-agnostic — no device row (and
+/// therefore no owner_id) exists yet at proposal time, unlike session_requests which can
+/// join through an already-registered device. Any logged-in admin sees all pending
+/// proposals; acceptable for this single/small-user deployment (see plan notes) — revisit
+/// if this ever grows beyond that.
+pub async fn list_proposals(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+) -> Result<Json<Vec<DeviceProposalRow>>, AppError> {
+    let rows = sqlx::query_as!(
+        DeviceProposalRow,
+        "SELECT id, name, public_key, key_type, requested_at, expires_at
+         FROM device_proposals
+         WHERE status = 'pending' AND expires_at > datetime('now')
+         ORDER BY requested_at DESC"
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+pub async fn get_proposal(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> Result<Json<DeviceProposalRow>, AppError> {
+    let row = sqlx::query_as!(
+        DeviceProposalRow,
+        "SELECT id, name, public_key, key_type, requested_at, expires_at
+         FROM device_proposals WHERE id = ?",
+        id
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    Ok(Json(row))
+}
+
+/// Links a confirmed proposal to the device row `register_finish` just created (the
+/// WebAuthn ceremony itself is unchanged — this is a small bookkeeping step run right
+/// after, from the same admin page). Single-use: a proposal can only ever be linked once.
+pub async fn link_proposal(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+    Path(id): Path<String>,
+    Json(body): Json<LinkProposalBody>,
+) -> Result<StatusCode, AppError> {
+    let owner_id = &auth.0.oidc_subject;
+    let updated = sqlx::query!(
+        "UPDATE device_proposals
+         SET status = 'confirmed', resulting_device_id = ?, confirmed_at = datetime('now'), confirmed_by = ?
+         WHERE id = ? AND status = 'pending'",
+        body.device_id,
+        owner_id,
+        id,
+    )
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+
+    if updated == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn reject_proposal(
+    State(state): State<Arc<AppState>>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> Result<StatusCode, AppError> {
+    let updated = sqlx::query!(
+        "UPDATE device_proposals SET status = 'rejected' WHERE id = ? AND status = 'pending'",
+        id
+    )
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+
+    if updated == 0 {
         return Err(AppError::NotFound);
     }
     Ok(StatusCode::NO_CONTENT)

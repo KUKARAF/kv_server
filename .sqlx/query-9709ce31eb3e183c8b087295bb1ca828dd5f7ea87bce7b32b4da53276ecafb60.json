@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT key_type, public_key FROM devices WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "key_type",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "public_key",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9709ce31eb3e183c8b087295bb1ca828dd5f7ea87bce7b32b4da53276ecafb60"
+}

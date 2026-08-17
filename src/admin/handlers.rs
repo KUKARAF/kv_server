@@ -293,6 +293,27 @@ pub async fn get_session_token(jar: CookieJar, _auth: AdminAuth) -> Result<Json<
     Ok(Json(token))
 }
 
+/// GET /api/admin/session/whoami — lets a client holding a session token confirm which
+/// device it's bound to (device-bound session tokens already satisfy AdminAuth, same as
+/// any other active session/approval key — see auth::middleware::AdminAuth).
+pub async fn whoami(
+    State(state): State<Arc<AppState>>,
+    auth: AdminAuth,
+) -> Result<Json<WhoamiResponse>, AppError> {
+    let device_name = match &auth.0.device_id {
+        Some(id) => {
+            sqlx::query_scalar!("SELECT name FROM devices WHERE id = ?", id)
+                .fetch_optional(&state.pool)
+                .await?
+        }
+        None => None,
+    };
+    Ok(Json(WhoamiResponse {
+        device_id: auth.0.device_id.clone(),
+        device_name,
+    }))
+}
+
 /// POST /api/admin/session/cli-token — creates a short-lived (1–7 day) token for CLI use.
 pub async fn create_cli_token(
     State(state): State<Arc<AppState>>,

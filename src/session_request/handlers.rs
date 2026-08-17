@@ -13,6 +13,59 @@ use axum::{
 use std::sync::Arc;
 use uuid::Uuid;
 
+/// Issue a device-bound challenge: mint a random nonce, ECDH-wrap it to the device's public
+/// key, and store only its hash. The caller must decrypt the envelope with the device's
+/// private key and submit the plaintext back to `create_request` — proving possession
+/// before a pending request (and therefore an admin-visible approval prompt) is ever
+/// created. Without this, anyone who merely knew a device_id (leaked log, screenshot,
+/// whatever) could spam legitimate-looking approval requests for a real device forever.
+pub async fn create_challenge(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<CreateChallengeBody>,
+) -> Result<(StatusCode, Json<CreateChallengeResponse>), AppError> {
+    let device = sqlx::query!(
+        "SELECT key_type, public_key FROM devices WHERE id = ?",
+        body.device_id
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let challenge_id = Uuid::new_v4().to_string();
+    let (nonce, nonce_hash) = generate_api_key();
+
+    let envelope = crate::crypto::wrap_for_device(
+        &device.key_type,
+        &device.public_key,
+        &challenge_id,
+        nonce.as_bytes(),
+    )?;
+
+    let expires_at = sqlx::query_scalar!("SELECT datetime('now', '+2 minutes')")
+        .fetch_one(&state.pool)
+        .await?
+        .unwrap_or_default();
+
+    sqlx::query!(
+        "INSERT INTO session_request_challenges (id, device_id, nonce_hash, expires_at) VALUES (?, ?, ?, ?)",
+        challenge_id,
+        body.device_id,
+        nonce_hash,
+        expires_at,
+    )
+    .execute(&state.pool)
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateChallengeResponse {
+            challenge_id,
+            envelope: envelope.into(),
+            expires_at,
+        }),
+    ))
+}
+
 pub async fn create_request(
     State(state): State<Arc<AppState>>,
     Json(body): Json<CreateSessionRequestBody>,
@@ -21,16 +74,42 @@ pub async fn create_request(
     // Separate poll secret held only by the requester; stored hashed.
     let (poll_secret, poll_secret_hash) = generate_api_key();
 
-    // The device must already exist — no auth needed here, since the eventual session token
-    // is ECDH-wrapped to this device's public key regardless of who approves, and the admin
-    // approval page trusts the device's own registered name, not anything in this request body.
-    sqlx::query!("SELECT id FROM devices WHERE id = ?", body.device_id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let mut tx = state.pool.begin().await?;
+
+    // The challenge proves possession of the device's private key — the caller no longer
+    // gets to assert which device it's requesting for via the request body; the device is
+    // whichever one the already-verified challenge was issued for. NotFound (not Forbidden)
+    // for every failure mode here so an attacker can't distinguish "wrong nonce" from
+    // "unknown/expired challenge".
+    let challenge = sqlx::query!(
+        "SELECT device_id, nonce_hash FROM session_request_challenges
+         WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
+        body.challenge_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if hash_key(&body.nonce) != challenge.nonce_hash {
+        return Err(AppError::NotFound);
+    }
+
+    // Atomically consume: a decrypted nonce can only ever create one pending request.
+    let consumed = sqlx::query!(
+        "UPDATE session_request_challenges SET status = 'consumed'
+         WHERE id = ? AND status = 'pending'",
+        body.challenge_id
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    if consumed == 0 {
+        return Err(AppError::NotFound);
+    }
 
     let expires_at = sqlx::query_scalar!("SELECT datetime('now', '+15 minutes')")
-        .fetch_one(&state.pool)
+        .fetch_one(&mut *tx)
         .await?
         .unwrap_or_default();
 
@@ -41,10 +120,12 @@ pub async fn create_request(
         expires_at,
         body.requested_duration_hours,
         poll_secret_hash,
-        body.device_id,
+        challenge.device_id,
     )
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     let url = format!(
         "{}/admin/session-request.html?id={}",
@@ -273,12 +354,13 @@ pub async fn approve(
 
     let expires_offset = format!("+{} hours", duration_hours);
     sqlx::query!(
-        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
-         VALUES (?, ?, 'session', 'session', 'active', datetime('now', ?), ?)",
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id, device_id)
+         VALUES (?, ?, 'session', 'session', 'active', datetime('now', ?), ?, ?)",
         key_id,
         key_hash,
         expires_offset,
-        owner
+        owner,
+        device_id
     )
     .execute(&mut *tx)
     .await?;

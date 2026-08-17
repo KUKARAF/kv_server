@@ -43,6 +43,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/session-key/logout", post(handlers::logout))
         .route("/session", get(handlers::get_session_info))
         .route("/session/token", get(handlers::get_session_token))
+        .route("/session/whoami", get(handlers::whoami))
         .route("/session/logout", post(handlers::logout))
         .route("/session/device-token", post(handlers::create_device_token))
         .route("/session/cli-token", post(handlers::create_cli_token))

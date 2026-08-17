@@ -198,3 +198,12 @@ pub struct SessionInfo {
     pub expires_at: Option<String>,
     pub created_at: String,
 }
+
+/// Returned by GET /api/admin/session/whoami — lets a client holding a session token
+/// confirm which device (if any) it's bound to. Both fields null for non-device-bound
+/// credentials (OIDC cookie, other api_keys types).
+#[derive(Debug, Serialize)]
+pub struct WhoamiResponse {
+    pub device_id: Option<String>,
+    pub device_name: Option<String>,
+}

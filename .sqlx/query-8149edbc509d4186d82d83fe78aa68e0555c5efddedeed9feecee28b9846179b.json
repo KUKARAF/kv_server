@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE session_request_challenges SET status = 'consumed'\n         WHERE id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "8149edbc509d4186d82d83fe78aa68e0555c5efddedeed9feecee28b9846179b"
+}

@@ -4,9 +4,29 @@ use serde::{Deserialize, Serialize};
 pub struct CreateSessionRequestBody {
     pub label: Option<String>,
     pub requested_duration_hours: Option<i64>,
-    /// Registered device the approved session token will be ECDH-wrapped to. Required:
-    /// the approval is only usable by whoever holds this device's private key.
+    /// Identifies an already-verified `session_request_challenges` row (see
+    /// `create_challenge`/`CreateChallengeResponse`) — the caller no longer states which
+    /// device it's requesting for; the device is whichever one the challenge was issued for.
+    pub challenge_id: String,
+    /// The plaintext nonce the caller decrypted from the challenge envelope with the
+    /// device's private key. Proves possession before a pending request (and therefore an
+    /// admin-visible approval prompt) is ever created.
+    pub nonce: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateChallengeBody {
     pub device_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateChallengeResponse {
+    pub challenge_id: String,
+    /// The nonce, ECDH-wrapped to the device's public key. Decrypt with the same routine
+    /// used for `PollStatusResponse::envelope` and submit the plaintext back as `nonce` in
+    /// `CreateSessionRequestBody`.
+    pub envelope: SessionEnvelope,
+    pub expires_at: String,
 }
 
 #[derive(Debug, Serialize)]

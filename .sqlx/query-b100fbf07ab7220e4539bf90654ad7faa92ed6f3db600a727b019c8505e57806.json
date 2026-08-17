@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO device_proposals (id, name, public_key, key_type, poll_secret_hash, expires_at)\n         VALUES (?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "b100fbf07ab7220e4539bf90654ad7faa92ed6f3db600a727b019c8505e57806"
+}

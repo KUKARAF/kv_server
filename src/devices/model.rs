@@ -42,3 +42,53 @@ pub struct DeviceRow {
     pub created_at: String,
     pub last_seen_at: Option<String>,
 }
+
+/// Self-service enrollment: a headless client proposes itself with a name + public key it
+/// generated locally, instead of a human copy-pasting the key into the web panel. Confirmed
+/// by an admin via the existing WebAuthn ceremony (`register_begin`/`register_finish`) — the
+/// passkey touch remains the real security gate, this just removes manual key/id handling.
+#[derive(Debug, Deserialize)]
+pub struct ProposeDeviceBody {
+    pub name: String,
+    pub public_key: String,
+    #[serde(default = "default_key_type")]
+    pub key_type: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProposeDeviceResponse {
+    pub id: String,
+    pub url: String,
+    pub expires_at: String,
+    /// Secret held only by the proposer; required to poll for the resulting device_id.
+    pub poll_secret: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProposalPollQuery {
+    pub secret: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProposalPollResponse {
+    pub status: String,
+    /// Present once `status == "confirmed"`. Not a secret — knowing your own device_id
+    /// isn't a capability — so this can be polled idempotently, unlike the session envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct DeviceProposalRow {
+    pub id: String,
+    pub name: String,
+    pub public_key: String,
+    pub key_type: String,
+    pub requested_at: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LinkProposalBody {
+    pub device_id: String,
+}

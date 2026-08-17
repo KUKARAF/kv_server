@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE device_proposals\n         SET status = 'confirmed', resulting_device_id = ?, confirmed_at = datetime('now'), confirmed_by = ?\n         WHERE id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "d11289479d5aab6a34dd903484e2fea1849507f0c7ffc9e484b44897205e427e"
+}

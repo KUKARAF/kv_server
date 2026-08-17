@@ -349,6 +349,40 @@
 
     pollSessionRequests();
     setInterval(pollSessionRequests, 30000);
+
+    // ── Device proposal poller ───────────────────────────────────────────────
+    let knownDeviceProposals = new Set();
+
+    async function pollDeviceProposals() {
+      let data;
+      try {
+        const resp = await fetch('/api/admin/device-proposals');
+        if (!resp.ok) return;
+        data = await resp.json();
+      } catch { return; }
+
+      const currentIds = new Set(data.map(p => p.id));
+
+      for (const p of data) {
+        if (!knownDeviceProposals.has(p.id)) {
+          showToast(
+            `💻 Device wants to register: <strong>${esc(p.name)}</strong> — <a href="/admin/device-proposal.html?id=${esc(p.id)}" style="color:#93c5fd">Review →</a>`,
+            { id: 'device-proposal-' + p.id, persistent: true, type: 'warning' }
+          );
+        }
+      }
+
+      for (const id of knownDeviceProposals) {
+        if (!currentIds.has(id) && activeToasts.has('device-proposal-' + id)) {
+          removeToast(activeToasts.get('device-proposal-' + id), 'device-proposal-' + id);
+        }
+      }
+
+      knownDeviceProposals = currentIds;
+    }
+
+    pollDeviceProposals();
+    setInterval(pollDeviceProposals, 30000);
   </script>
 </body>
 </html>

@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub fn public_router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", post(handlers::create_request))
+        .route("/challenge", post(handlers::create_challenge))
         .route("/:id/status", get(handlers::poll_status))
 }
 
