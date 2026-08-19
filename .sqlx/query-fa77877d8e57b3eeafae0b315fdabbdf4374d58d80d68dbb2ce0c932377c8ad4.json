@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, name, public_key, key_type, requested_at, expires_at\n         FROM device_proposals WHERE id = ?",
+  "query": "SELECT id, name, public_key, key_type, requested_at, expires_at, confirm_token_hash\n         FROM device_proposals WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -32,6 +32,11 @@
         "name": "expires_at",
         "ordinal": 5,
         "type_info": "Text"
+      },
+      {
+        "name": "confirm_token_hash",
+        "ordinal": 6,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -43,8 +48,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "2300caea2bc4aadcd5decc7960bc305a61f2e358ff21160a8adb95f33ccfe077"
+  "hash": "fa77877d8e57b3eeafae0b315fdabbdf4374d58d80d68dbb2ce0c932377c8ad4"
 }

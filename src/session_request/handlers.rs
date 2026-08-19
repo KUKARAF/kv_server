@@ -73,6 +73,9 @@ pub async fn create_request(
     let id = Uuid::new_v4().to_string();
     // Separate poll secret held only by the requester; stored hashed.
     let (poll_secret, poll_secret_hash) = generate_api_key();
+    // Token required to approve — held only by the requester, never exposed to the admin
+    // except via the link/QR the requester itself displays.
+    let (approve_token, approve_token_hash) = generate_api_key();
 
     let mut tx = state.pool.begin().await?;
 
@@ -114,13 +117,14 @@ pub async fn create_request(
         .unwrap_or_default();
 
     sqlx::query!(
-        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret, device_id) VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO session_requests (id, label, expires_at, requested_duration_hours, poll_secret, device_id, approve_token_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
         id,
         body.label,
         expires_at,
         body.requested_duration_hours,
         poll_secret_hash,
         challenge.device_id,
+        approve_token_hash,
     )
     .execute(&mut *tx)
     .await?;
@@ -128,8 +132,8 @@ pub async fn create_request(
     tx.commit().await?;
 
     let url = format!(
-        "{}/admin/session-request.html?id={}",
-        state.config.public_base_url, id
+        "{}/admin/session-request.html?id={}&token={}",
+        state.config.public_base_url, id, approve_token
     );
 
     Ok((
@@ -139,6 +143,7 @@ pub async fn create_request(
             url,
             expires_at,
             poll_secret,
+            approve_token,
         }),
     ))
 }
@@ -316,13 +321,22 @@ pub async fn approve(
     let mut tx = state.pool.begin().await?;
 
     let row = sqlx::query!(
-        "SELECT device_id FROM session_requests
+        "SELECT device_id, approve_token_hash FROM session_requests
          WHERE id = ? AND status = 'pending' AND expires_at > datetime('now')",
         id
     )
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    // The token is held only by the requester and delivered to the admin exclusively via the
+    // requesting device's own link/QR — never via the dashboard toast or any id-only surface.
+    // Without this, a valid admin session + the request id (visible from a bare notification)
+    // would be sufficient to approve, which is exactly the "click notification, click
+    // approve" gap this closes.
+    if hash_key(&body.token) != row.approve_token_hash {
+        return Err(AppError::NotFound);
+    }
 
     // Wrap the freshly minted token to the request's device public key, so the delivered
     // token is unusable without that device's private key. The device is captured at create

@@ -58,15 +58,25 @@ pub struct ProposeDeviceBody {
 #[derive(Debug, Serialize)]
 pub struct ProposeDeviceResponse {
     pub id: String,
+    /// Includes `confirm_token` as a `token` query param — the only link/QR that can load
+    /// this proposal's data (and therefore drive the WebAuthn confirm ceremony) or link it.
+    /// Admin-facing surfaces (dashboard toast, list endpoint) never see this token.
     pub url: String,
     pub expires_at: String,
     /// Secret held only by the proposer; required to poll for the resulting device_id.
     pub poll_secret: String,
+    /// Same value embedded in `url`, exposed separately for clients building their own link.
+    pub confirm_token: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct ProposalPollQuery {
     pub secret: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProposalTokenQuery {
+    pub token: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -91,4 +101,7 @@ pub struct DeviceProposalRow {
 #[derive(Debug, Deserialize)]
 pub struct LinkProposalBody {
     pub device_id: String,
+    /// Same token required to load the proposal (`ProposalTokenQuery`) — re-checked here as
+    /// defense in depth, not trusted just because the GET gate was passed earlier.
+    pub token: String,
 }

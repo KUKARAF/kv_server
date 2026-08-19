@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT confirm_token_hash FROM device_proposals WHERE id = ? AND status = 'pending'",
+  "describe": {
+    "columns": [
+      {
+        "name": "confirm_token_hash",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "401109fcf5dec00a16331ba9d5be1c82f5da5a2b78b37f22d49b9de4e848543e"
+}

@@ -192,6 +192,9 @@ pub async fn propose(
 ) -> Result<(StatusCode, Json<ProposeDeviceResponse>), AppError> {
     let id = Uuid::new_v4().to_string();
     let (poll_secret, poll_secret_hash) = generate_api_key();
+    // Token required to load/link this proposal — held only by the proposer, never exposed
+    // to the admin except via the link/QR the proposer itself displays.
+    let (confirm_token, confirm_token_hash) = generate_api_key();
 
     let expires_at = sqlx::query_scalar!("SELECT datetime('now', '+30 minutes')")
         .fetch_one(&state.pool)
@@ -199,21 +202,22 @@ pub async fn propose(
         .unwrap_or_default();
 
     sqlx::query!(
-        "INSERT INTO device_proposals (id, name, public_key, key_type, poll_secret_hash, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO device_proposals (id, name, public_key, key_type, poll_secret_hash, expires_at, confirm_token_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
         id,
         body.name,
         body.public_key,
         body.key_type,
         poll_secret_hash,
         expires_at,
+        confirm_token_hash,
     )
     .execute(&state.pool)
     .await?;
 
     let url = format!(
-        "{}/admin/device-proposal.html?id={}",
-        state.config.public_base_url, id
+        "{}/admin/device-proposal.html?id={}&token={}",
+        state.config.public_base_url, id, confirm_token
     );
 
     Ok((
@@ -223,6 +227,7 @@ pub async fn propose(
             url,
             expires_at,
             poll_secret,
+            confirm_token,
         }),
     ))
 }
@@ -275,14 +280,19 @@ pub async fn list_proposals(
     Ok(Json(rows))
 }
 
+/// Requires the proposer's own `confirm_token` (never seen by the admin dashboard) because
+/// this response feeds directly into the real WebAuthn `enrolDevice()` call on the review
+/// page — gating only `link_proposal` would still let an admin do a genuine passkey touch
+/// against an attacker-controlled public key if they reached this page via a bare id (e.g. a
+/// same-named proposal racing the real one on the dashboard toast).
 pub async fn get_proposal(
     State(state): State<Arc<AppState>>,
     _auth: AdminAuth,
     Path(id): Path<String>,
+    Query(q): Query<ProposalTokenQuery>,
 ) -> Result<Json<DeviceProposalRow>, AppError> {
-    let row = sqlx::query_as!(
-        DeviceProposalRow,
-        "SELECT id, name, public_key, key_type, requested_at, expires_at
+    let row = sqlx::query!(
+        "SELECT id, name, public_key, key_type, requested_at, expires_at, confirm_token_hash
          FROM device_proposals WHERE id = ?",
         id
     )
@@ -290,7 +300,18 @@ pub async fn get_proposal(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    Ok(Json(row))
+    if hash_key(&q.token) != row.confirm_token_hash {
+        return Err(AppError::NotFound);
+    }
+
+    Ok(Json(DeviceProposalRow {
+        id: row.id,
+        name: row.name,
+        public_key: row.public_key,
+        key_type: row.key_type,
+        requested_at: row.requested_at,
+        expires_at: row.expires_at,
+    }))
 }
 
 /// Links a confirmed proposal to the device row `register_finish` just created (the
@@ -303,6 +324,19 @@ pub async fn link_proposal(
     Json(body): Json<LinkProposalBody>,
 ) -> Result<StatusCode, AppError> {
     let owner_id = &auth.0.oidc_subject;
+
+    let proposal = sqlx::query!(
+        "SELECT confirm_token_hash FROM device_proposals WHERE id = ? AND status = 'pending'",
+        id
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if hash_key(&body.token) != proposal.confirm_token_hash {
+        return Err(AppError::NotFound);
+    }
+
     let updated = sqlx::query!(
         "UPDATE device_proposals
          SET status = 'confirmed', resulting_device_id = ?, confirmed_at = datetime('now'), confirmed_by = ?

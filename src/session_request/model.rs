@@ -32,10 +32,16 @@ pub struct CreateChallengeResponse {
 #[derive(Debug, Serialize)]
 pub struct CreateSessionRequestResponse {
     pub id: String,
+    /// Includes `approve_token` as a `token` query param — the only link/QR that can
+    /// successfully approve this request. Admin-facing surfaces (dashboard toast, list
+    /// endpoints) never see this token.
     pub url: String,
     pub expires_at: String,
     /// Secret held only by the requester; required to poll for the session token.
     pub poll_secret: String,
+    /// Same value embedded in `url`, exposed separately for clients that build their own
+    /// deep link instead of parsing the URL (e.g. kv_apk's QR code).
+    pub approve_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,4 +115,9 @@ pub struct SessionRequestRow {
 #[derive(Debug, Deserialize)]
 pub struct ApproveSessionRequestBody {
     pub approved_duration_hours: Option<i64>,
+    /// Must match the `approve_token` returned to the requester at creation time. Never
+    /// derivable from anything shown to the admin outside the requesting device's own
+    /// link/QR — this is what makes "click the dashboard notification, click Approve"
+    /// cryptographically impossible.
+    pub token: String,
 }

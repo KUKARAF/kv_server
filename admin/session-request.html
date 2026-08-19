@@ -40,7 +40,7 @@
     .status-msg .status-icon { font-size: 3rem; margin-bottom: 1rem; }
     .open-in-app { display: block; text-align: center; margin-top: 1rem; color: #93c5fd; font-size: 13px; }
     .ownership-warning { background: #2a1414; border: 1px solid #7f1d1d; color: #f87171; border-radius: 6px; padding: 0.75rem 0.9rem; font-size: 13px; margin-top: 1.25rem; }
-    .request-link { font-family: monospace; font-size: 11px; color: #93c5fd; word-break: break-all; user-select: all; background: #0d0d0d; border: 1px solid #333; border-radius: 5px; padding: 0.5rem 0.6rem; margin-top: 0.3rem; }
+    .token-warning { background: #2a1414; border: 1px solid #7f1d1d; color: #f87171; border-radius: 6px; padding: 0.75rem 0.9rem; font-size: 13px; margin-top: 1.25rem; }
   </style>
 </head>
 <body class="login-page">
@@ -73,9 +73,10 @@
         this request.
       </div>
 
-      <div class="duration-row">
-        <label>Request link (compare against what your device is showing)</label>
-        <p id="request-link" class="request-link"></p>
+      <div id="token-warning" class="token-warning hidden">
+        ⚠️ No approval token in this link — this page was opened from a notification, not
+        from the requesting device. You cannot approve from here. Open the exact link, or
+        scan the QR code, shown by the requesting device itself. (Reject still works.)
       </div>
 
       <div class="duration-row">
@@ -111,6 +112,7 @@
     // ── Init ──────────────────────────────────────────────────────────────────
     const params = new URLSearchParams(location.search);
     const requestId = params.get('id');
+    const approveToken = params.get('token');
 
     if (!requestId) {
       showStatus('❌', 'No request ID provided.');
@@ -152,7 +154,6 @@
         labelEl.classList.remove('hidden');
       }
       document.getElementById('requested-at').textContent = data.requested_at;
-      document.getElementById('request-link').textContent = location.href;
       startCountdown(data.expires_at);
 
       const sel = document.getElementById('duration');
@@ -169,12 +170,18 @@
         document.getElementById('reject-btn').disabled = true;
       }
 
+      if (!approveToken) {
+        document.getElementById('token-warning').classList.remove('hidden');
+        document.getElementById('approve-btn').disabled = true;
+      }
+
       document.getElementById('loading').classList.add('hidden');
       document.getElementById('approve-view').classList.remove('hidden');
 
       // Deep link for KV Approver Android app
       const appLink = document.createElement('a');
-      appLink.href = 'kvapp://session-request?id=' + encodeURIComponent(requestId);
+      appLink.href = 'kvapp://session-request?id=' + encodeURIComponent(requestId) +
+        (approveToken ? '&token=' + encodeURIComponent(approveToken) : '');
       appLink.className = 'open-in-app';
       appLink.textContent = 'Open in KV Approver app →';
       document.getElementById('approve-view').appendChild(appLink);
@@ -210,12 +217,13 @@
 
     // ── Approve / Reject ──────────────────────────────────────────────────────
     async function approveRequest() {
+      if (!approveToken) { return; }
       const hours = parseInt(document.getElementById('duration').value, 10);
 
       const resp = await fetch('/api/admin/session-requests/' + requestId + '/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ approved_duration_hours: hours }),
+        body: JSON.stringify({ approved_duration_hours: hours, token: approveToken }),
       });
       if (resp.ok) {
         showStatus('✅', 'Approved! Session token valid for ' + formatHours(hours) + '.');

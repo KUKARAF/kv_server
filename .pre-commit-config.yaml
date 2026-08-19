@@ -35,3 +35,10 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+
+      - id: security-review
+        name: adversarial enrollment/approval security review
+        entry: bash -c './.tools/security_review.sh'
+        language: system
+        pass_filenames: false
+        always_run: true

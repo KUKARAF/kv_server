@@ -332,7 +332,8 @@
           // label, which is attacker-controlled and not a trust signal.
           const name = r.device_name ? `<strong>${esc(r.device_name)}</strong>` : 'Unknown device';
           showToast(
-            `🔐 Session request: ${name} — <a href="/admin/session-request.html?id=${esc(r.id)}" style="color:#93c5fd">Review →</a>`,
+            `🔐 Session request: ${name} — <a href="/admin/session-request.html?id=${esc(r.id)}" style="color:#93c5fd">Review →</a>` +
+            ` (approving requires the link/QR shown by the device itself, not this notification)`,
             { id: 'session-req-' + r.id, persistent: true, type: 'warning' }
           );
         }
@@ -366,7 +367,8 @@
       for (const p of data) {
         if (!knownDeviceProposals.has(p.id)) {
           showToast(
-            `💻 Device wants to register: <strong>${esc(p.name)}</strong> — <a href="/admin/device-proposal.html?id=${esc(p.id)}" style="color:#93c5fd">Review →</a>`,
+            `💻 Device wants to register: <strong>${esc(p.name)}</strong> — <a href="/admin/device-proposal.html?id=${esc(p.id)}" style="color:#93c5fd">Review →</a>` +
+            ` (confirming requires the link/QR shown by the device itself, not this notification)`,
             { id: 'device-proposal-' + p.id, persistent: true, type: 'warning' }
           );
         }

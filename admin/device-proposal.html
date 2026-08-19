@@ -47,6 +47,7 @@
     .btn-danger:hover { background: #b91c1c; }
     .status-msg { text-align: center; padding: 2rem; }
     .status-msg .status-icon { font-size: 3rem; margin-bottom: 1rem; }
+    .token-warning { background: #2a1414; border: 1px solid #7f1d1d; color: #f87171; border-radius: 6px; padding: 0.75rem 0.9rem; font-size: 13px; margin-bottom: 1.25rem; }
   </style>
 </head>
 <body class="login-page">
@@ -62,6 +63,20 @@
       <div class="status-msg">
         <div class="status-icon" id="status-icon"></div>
         <p id="status-text"></p>
+      </div>
+    </div>
+
+    <div id="blocked-view" class="hidden">
+      <div class="device-icon">💻</div>
+      <h1>Device wants to register</h1>
+      <div class="token-warning">
+        ⚠️ No confirmation token in this link — this page was opened from a notification,
+        not from the proposing device. You cannot review or confirm its public key from
+        here (confirming would risk registering the wrong key). Open the exact link, or
+        scan the QR code, shown by the proposing device itself. (Reject still works.)
+      </div>
+      <div class="action-row" style="justify-content:center;">
+        <button class="btn-danger" onclick="rejectProposal()">Reject</button>
       </div>
     </div>
 
@@ -103,17 +118,21 @@
     // ── Init ──────────────────────────────────────────────────────────────────
     const params = new URLSearchParams(location.search);
     const proposalId = params.get('id');
+    const confirmToken = params.get('token');
     let proposal = null;
 
     if (!proposalId) {
       showStatus('❌', 'No proposal ID provided.');
+    } else if (!confirmToken) {
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('blocked-view').classList.remove('hidden');
     } else {
       loadProposal();
     }
 
     async function loadProposal() {
-      const resp = await fetch('/api/admin/device-proposals/' + proposalId);
-      if (resp.status === 404) { showStatus('❌', 'Proposal not found or already resolved.'); return; }
+      const resp = await fetch('/api/admin/device-proposals/' + proposalId + '?token=' + encodeURIComponent(confirmToken));
+      if (resp.status === 404) { showStatus('❌', 'Proposal not found, already resolved, or the token in this link is wrong.'); return; }
       if (!resp.ok) { showStatus('❌', 'Failed to load proposal (' + resp.status + ').'); return; }
 
       proposal = await resp.json();
@@ -131,6 +150,7 @@
     function showStatus(icon, text) {
       document.getElementById('loading').classList.add('hidden');
       document.getElementById('confirm-view').classList.add('hidden');
+      document.getElementById('blocked-view').classList.add('hidden');
       document.getElementById('status-icon').textContent = icon;
       document.getElementById('status-text').textContent = text;
       document.getElementById('status-view').classList.remove('hidden');
@@ -166,7 +186,7 @@
         const linkResp = await fetch('/api/admin/device-proposals/' + proposalId + '/link', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ device_id }),
+          body: JSON.stringify({ device_id, token: confirmToken }),
         });
         if (!linkResp.ok) {
           throw new Error('Device was registered, but linking the proposal failed (error ' + linkResp.status + ').');

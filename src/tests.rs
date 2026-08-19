@@ -1016,14 +1016,14 @@ mod session_request_tests {
         (status, json)
     }
 
-    async fn approve(app: &Router, token: &str, id: &str) -> u16 {
-        let body = serde_json::json!({});
+    async fn approve(app: &Router, admin_token: &str, id: &str, approve_token: &str) -> u16 {
+        let body = serde_json::json!({ "token": approve_token });
         app.clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri(format!("/api/admin/session-requests/{id}/approve"))
-                    .header("Authorization", format!("Bearer {token}"))
+                    .header("Authorization", format!("Bearer {admin_token}"))
                     .header("content-type", "application/json")
                     .body(Body::from(body.to_string()))
                     .unwrap(),
@@ -1081,10 +1081,11 @@ mod session_request_tests {
         assert_eq!(status, 201, "create must return 201");
         let id = created["id"].as_str().unwrap().to_string();
         let poll_secret = created["poll_secret"].as_str().unwrap().to_string();
-        // The create response must NOT leak any approval secret in the clear.
+        let approve_token = created["approve_token"].as_str().unwrap().to_string();
+        // The create response must NOT leak any (legacy-named) approval secret in the clear.
         assert!(
             created.get("confirm_code").is_none() && created.get("approval_token").is_none(),
-            "create must not return a plaintext approval token"
+            "create must not return a plaintext legacy approval token"
         );
 
         // Before approval: pending, no session envelope.
@@ -1093,7 +1094,7 @@ mod session_request_tests {
         assert_eq!(pending["status"].as_str().unwrap(), "pending");
         assert!(pending["envelope"].is_null());
 
-        assert_eq!(approve(&app, &admin, &id).await, 204);
+        assert_eq!(approve(&app, &admin, &id, &approve_token).await, 204);
 
         // DB must hold the wrap, never a plaintext token.
         let plaintext: Option<String> =
@@ -1146,6 +1147,46 @@ mod session_request_tests {
         assert!(
             wrap_ct_after.is_none(),
             "envelope must be cleared on delivery"
+        );
+    }
+
+    /// Approve requires the exact `approve_token` returned to the requester at creation —
+    /// a valid admin session plus the request id (everything a bare dashboard notification
+    /// exposes) must never be sufficient, whether the token is missing or simply wrong.
+    #[tokio::test]
+    async fn approve_rejects_missing_or_wrong_token() {
+        let (app, state) = build_session_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (device_id, device_secret) = insert_x25519_device(&state.pool, TEST_OWNER).await;
+        let (_, created) = create_req(&app, &device_id, &device_secret).await;
+        let id = created["id"].as_str().unwrap().to_string();
+
+        assert_eq!(
+            approve(&app, &admin, &id, "not-the-real-token").await,
+            404,
+            "a wrong token must not approve"
+        );
+        assert_eq!(
+            approve(&app, &admin, &id, "").await,
+            404,
+            "an empty token must not approve"
+        );
+
+        let status: String = sqlx::query_scalar("SELECT status FROM session_requests WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            status, "pending",
+            "a failed token check must not change the row"
+        );
+
+        let approve_token = created["approve_token"].as_str().unwrap().to_string();
+        assert_eq!(
+            approve(&app, &admin, &id, &approve_token).await,
+            204,
+            "the real token must still approve"
         );
     }
 
@@ -1306,8 +1347,9 @@ mod session_request_tests {
         let (device_id, device_secret) = insert_x25519_device(&state.pool, "someone-else").await;
         let (_, created) = create_req(&app, &device_id, &device_secret).await;
         let id = created["id"].as_str().unwrap().to_string();
+        let approve_token = created["approve_token"].as_str().unwrap().to_string();
 
-        assert_eq!(approve(&app, &admin, &id).await, 403);
+        assert_eq!(approve(&app, &admin, &id, &approve_token).await, 403);
         assert_eq!(reject(&app, &admin, &id).await, 403);
         let status: String = sqlx::query_scalar("SELECT status FROM session_requests WHERE id = ?")
             .bind(&id)
@@ -1462,6 +1504,7 @@ mod device_proposal_tests {
         assert_eq!(status, 201);
         let id = created["id"].as_str().unwrap().to_string();
         let poll_secret = created["poll_secret"].as_str().unwrap().to_string();
+        let confirm_token = created["confirm_token"].as_str().unwrap().to_string();
 
         let resp = app
             .clone()
@@ -1495,6 +1538,25 @@ mod device_proposal_tests {
         .await
         .unwrap();
 
+        // Loading the proposal (which feeds the WebAuthn ceremony's inputs) requires the
+        // proposer's own confirm_token — a bare id, as a dashboard toast alone provides, must
+        // not be sufficient.
+        let get_resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "/api/admin/device-proposals/{id}?token={confirm_token}"
+                    ))
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(get_resp.status().as_u16(), 200);
+
         let link_resp = app
             .clone()
             .oneshot(
@@ -1504,7 +1566,8 @@ mod device_proposal_tests {
                     .header("Authorization", format!("Bearer {admin}"))
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        serde_json::json!({ "device_id": device_id }).to_string(),
+                        serde_json::json!({ "device_id": device_id, "token": confirm_token })
+                            .to_string(),
                     ))
                     .unwrap(),
             )
@@ -1529,6 +1592,84 @@ mod device_proposal_tests {
         let status_json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(status_json["status"].as_str().unwrap(), "confirmed");
         assert_eq!(status_json["device_id"].as_str().unwrap(), device_id);
+    }
+
+    /// A bare id (everything a dashboard toast exposes) must not be enough to load a
+    /// proposal's public key/name, nor to link it — both require the proposer's own
+    /// confirm_token, whether missing or simply wrong.
+    #[tokio::test]
+    async fn get_proposal_rejects_missing_or_wrong_token() {
+        let (app, state) = build_proposal_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (_, created) = propose(&app, "bigboy").await;
+        let id = created["id"].as_str().unwrap().to_string();
+
+        // Missing token: axum rejects the Query extractor before the handler runs.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/admin/device-proposals/{id}"))
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            !resp.status().is_success(),
+            "a missing token must not load the proposal"
+        );
+
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/admin/device-proposals/{id}?token=wrong"))
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status().as_u16(),
+            404,
+            "a wrong token must not load the proposal"
+        );
+
+        let link_resp = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/admin/device-proposals/{id}/link"))
+                    .header("Authorization", format!("Bearer {admin}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({ "device_id": "attacker-controlled", "token": "wrong" })
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            link_resp.status().as_u16(),
+            404,
+            "a wrong token must not link either"
+        );
+
+        let status: String = sqlx::query_scalar("SELECT status FROM device_proposals WHERE id = ?")
+            .bind(&id)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            status, "pending",
+            "a failed token check must not change the row"
+        );
     }
 
     /// Listing is deliberately owner-agnostic: no device row (and therefore no owner) exists
