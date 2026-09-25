@@ -447,13 +447,21 @@
   async function mgmtKeyProviderList(provider, mgmtKey) {
     if (provider === 'litellm') {
       // return_full_object is required: without it /key/list returns only hashed tokens,
-      // with no alias to show the user.
-      const resp = await fetch(LITELLM_BASE + '/key/list?return_full_object=true&size=100', {
-        headers: { Authorization: 'Bearer ' + mgmtKey },
-      });
-      if (!resp.ok) throw new Error('litellm returned ' + resp.status + ': ' + await resp.text());
-      const parsed = await resp.json();
-      return (parsed.keys || []).map(k => ({
+      // with no alias to show the user. Paged: revoke/rotate and the create-flow's hash
+      // resolution all key off this list, so silently truncating it is not an option.
+      const all = [];
+      for (let page = 1; page <= 50; page++) {
+        const resp = await fetch(LITELLM_BASE + '/key/list?return_full_object=true&size=100&page=' + page, {
+          headers: { Authorization: 'Bearer ' + mgmtKey },
+        });
+        if (!resp.ok) throw new Error('litellm returned ' + resp.status + ': ' + await resp.text());
+        const parsed = await resp.json();
+        const keys = parsed.keys || [];
+        all.push(...keys);
+        const totalPages = parsed.total_pages;
+        if ((totalPages && page >= totalPages) || keys.length < 100) break;
+      }
+      return all.map(k => ({
         // The hashed token is litellm's stable id; key_name is only a masked hint.
         providerKeyId: k.token,
         label: k.key_alias || k.key_name || k.token,
@@ -561,15 +569,21 @@
   }
 
   // /key/generate returns the plaintext key but not the hashed token that list/delete key
-  // off, so resolve it: exact match via /key/info, falling back to an alias lookup.
+  // off, so resolve it: /key/info called *as* the new key (no `key` query param — litellm
+  // then returns the calling key's own info). Never put the plaintext key in the query
+  // string: it would land in Caddy/litellm access logs. litellm strips `info.token` from
+  // the response, but in the self-info case the top-level `key` field IS the hash (auth
+  // stores hash_token(api_key)); guard against a version echoing the plaintext instead.
+  // Falls back to an alias lookup — reliable because litellm enforces alias uniqueness.
   async function mgmtKeyLitellmResolveHash(mgmtKey, plaintextKey, label) {
     try {
-      const resp = await fetch(LITELLM_BASE + '/key/info?key=' + encodeURIComponent(plaintextKey), {
-        headers: { Authorization: 'Bearer ' + mgmtKey },
+      const resp = await fetch(LITELLM_BASE + '/key/info', {
+        headers: { Authorization: 'Bearer ' + plaintextKey },
       });
       if (resp.ok) {
-        const info = (await resp.json()).info || {};
-        if (info.token) return info.token;
+        const data = await resp.json();
+        const tok = (data.info && data.info.token) || data.key;
+        if (tok && tok !== plaintextKey) return tok;
       }
     } catch (_) { /* fall through to the list lookup */ }
     const found = (await mgmtKeyProviderList('litellm', mgmtKey)).find(k => k.label === label);
@@ -614,7 +628,10 @@
     const limitFields = document.getElementById('mgmt-key-limit-fields');
     if (limitFields) limitFields.style.display = mgmtKeyProviderHasLimits(provider) ? '' : 'none';
     if (form && form.secret) {
-      form.secret.placeholder = provider === 'priority-notify' ? 'priority-notify management token' : 'sk-or-...';
+      form.secret.placeholder =
+        provider === 'priority-notify' ? 'priority-notify management token'
+        : provider === 'litellm' ? 'sk-... (litellm master key)'
+        : 'sk-or-...';
     }
   }
 

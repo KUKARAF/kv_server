@@ -209,7 +209,10 @@
     const resp = await fetch('/api/admin/management-keys');
     if (!resp.ok) return;
     const rows = await resp.json();
-    const active = rows.filter(r => r.status === 'active');
+    // Only providers kvGenerateValueViaManagementKey() actually implements — anything else
+    // (e.g. litellm) would render a checkbox that always fails at save time.
+    const GENERATE_VIA_PROVIDERS = ['openrouter', 'priority-notify'];
+    const active = rows.filter(r => r.status === 'active' && GENERATE_VIA_PROVIDERS.includes(r.provider));
     const panel = document.getElementById('kv-generate-via-panel');
     const container = document.getElementById('kv-generate-via-checkboxes');
     if (!active.length) { panel.style.display = 'none'; return; }
