@@ -247,7 +247,9 @@
                 hx-swap="none"
                 hx-confirm="Revoke this management key record?"
                 hx-on::after-request="htmx.trigger(document.getElementById('mgmt-keys-list'), 'load')">Revoke</button>` : ''}
-            <button class="btn-secondary" onclick="mgmtKeyToggleEditDefaults('${esc(r.id)}')">Edit defaults</button>
+            ${mgmtKeyProviderHasLimits(r.provider)
+              ? `<button class="btn-secondary" onclick="mgmtKeyToggleEditDefaults('${esc(r.id)}')">Edit defaults</button>`
+              : ''}
             <button class="btn-secondary" onclick="mgmtKeyToggleProvisioned('${esc(r.id)}')">Provisioned keys</button>
           </td>
         </tr>
@@ -310,9 +312,15 @@
     const resetOptions = ['', 'daily', 'weekly', 'monthly'].map(v =>
       `<option value="${v}" ${(mk.default_limit_reset || '') === v ? 'selected' : ''}>${v || 'None'}</option>`
     ).join('');
-    // Providers with no spend limit (priority-notify) keep the inputs in the DOM — so the
-    // create flow can read them without a null deref — but hidden and ignored on create.
+    // Providers with no spend limit (priority-notify, litellm) keep the inputs in the DOM —
+    // so the create flow can read them without a null deref — but hidden and ignored on
+    // create. The scope dropdown is the inverse: priority-notify only, hidden (and ignored)
+    // for providers whose keys have no scope concept.
     const hideLimits = !mgmtKeyProviderHasLimits(mk.provider) ? ' style="display:none"' : '';
+    const hideScope = !mgmtKeyProviderHasScopes(mk.provider) ? ' style="display:none"' : '';
+    const scopeOptions = MGMT_NOTIFY_SCOPES.map(s =>
+      `<option value="${s.value}" ${s.value === 'write' ? 'selected' : ''}>${s.label}</option>`
+    ).join('');
     return `
       <div class="panel" style="margin-bottom:0.75rem;">
         <h3>Create a key on the provider</h3>
@@ -323,6 +331,7 @@
           </label>
         </div>
         <label${hideLimits}>Limit reset <select id="mgmt-key-new-reset-${esc(id)}">${resetOptions}</select></label>
+        <label${hideScope}>Permissions <select id="mgmt-key-new-scope-${esc(id)}">${scopeOptions}</select></label>
         <p class="label-sm">Encrypt the generated secret for <span class="hint">(select at least one)</span></p>
         <div id="mgmt-key-new-devices-${esc(id)}" style="display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;">Loading devices…</div>
         <button type="button" style="margin-top:0.75rem;" onclick="mgmtKeyProviderCreateFlow('${esc(id)}')">Create on provider</button>
@@ -418,6 +427,17 @@
   const MGMT_PROVIDER_HAS_LIMITS = { openrouter: true, 'priority-notify': false, litellm: false };
   function mgmtKeyProviderHasLimits(provider) { return MGMT_PROVIDER_HAS_LIMITS[provider] !== false; }
 
+  // Providers whose keys carry a permission scope. Values mirror priority-notify's
+  // TokenScope enum (app/models.py): write | read | delete | full.
+  const MGMT_PROVIDER_HAS_SCOPES = { openrouter: false, 'priority-notify': true, litellm: false };
+  function mgmtKeyProviderHasScopes(provider) { return MGMT_PROVIDER_HAS_SCOPES[provider] === true; }
+  const MGMT_NOTIFY_SCOPES = [
+    { value: 'write',  label: 'Write only (send)' },
+    { value: 'read',   label: 'Read only' },
+    { value: 'delete', label: 'Delete only' },
+    { value: 'full',   label: 'Full access (not recommended)' },
+  ];
+
   // Resolve a mgmt-key row id to its provider string (defaults to openrouter for safety).
   function mgmtKeyProviderOf(id) {
     const mk = _mgmtKeysCache.find(r => r.id === id);
@@ -444,7 +464,7 @@
       const resp = await fetch(NOTIFY_TOKENS_BASE + '/', { headers: { Authorization: 'Bearer ' + mgmtKey } });
       if (!resp.ok) throw new Error('priority-notify returned ' + resp.status + ': ' + await resp.text());
       const parsed = await resp.json();
-      return (parsed || []).map(t => ({ providerKeyId: t.id, label: t.name, disabled: false }));
+      return (parsed || []).map(t => ({ providerKeyId: t.id, label: t.name, disabled: false, scope: t.scope }));
     }
     const resp = await fetch(OPENROUTER_BASE, { headers: { Authorization: 'Bearer ' + mgmtKey } });
     if (!resp.ok) throw new Error('openrouter returned ' + resp.status + ': ' + await resp.text());
@@ -466,7 +486,7 @@
     if (provider === 'priority-notify') {
       // No single-token GET endpoint — derive the token's label from the list.
       const found = (await mgmtKeyProviderList(provider, mgmtKey)).find(t => t.providerKeyId === providerKeyId);
-      return { providerKeyId, label: (found && found.label) || null, limit: null, limitReset: null };
+      return { providerKeyId, label: (found && found.label) || null, limit: null, limitReset: null, scope: (found && found.scope) || null };
     }
     const resp = await fetch(OPENROUTER_BASE + '/' + encodeURIComponent(providerKeyId), {
       headers: { Authorization: 'Bearer ' + mgmtKey },
@@ -482,7 +502,7 @@
     };
   }
 
-  async function mgmtKeyProviderCreate(provider, mgmtKey, label, limit, limitReset) {
+  async function mgmtKeyProviderCreate(provider, mgmtKey, label, limit, limitReset, scope) {
     if (provider === 'litellm') {
       const resp = await fetch(LITELLM_BASE + '/key/generate', {
         method: 'POST',
@@ -503,8 +523,8 @@
       const resp = await fetch(NOTIFY_TOKENS_BASE + '/', {
         method: 'POST',
         headers: { Authorization: 'Bearer ' + mgmtKey, 'Content-Type': 'application/json' },
-        // priority-notify tokens have no limit/reset; scope 'write' is the send scope.
-        body: JSON.stringify({ name: label, device_type: 'other', scope: 'write' }),
+        // priority-notify tokens have no limit/reset; 'write' (the send scope) is the default.
+        body: JSON.stringify({ name: label, device_type: 'other', scope: scope || 'write' }),
       });
       if (!resp.ok) throw new Error('priority-notify returned ' + resp.status + ': ' + await resp.text());
       const data = await resp.json();
@@ -621,7 +641,7 @@
       <thead><tr><th>Label</th><th>Provider key id</th><th>Status</th><th></th></tr></thead>
       <tbody>${live.map(k => `
         <tr>
-          <td>${esc(k.label)}</td>
+          <td>${esc(k.label)}${k.scope ? ` <span class="hint">(${esc(k.scope)})</span>` : ''}</td>
           <td><code>${esc(k.providerKeyId)}</code></td>
           <td>${k.disabled
             ? '<span class="badge badge-revoked">disabled</span>'
@@ -660,6 +680,7 @@
     const limitStr = document.getElementById('mgmt-key-new-limit-' + id).value;
     const limit = limitStr === '' ? null : Number(limitStr);
     const limitReset = document.getElementById('mgmt-key-new-reset-' + id).value || null;
+    const scope = document.getElementById('mgmt-key-new-scope-' + id).value || null;
 
     const checked = [...document.querySelectorAll('#mgmt-key-new-devices-' + id + ' input:checked')];
     if (!checked.length) { alert('Select at least one device to encrypt the new secret for.'); return; }
@@ -675,7 +696,7 @@
 
     let created;
     try {
-      created = await mgmtKeyProviderCreate(mgmtKeyProviderOf(id), mgmtKey, label, limit, limitReset);
+      created = await mgmtKeyProviderCreate(mgmtKeyProviderOf(id), mgmtKey, label, limit, limitReset, scope);
     } catch (err) {
       alert('Failed to create key on provider: ' + err.message);
       return;
@@ -797,7 +818,9 @@
 
     let created;
     try {
-      created = await mgmtKeyProviderCreate(mgmtKeyProviderOf(id), mgmtKey, info.label, info.limit, info.limitReset);
+      // info.scope: preserve the old token's permission scope (priority-notify);
+      // null/undefined elsewhere, where create ignores it.
+      created = await mgmtKeyProviderCreate(mgmtKeyProviderOf(id), mgmtKey, info.label, info.limit, info.limitReset, info.scope);
     } catch (err) {
       alert(
         'CRITICAL: the old key was already deleted on the provider, but creating its ' +
