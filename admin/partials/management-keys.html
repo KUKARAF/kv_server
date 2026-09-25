@@ -16,6 +16,7 @@
         <select name="provider" onchange="mgmtKeyOnProviderChange(this)">
           <option value="openrouter">OpenRouter</option>
           <option value="priority-notify">priority-notify</option>
+          <option value="litellm">LiteLLM</option>
         </select>
       </label>
     </div>
@@ -406,9 +407,15 @@
   const OPENROUTER_BASE = 'https://openrouter.ai/api/v1/keys';
   // priority-notify manages "send tokens"; create/list use a trailing slash, delete does not.
   const NOTIFY_TOKENS_BASE = 'https://notifications.osmosis.page/api/tokens';
+  // litellm's virtual-key API. /key/* is deliberately outside the SSO forward_auth in
+  // Caddy, so a Bearer management key is enough — no browser session is involved.
+  const LITELLM_BASE = 'https://litellm.osmosis.page';
 
   // Providers without a spend limit / reset cadence (priority-notify tokens have neither).
-  const MGMT_PROVIDER_HAS_LIMITS = { openrouter: true, 'priority-notify': false };
+  // litellm has max_budget, but it prices against provider rates that mean nothing for a
+  // locally-hosted model, so a spend limit would be misleading. Rate limits (rpm/tpm) are
+  // the meaningful control here.
+  const MGMT_PROVIDER_HAS_LIMITS = { openrouter: true, 'priority-notify': false, litellm: false };
   function mgmtKeyProviderHasLimits(provider) { return MGMT_PROVIDER_HAS_LIMITS[provider] !== false; }
 
   // Resolve a mgmt-key row id to its provider string (defaults to openrouter for safety).
@@ -418,6 +425,21 @@
   }
 
   async function mgmtKeyProviderList(provider, mgmtKey) {
+    if (provider === 'litellm') {
+      // return_full_object is required: without it /key/list returns only hashed tokens,
+      // with no alias to show the user.
+      const resp = await fetch(LITELLM_BASE + '/key/list?return_full_object=true&size=100', {
+        headers: { Authorization: 'Bearer ' + mgmtKey },
+      });
+      if (!resp.ok) throw new Error('litellm returned ' + resp.status + ': ' + await resp.text());
+      const parsed = await resp.json();
+      return (parsed.keys || []).map(k => ({
+        // The hashed token is litellm's stable id; key_name is only a masked hint.
+        providerKeyId: k.token,
+        label: k.key_alias || k.key_name || k.token,
+        disabled: !!k.blocked,
+      }));
+    }
     if (provider === 'priority-notify') {
       const resp = await fetch(NOTIFY_TOKENS_BASE + '/', { headers: { Authorization: 'Bearer ' + mgmtKey } });
       if (!resp.ok) throw new Error('priority-notify returned ' + resp.status + ': ' + await resp.text());
@@ -435,6 +457,12 @@
   }
 
   async function mgmtKeyProviderGet(provider, mgmtKey, providerKeyId) {
+    if (provider === 'litellm') {
+      // /key/info takes the plaintext key, which we no longer hold (only its hash), so
+      // derive from the list — the same compromise priority-notify makes.
+      const found = (await mgmtKeyProviderList(provider, mgmtKey)).find(k => k.providerKeyId === providerKeyId);
+      return { providerKeyId, label: (found && found.label) || null, limit: null, limitReset: null };
+    }
     if (provider === 'priority-notify') {
       // No single-token GET endpoint — derive the token's label from the list.
       const found = (await mgmtKeyProviderList(provider, mgmtKey)).find(t => t.providerKeyId === providerKeyId);
@@ -455,6 +483,22 @@
   }
 
   async function mgmtKeyProviderCreate(provider, mgmtKey, label, limit, limitReset) {
+    if (provider === 'litellm') {
+      const resp = await fetch(LITELLM_BASE + '/key/generate', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + mgmtKey, 'Content-Type': 'application/json' },
+        // No budget: litellm's max_budget prices against provider rates, which mean
+        // nothing for a locally-hosted model.
+        body: JSON.stringify({ key_alias: label }),
+      });
+      if (!resp.ok) throw new Error('litellm returned ' + resp.status + ': ' + await resp.text());
+      const data = await resp.json();
+      return {
+        providerKeyId: await mgmtKeyLitellmResolveHash(mgmtKey, data.key, label),
+        label: data.key_alias || label,
+        plaintextSecret: data.key,
+      };
+    }
     if (provider === 'priority-notify') {
       const resp = await fetch(NOTIFY_TOKENS_BASE + '/', {
         method: 'POST',
@@ -496,7 +540,36 @@
     };
   }
 
+  // /key/generate returns the plaintext key but not the hashed token that list/delete key
+  // off, so resolve it: exact match via /key/info, falling back to an alias lookup.
+  async function mgmtKeyLitellmResolveHash(mgmtKey, plaintextKey, label) {
+    try {
+      const resp = await fetch(LITELLM_BASE + '/key/info?key=' + encodeURIComponent(plaintextKey), {
+        headers: { Authorization: 'Bearer ' + mgmtKey },
+      });
+      if (resp.ok) {
+        const info = (await resp.json()).info || {};
+        if (info.token) return info.token;
+      }
+    } catch (_) { /* fall through to the list lookup */ }
+    const found = (await mgmtKeyProviderList('litellm', mgmtKey)).find(k => k.label === label);
+    if (!found) throw new Error('litellm: created key could not be resolved to its hashed id');
+    return found.providerKeyId;
+  }
+
   async function mgmtKeyProviderRevoke(provider, mgmtKey, providerKeyId) {
+    if (provider === 'litellm') {
+      // /key/delete accepts plaintext keys or hashed tokens; we hold the hash.
+      const resp = await fetch(LITELLM_BASE + '/key/delete', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + mgmtKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: [providerKeyId] }),
+      });
+      // Already gone is fine — matches priority-notify's behaviour during rotation.
+      if (resp.status === 404) return;
+      if (!resp.ok) throw new Error('litellm returned ' + resp.status + ': ' + await resp.text());
+      return;
+    }
     if (provider === 'priority-notify') {
       const resp = await fetch(NOTIFY_TOKENS_BASE + '/' + encodeURIComponent(providerKeyId), {
         method: 'DELETE',
