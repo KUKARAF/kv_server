@@ -326,7 +326,8 @@ pub async fn link_proposal(
     let owner_id = &auth.0.oidc_subject;
 
     let proposal = sqlx::query!(
-        "SELECT confirm_token_hash FROM device_proposals WHERE id = ? AND status = 'pending'",
+        "SELECT id, name, public_key, key_type, requested_at, expires_at, confirm_token_hash
+         FROM device_proposals WHERE id = ?",
         id
     )
     .fetch_optional(&state.pool)
@@ -334,6 +335,27 @@ pub async fn link_proposal(
     .ok_or(AppError::NotFound)?;
 
     if hash_key(&body.token) != proposal.confirm_token_hash {
+        return Err(AppError::NotFound);
+    }
+
+    // Bind the device being linked to this proposal. The confirm token only proves the
+    // admin reached this page out of band; on its own it says nothing about *which*
+    // device id the client then sends. Without the checks below, an admin confirming a
+    // legitimate proposal could be induced to mark an attacker-controlled device as the
+    // proposal's result. The device must therefore be the confirming admin's own and
+    // carry exactly the key material that was proposed.
+    let device = sqlx::query!(
+        "SELECT key_type, public_key, owner_id FROM devices WHERE id = ?",
+        body.device_id
+    )
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    if device.owner_id != *owner_id
+        || device.public_key != proposal.public_key
+        || device.key_type != proposal.key_type
+    {
         return Err(AppError::NotFound);
     }
 
