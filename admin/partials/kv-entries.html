@@ -210,8 +210,8 @@
     if (!resp.ok) return;
     const rows = await resp.json();
     // Only providers kvGenerateValueViaManagementKey() actually implements — anything else
-    // (e.g. litellm) would render a checkbox that always fails at save time.
-    const GENERATE_VIA_PROVIDERS = ['openrouter', 'priority-notify'];
+    // would render a checkbox that always fails at save time.
+    const GENERATE_VIA_PROVIDERS = ['openrouter', 'priority-notify', 'litellm'];
     const active = rows.filter(r => r.status === 'active' && GENERATE_VIA_PROVIDERS.includes(r.provider));
     const panel = document.getElementById('kv-generate-via-panel');
     const container = document.getElementById('kv-generate-via-checkboxes');
@@ -289,7 +289,7 @@
     if (!mkResp.ok) throw new Error('failed to load management keys: ' + mkResp.status);
     const mk = (await mkResp.json()).find(r => r.id === mgmtKeyId);
     if (!mk) throw new Error('management key not found');
-    if (mk.provider !== 'openrouter' && mk.provider !== 'priority-notify') throw new Error('unsupported provider: ' + mk.provider);
+    if (mk.provider !== 'openrouter' && mk.provider !== 'priority-notify' && mk.provider !== 'litellm') throw new Error('unsupported provider: ' + mk.provider);
 
     const db = await _openAdminDB();
     const record = await _dbGet(db, 'device');
@@ -302,6 +302,77 @@
     );
     if (!envResp.ok) throw new Error('failed to fetch encrypted management key: ' + envResp.status);
     const mgmtKeySecret = await kvDecryptManagementKeyPayload(await envResp.json(), record.privateKey);
+
+    // litellm: mint a virtual key (rotate = delete-then-create) whose plaintext becomes
+    // this KV entry's value. The KV key name doubles as the litellm key_alias — litellm
+    // enforces alias uniqueness, so a same-alias key created elsewhere fails loudly here.
+    // Mirrors the provider logic in management-keys.html (partials stay self-contained).
+    if (mk.provider === 'litellm') {
+      const LITELLM_BASE = 'https://litellm.osmosis.page';
+
+      // Paged /key/list — the alias fallback in hash resolution keys off it.
+      const litellmListKeys = async () => {
+        const all = [];
+        for (let page = 1; page <= 50; page++) {
+          const resp = await fetch(LITELLM_BASE + '/key/list?return_full_object=true&size=100&page=' + page, {
+            headers: { Authorization: 'Bearer ' + mgmtKeySecret },
+          });
+          if (!resp.ok) throw new Error('litellm returned ' + resp.status + ': ' + await resp.text());
+          const parsed = await resp.json();
+          const keys = parsed.keys || [];
+          all.push(...keys);
+          if ((parsed.total_pages && page >= parsed.total_pages) || keys.length < 100) break;
+        }
+        return all;
+      };
+
+      if (existingProviderKeyId) {
+        const delResp = await fetch(LITELLM_BASE + '/key/delete', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer ' + mgmtKeySecret, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keys: [existingProviderKeyId] }),
+        });
+        // litellm 404s when none of the keys exist (already gone); anything else non-2xx
+        // aborts before we create a replacement.
+        if (!delResp.ok && delResp.status !== 404) {
+          throw new Error('failed to delete old key on provider — aborting rotation, nothing was changed: ' + delResp.status);
+        }
+      }
+      const criticalPrefix = existingProviderKeyId
+        ? 'CRITICAL: the old key was already deleted on the provider, but creating its replacement failed — you now have NO active key for this identity. Retry manually. '
+        : '';
+
+      const createResp = await fetch(LITELLM_BASE + '/key/generate', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + mgmtKeySecret, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key_alias: label }),
+      });
+      if (!createResp.ok) throw new Error(criticalPrefix + 'litellm returned ' + createResp.status + ': ' + await createResp.text());
+      const created = await createResp.json();
+
+      // list/delete key off the hashed token, not the plaintext. Resolve via /key/info
+      // called AS the new key (litellm strips info.token, but self-info returns the hash
+      // as the top-level `key` field; never put the plaintext in a query string — it
+      // would land in access logs), falling back to an alias lookup.
+      let providerKeyId = null;
+      try {
+        const infoResp = await fetch(LITELLM_BASE + '/key/info', {
+          headers: { Authorization: 'Bearer ' + created.key },
+        });
+        if (infoResp.ok) {
+          const data = await infoResp.json();
+          const tok = (data.info && data.info.token) || data.key;
+          if (tok && tok !== created.key) providerKeyId = tok;
+        }
+      } catch (_) { /* fall through to the list lookup */ }
+      if (!providerKeyId) {
+        const found = (await litellmListKeys()).find(k => k.key_alias === label);
+        if (found) providerKeyId = found.token;
+      }
+      if (!providerKeyId) throw new Error(criticalPrefix + 'litellm: created key could not be resolved to its hashed id');
+
+      return { plaintextSecret: created.key, providerKeyId };
+    }
 
     // priority-notify: send tokens have no limit/reset. Provision a fresh write-scope token
     // (rotate = delete-then-create) whose plaintext becomes this KV entry's value — e.g. the
