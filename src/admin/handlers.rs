@@ -871,7 +871,7 @@ pub async fn list_rate_counters(
         .iter()
         .map(|e| (e.key().to_string(), *e.value()))
         .collect();
-    entries.sort_by(|a, b| b.1.cmp(&a.1));
+    entries.sort_by_key(|a| std::cmp::Reverse(a.1));
     Json(
         entries
             .into_iter()
