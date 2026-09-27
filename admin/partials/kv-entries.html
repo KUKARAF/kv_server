@@ -729,7 +729,7 @@
           : ''}<button class="btn-icon" onclick="deleteEntry('${esc(e.key)}')" title="Delete">🗑️</button>`;
         return `
         <tr>
-          <td><code>${esc(e.key)}</code>${devBadge}</td>
+          <td><code class="kv-key-copy" title="Tap to copy value" onclick="copyEntryValue('${esc(e.key)}')">${esc(e.key)}</code>${devBadge}</td>
           <td>${e.ttl_hours ?? '—'}</td>
           <td>${e.ttl_sliding ? '✓' : '—'}</td>
           <td>${e.open_access ? '✓' : '—'}</td>
@@ -977,6 +977,58 @@
     const record = await _dbGet(db, 'device');
     if (!record?.deviceId || !record?.privateKey?.usages?.includes('deriveBits')) return null;
     return record;
+  }
+
+  // Tap-to-copy on the key name: copies the entry's VALUE, then wipes the clipboard
+  // 60s later. Plain entries read the value from the admin API; device-encrypted ones
+  // decrypt locally with this browser's device key (same path as decryptEntry). The
+  // server refuses the value route for zero-trust entries (403) — those need a WebAuthn
+  // ceremony, so they get an explanatory toast instead.
+  let _copyClearTimer = null;
+  async function copyEntryValue(key) {
+    const entry = _kvEntriesCache.find(e => e.key === key);
+    let value;
+    try {
+      if (entry && entry.device_encrypted) {
+        const record = await _loadBrowserDevice();
+        if (!record) {
+          showToast('This browser has no device key — register one in Devices first.', { type: 'error' });
+          return;
+        }
+        const resp = await fetch(
+          '/api/admin/devices/' + encodeURIComponent(record.deviceId) + '/kv/' + encodeURIComponent(key)
+        );
+        if (!resp.ok) { showToast('Failed to fetch encrypted payload: ' + resp.status, { type: 'error' }); return; }
+        value = await decryptDeviceKvPayload(await resp.json(), record.privateKey);
+      } else {
+        const resp = await fetch('/api/admin/kv/' + encodeURIComponent(key) + '/value');
+        if (resp.status === 403) {
+          showToast('value of ' + esc(key) + ' cannot be copied here (zero-trust entry)', { type: 'error' });
+          return;
+        }
+        if (!resp.ok) { showToast('Failed to fetch value: ' + resp.status, { type: 'error' }); return; }
+        value = await resp.text();
+      }
+      await navigator.clipboard.writeText(value);
+    } catch (err) {
+      showToast('Copy failed: ' + esc(err.message), { type: 'error' });
+      return;
+    }
+
+    showToast('value of ' + esc(key) + ' copied will be cleared in 60 seconds', { type: 'success' });
+
+    if (_copyClearTimer) clearTimeout(_copyClearTimer);
+    _copyClearTimer = setTimeout(async () => {
+      // Only wipe if the clipboard still holds our value, where the browser lets us
+      // check; Firefox blocks readText() without a paste gesture, so fall back to
+      // clearing blindly — a stale secret is worse than a clobbered copy. writeText
+      // can also throw if the tab lost focus; nothing more we can do then.
+      try {
+        const current = await navigator.clipboard.readText();
+        if (current !== value) return;
+      } catch (_) { /* can't verify — clear anyway */ }
+      try { await navigator.clipboard.writeText(''); } catch (_) {}
+    }, 60000);
   }
 
   async function decryptEntry(key) {

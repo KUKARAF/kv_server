@@ -519,3 +519,7 @@ code {
 dl { display: grid; grid-template-columns: 120px 1fr; gap: 0.4rem 1rem; }
 dt { font-family: 'Press Start 2P', monospace; font-size: 7px; color: var(--dim); align-self: center; letter-spacing: .04em; }
 dd { font-family: 'VT323', monospace; font-size: 17px; color: var(--ink); }
+
+/* tap-to-copy KV key names (kv-entries partial) */
+.kv-key-copy { cursor: pointer; }
+.kv-key-copy:hover { text-decoration: underline; }
