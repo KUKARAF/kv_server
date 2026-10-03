@@ -277,14 +277,8 @@
     return new TextDecoder().decode(plaintext);
   }
 
-  // When existingProviderKeyId is given, this doubles as the rotate path: fetch that key's
-  // *current* label/limit/limit_reset from the provider (not our stored defaults, which may
-  // be stale or never matched this specific key), delete it, then create the replacement
-  // with those values instead of `label`/the management key's defaults. Delete-then-create:
-  // there's a brief window with zero active keys, so a create failure after the delete has
-  // already happened must fail loudly (see the CRITICAL-prefixed errors below), matching the
-  // Management Keys panel's rotate flow.
-  async function kvGenerateValueViaManagementKey(mgmtKeyId, label, existingProviderKeyId = null) {
+  // Loads the management key row and decrypts its secret with this browser's device key.
+  async function kvUnlockManagementKey(mgmtKeyId) {
     const mkResp = await fetch('/api/admin/management-keys');
     if (!mkResp.ok) throw new Error('failed to load management keys: ' + mkResp.status);
     const mk = (await mkResp.json()).find(r => r.id === mgmtKeyId);
@@ -302,6 +296,45 @@
     );
     if (!envResp.ok) throw new Error('failed to fetch encrypted management key: ' + envResp.status);
     const mgmtKeySecret = await kvDecryptManagementKeyPayload(await envResp.json(), record.privateKey);
+    return { mk, mgmtKeySecret };
+  }
+
+  // Deletes the provider key backing a KV entry. 404 = already gone on the provider, which
+  // is the state we want, so it counts as success; anything else throws.
+  async function kvDeleteProviderKey(mgmtKeyId, providerKeyId) {
+    const { mk, mgmtKeySecret } = await kvUnlockManagementKey(mgmtKeyId);
+    let resp;
+    if (mk.provider === 'litellm') {
+      resp = await fetch('https://litellm.osmosis.page/key/delete', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + mgmtKeySecret, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: [providerKeyId] }),
+      });
+    } else if (mk.provider === 'priority-notify') {
+      resp = await fetch('https://notifications.osmosis.page/api/tokens/' + encodeURIComponent(providerKeyId), {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer ' + mgmtKeySecret },
+      });
+    } else {
+      resp = await fetch('https://openrouter.ai/api/v1/keys/' + encodeURIComponent(providerKeyId), {
+        method: 'DELETE',
+        headers: { Authorization: 'Bearer ' + mgmtKeySecret },
+      });
+    }
+    if (!resp.ok && resp.status !== 404) {
+      throw new Error(mk.provider + ' returned ' + resp.status + ': ' + await resp.text());
+    }
+  }
+
+  // When existingProviderKeyId is given, this doubles as the rotate path: fetch that key's
+  // *current* label/limit/limit_reset from the provider (not our stored defaults, which may
+  // be stale or never matched this specific key), delete it, then create the replacement
+  // with those values instead of `label`/the management key's defaults. Delete-then-create:
+  // there's a brief window with zero active keys, so a create failure after the delete has
+  // already happened must fail loudly (see the CRITICAL-prefixed errors below), matching the
+  // Management Keys panel's rotate flow.
+  async function kvGenerateValueViaManagementKey(mgmtKeyId, label, existingProviderKeyId = null) {
+    const { mk, mgmtKeySecret } = await kvUnlockManagementKey(mgmtKeyId);
 
     // litellm: mint a virtual key (rotate = delete-then-create) whose plaintext becomes
     // this KV entry's value. The KV key name doubles as the litellm key_alias — litellm
@@ -675,7 +708,21 @@
   }
 
   async function deleteEntry(key) {
-    if (!confirm(`Delete "${key}"?`)) return;
+    const entry = _kvEntriesCache.find(e => e.key === key);
+    const backed = entry && entry.source_management_key_id && entry.source_provider_key_id;
+    if (!confirm(backed
+      ? `Delete "${key}"? This also deletes its backing key on the provider.`
+      : `Delete "${key}"?`)) return;
+    // Provider first: only drop the local entry once the provider confirms the key is gone,
+    // otherwise we'd orphan a live key (and, for litellm, block re-creating the same alias).
+    if (backed) {
+      try {
+        await kvDeleteProviderKey(entry.source_management_key_id, entry.source_provider_key_id);
+      } catch (err) {
+        alert('Failed to delete the provider key — the KV entry was NOT deleted: ' + err.message);
+        return;
+      }
+    }
     const resp = await fetch('/api/admin/kv/' + encodeURIComponent(key), { method: 'DELETE' });
     if (!resp.ok) { alert('Error deleting: ' + resp.status); return; }
     htmx.trigger(document.querySelector('[hx-get="/api/admin/kv"]'), 'submit');
