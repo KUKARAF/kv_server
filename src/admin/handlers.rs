@@ -130,6 +130,8 @@ pub async fn revoke_key(
     auth: AdminAuth,
     Path(key_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // A restricted device may only revoke its own credentials (no owner lockout).
+    crate::device_policy::enforce::ensure_may_manage_api_key(&state.pool, &auth.0, &key_id).await?;
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "UPDATE api_keys SET status = 'revoked' WHERE id = ? AND owner_id = ? AND status IN ('active', 'pending_approval')",
@@ -149,6 +151,7 @@ pub async fn delete_revoked_sessions(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM api_keys WHERE owner_id = ? AND type = 'session' AND status = 'revoked'",
@@ -167,6 +170,8 @@ pub async fn delete_key(
     auth: AdminAuth,
     Path(key_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // A restricted device may only delete its own (revoked/used) credentials.
+    crate::device_policy::enforce::ensure_may_manage_api_key(&state.pool, &auth.0, &key_id).await?;
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM api_keys WHERE id = ? AND owner_id = ? AND status IN ('revoked', 'used')",
@@ -257,13 +262,28 @@ pub async fn logout(
 ) -> Result<Response, AppError> {
     let owner = &auth.0.oidc_subject;
 
-    // Revoke all active session keys for this owner
-    sqlx::query!(
-        "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active'",
-        owner
-    )
-    .execute(&state.pool)
-    .await?;
+    if crate::device_policy::enforce::restricted_caller(&state.pool, &auth.0)
+        .await?
+        .is_some()
+    {
+        // A restricted device logs out only itself — revoking every owner session would
+        // lock the owner out of the admin panel.
+        sqlx::query!(
+            "UPDATE api_keys SET status = 'revoked' WHERE id = ? AND owner_id = ? AND status = 'active'",
+            auth.0.api_key_id,
+            owner
+        )
+        .execute(&state.pool)
+        .await?;
+    } else {
+        // Revoke all active session keys for this owner
+        sqlx::query!(
+            "UPDATE api_keys SET status = 'revoked' WHERE owner_id = ? AND type = 'session' AND status = 'active'",
+            owner
+        )
+        .execute(&state.pool)
+        .await?;
+    }
 
     let clear = Cookie::build(("session_token", ""))
         .http_only(true)
@@ -429,6 +449,7 @@ pub async fn approve_request(
     Path(request_id): Path<String>,
     Json(body): Json<ApproveRequest>,
 ) -> Result<StatusCode, AppError> {
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
     let row = sqlx::query!(
         "SELECT ar.api_key_id, ar.emoji_sequence
@@ -476,6 +497,7 @@ pub async fn reject_request(
     auth: AdminAuth,
     Path(request_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "UPDATE approval_requests SET status = 'rejected'
@@ -926,9 +948,10 @@ pub async fn list_blocked_ips(
 
 pub async fn unblock_ip(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(ip): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let result = sqlx::query!("DELETE FROM blocked_ips WHERE ip = ?", ip)
         .execute(&state.pool)
         .await?;
@@ -966,6 +989,9 @@ pub async fn create_secret_request(
     auth: AdminAuth,
     Json(body): Json<CreateSecretRequestBody>,
 ) -> Result<(StatusCode, Json<CreateSecretRequestResponse>), AppError> {
+    // A secret-request link writes KV entries via the public collect endpoint, outside any
+    // device policy — a restricted device must not be able to create (or manage) one.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
     let email = auth.0.email.as_deref().unwrap_or(owner);
     let id = Uuid::new_v4().to_string();
@@ -1003,7 +1029,50 @@ pub async fn list_secret_requests(
     )
     .fetch_all(&state.pool)
     .await?;
+    let visible =
+        crate::device_policy::enforce::listing_filter(&state.pool, auth.0.device_id.as_deref())
+            .await?;
+    if matches!(visible, crate::device_policy::enforce::KeyFilter::All) {
+        return Ok(Json(rows));
+    }
+    // Restricted device: required key names are listing data. Keep only names whose bare
+    // form AND prefixed KV name the policy allows; the prefix (a namespace hint) is hidden.
+    let rows = rows
+        .into_iter()
+        .map(|mut r| {
+            let prefix = r.key_prefix.take().unwrap_or_default();
+            r.required_keys = r.required_keys.as_deref().map(|raw| {
+                let names: Vec<String> = serde_json::from_str(raw).unwrap_or_default();
+                let kept: Vec<String> = names
+                    .into_iter()
+                    .filter(|k| secret_name_visible(&visible, &prefix, k))
+                    .collect();
+                serde_json::to_string(&kept).unwrap_or_else(|_| "[]".to_string())
+            });
+            r
+        })
+        .collect();
     Ok(Json(rows))
+}
+
+/// A secret-request key name is visible to a restricted device only if both the bare name
+/// and the KV entry name it would be stored under (`prefix + name`) are allowed.
+fn secret_name_visible(
+    visible: &crate::device_policy::enforce::KeyFilter,
+    prefix: &str,
+    name: &str,
+) -> bool {
+    visible.allows(name) && visible.allows(&format!("{prefix}{name}"))
+}
+
+/// The key name embedded in a faux-approval message (see `submit_secret_request`):
+/// `Recipient bypassed required key '<k>'` optionally followed by ` — note: "<note>"`.
+fn faux_approval_key(message: &str) -> Option<&str> {
+    let rest = message.strip_prefix("Recipient bypassed required key '")?;
+    match rest.find("' — note: \"") {
+        Some(i) => Some(&rest[..i]),
+        None => rest.strip_suffix('\''),
+    }
 }
 
 pub async fn revoke_secret_request(
@@ -1011,6 +1080,7 @@ pub async fn revoke_secret_request(
     auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "UPDATE secret_requests SET status = 'revoked'
@@ -1032,6 +1102,7 @@ pub async fn delete_secret_request(
     auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM secret_requests WHERE id = ? AND owner_id = ?",
@@ -1223,7 +1294,33 @@ pub async fn list_faux_approvals(
     )
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(rows))
+    let visible =
+        crate::device_policy::enforce::listing_filter(&state.pool, auth.0.device_id.as_deref())
+            .await?;
+    if matches!(visible, crate::device_policy::enforce::KeyFilter::All) {
+        return Ok(Json(rows));
+    }
+    // Restricted device: drop notices naming a key its policy refuses (fail closed on a
+    // message we can't parse).
+    let mut kept = Vec::with_capacity(rows.len());
+    for r in rows {
+        let Some(key) = faux_approval_key(&r.message) else {
+            continue;
+        };
+        let prefix = sqlx::query_scalar!(
+            "SELECT key_prefix FROM secret_requests WHERE id = ? AND owner_id = ?",
+            r.secret_request_id,
+            owner
+        )
+        .fetch_optional(&state.pool)
+        .await?
+        .flatten()
+        .unwrap_or_default();
+        if secret_name_visible(&visible, &prefix, key) {
+            kept.push(r);
+        }
+    }
+    Ok(Json(kept))
 }
 
 pub async fn dismiss_faux_approval(
@@ -1231,6 +1328,7 @@ pub async fn dismiss_faux_approval(
     auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM faux_approvals WHERE id = ? AND owner_id = ?",

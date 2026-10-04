@@ -443,6 +443,8 @@ pub async fn reject(
     auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // A restricted device must not deny the owner's other devices their sessions.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
 
     // Same ownership check as `approve` — an admin may only reject requests targeting a

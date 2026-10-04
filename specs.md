@@ -144,7 +144,8 @@ KV entry *names* (migration 0040, `src/device_policy/`):
   and the response is 403 `{"error":"device banned"}`. Concurrent violations escalate once.
 - **Listings never ban**: for a restricted device, names-only listings (`GET /kv`,
   `GET /api/admin/kv`, `GET /api/admin/kv/keys`, the access log, `allowed_keys` in
-  `GET /api/admin/keys`) are filtered to the names its policy allows.
+  `GET /api/admin/keys`, secret requests, faux approvals) are filtered to the names its
+  policy allows.
 - **While banned** every device-attributable request (AdminAuth / Bearer KV / `X-Api-Key`,
   session-request create, poll/claim, approve for that device) gets the same 403. The
   unauthenticated `POST /session-request/challenge` deliberately does **not** check bans (it
@@ -157,6 +158,22 @@ KV entry *names* (migration 0040, `src/device_policy/`):
   begin/finish, device-proposal link, and approving a session request for any device other
   than itself (`ensure_may_manage_credentials`). `allow_all` devices keep full behaviour (the
   Android app approves other devices' session requests). No device can delete itself.
+- The same 403 fences every route a restricted device could use to lock the owner out, or to
+  write KV names outside its policy:
+  - `POST /api/admin/keys/:id/revoke`, `DELETE /api/admin/keys/:id` — allowed only for keys
+    whose `api_keys.device_id` is the caller's own device (unknown ids get the same 403);
+  - `DELETE /api/admin/keys/revoked-sessions`, `POST /api/admin/approvals/:id/approve|reject`,
+    `DELETE /api/admin/blocked-ips/:ip`, `DELETE /api/admin/devices/:id` (any other device),
+    `POST /api/admin/device-proposals/:id/reject`, `POST /api/admin/session-requests/:id/reject`,
+    `POST /api/admin/secret-requests`, `POST /api/admin/secret-requests/:id/revoke`,
+    `DELETE /api/admin/secret-requests/:id` (a link's public collect endpoint writes KV entries
+    outside any device policy), `DELETE /api/admin/faux-approvals/:id`;
+  - `POST /api/admin/session/logout` (and `/session-key/logout`) from a restricted device
+    revokes only the caller's own token instead of every owner session.
+- Listings additionally filtered for restricted devices: `GET /api/admin/secret-requests`
+  (`required_keys` keeps a name only if both it and `key_prefix + name` are allowed;
+  `key_prefix` is returned as null) and `GET /api/admin/faux-approvals` (notices naming a
+  refused key, or not parseable, are dropped).
 - **Device deletion** (`DELETE /api/admin/devices/:id`) deletes, in one transaction, every
   `api_keys` row attributed to the device (its sessions and the tokens it minted) with their
   dependents (`api_key_allowed_keys`, `approval_requests`, `device_auth_requests`), plus its

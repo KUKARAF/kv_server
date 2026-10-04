@@ -3860,4 +3860,506 @@ mod device_policy_tests {
         assert!(banned_at.is_some() && unban_at.is_some());
         assert_eq!(count, 2);
     }
+
+    // ── secrev2: owner lockout, secret requests, listings ────────────────────
+
+    fn assert_device_forbidden(status: u16, body: &str) {
+        assert_eq!(status, 403, "body: {body}");
+        assert!(body.contains("not permitted for this device"), "{body}");
+    }
+
+    async fn insert_key_for_device(
+        pool: &SqlitePool,
+        device_id: Option<&str>,
+        status: &str,
+    ) -> String {
+        let (_plaintext, hash) = generate_api_key();
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO api_keys (id, key_hash, label, type, status, owner_id, device_id)
+             VALUES (?, ?, 'k', 'standard', ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&hash)
+        .bind(status)
+        .bind(TEST_OWNER)
+        .bind(device_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    /// A restricted device can list keys but cannot revoke/delete the owner's credentials
+    /// (no lockout); it may still revoke/delete keys attributed to itself. An allow_all
+    /// device keeps full behaviour.
+    #[tokio::test]
+    async fn secrev2_restricted_device_cannot_revoke_admin_credentials() {
+        let (app, state, admin, d, dt) = fixture().await;
+        restrict(&app, &admin, &d, &["FOO"]).await;
+        let (s, b) = call(&app, "GET", "/api/admin/keys", Some(&dt), None).await;
+        assert_eq!(s, 200, "{b}");
+        let ids: Vec<String> = json(&b)
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|k| k["label"] == "test-session")
+            .map(|k| k["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids.len(), 1);
+        let (s, b) = call(
+            &app,
+            "POST",
+            &format!("/api/admin/keys/{}/revoke", ids[0]),
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_device_forbidden(s, &b);
+        // Unknown id: same 403 (no existence oracle).
+        let (s, b) = call(&app, "POST", "/api/admin/keys/nope/revoke", Some(&dt), None).await;
+        assert_device_forbidden(s, &b);
+        // Deleting another (revoked) key: refused too.
+        let revoked_admin = insert_key_for_device(&state.pool, None, "revoked").await;
+        let (s, b) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/keys/{revoked_admin}"),
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_device_forbidden(s, &b);
+        // The owner is not locked out.
+        let (s, _) = call(
+            &app,
+            "GET",
+            "/api/admin/device-policies",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200, "admin must keep access");
+        assert!(ban_row(&state.pool, &d).await.is_none(), "403 is not a ban");
+
+        // Own keys: allowed.
+        let own = insert_key_for_device(&state.pool, Some(&d), "active").await;
+        let (s, b) = call(
+            &app,
+            "POST",
+            &format!("/api/admin/keys/{own}/revoke"),
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "{b}");
+        let (s, b) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/keys/{own}"),
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "{b}");
+
+        // allow_all device: unchanged, may revoke and delete a non-device key.
+        let free = insert_device(&state.pool, "free").await;
+        let free_tok = insert_device_session(&state.pool, &free).await;
+        let other = insert_key_for_device(&state.pool, None, "active").await;
+        let (s, b) = call(
+            &app,
+            "POST",
+            &format!("/api/admin/keys/{other}/revoke"),
+            Some(&free_tok),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "{b}");
+        let (s, b) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/keys/{other}"),
+            Some(&free_tok),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "{b}");
+    }
+
+    /// A restricted device cannot delete another device; an allow_all device still can.
+    #[tokio::test]
+    async fn secrev2_restricted_device_cannot_delete_other_device() {
+        let (app, state, admin, d, dt) = fixture().await;
+        restrict(&app, &admin, &d, &["FOO"]).await;
+        let other = insert_device(&state.pool, "owner-phone").await;
+        let other_tok = insert_device_session(&state.pool, &other).await;
+        let (s, b) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/devices/{other}"),
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_device_forbidden(s, &b);
+        let (s, _) = call(
+            &app,
+            "GET",
+            "/api/admin/session/whoami",
+            Some(&other_tok),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert!(ban_row(&state.pool, &d).await.is_none());
+
+        // Unrestricted device: unchanged.
+        let free = insert_device(&state.pool, "free").await;
+        let free_tok = insert_device_session(&state.pool, &free).await;
+        let (s, b) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/devices/{other}"),
+            Some(&free_tok),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "{b}");
+        let (s, _) = call(
+            &app,
+            "GET",
+            "/api/admin/session/whoami",
+            Some(&other_tok),
+            None,
+        )
+        .await;
+        assert_eq!(s, 401);
+    }
+
+    /// A restricted device cannot create (or revoke/delete) a secret-request link, so it
+    /// can't use the public collect endpoint to write a name its policy forbids.
+    #[tokio::test]
+    async fn secrev2_secret_request_refused_for_restricted_device() {
+        let (app, state, admin, d, dt) = fixture().await;
+        restrict(&app, &admin, &d, &["FOO"]).await;
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/api/admin/secret-requests",
+            Some(&dt),
+            Some(serde_json::json!({"description": "x", "key_prefix": "OPENROUTER_"})),
+        )
+        .await;
+        assert_device_forbidden(s, &b);
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM secret_requests")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(kv_value(&state.pool, "OPENROUTER_EVIL").await, None);
+
+        // Owner-created request: the restricted device can neither revoke nor delete it.
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/api/admin/secret-requests",
+            Some(&admin),
+            Some(serde_json::json!({"description": "x"})),
+        )
+        .await;
+        assert_eq!(s, 201, "{b}");
+        let id = json(&b)["id"].as_str().unwrap().to_string();
+        let (s, b) = call(
+            &app,
+            "POST",
+            &format!("/api/admin/secret-requests/{id}/revoke"),
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_device_forbidden(s, &b);
+        let (s, b) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/secret-requests/{id}"),
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_device_forbidden(s, &b);
+        assert!(ban_row(&state.pool, &d).await.is_none());
+
+        // allow_all device: unchanged.
+        let free = insert_device(&state.pool, "free").await;
+        let free_tok = insert_device_session(&state.pool, &free).await;
+        let (s, b) = call(
+            &app,
+            "POST",
+            &format!("/api/admin/secret-requests/{id}/revoke"),
+            Some(&free_tok),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "{b}");
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/api/admin/secret-requests",
+            Some(&free_tok),
+            Some(serde_json::json!({"description": "y"})),
+        )
+        .await;
+        assert_eq!(s, 201, "{b}");
+    }
+
+    /// Secret-request and faux-approval listings hide names a restricted device's policy
+    /// refuses (never a ban); non-device callers see everything.
+    #[tokio::test]
+    async fn secrev2_secret_request_listings_filtered() {
+        let (app, state, admin, d, dt) = fixture().await;
+        restrict(&app, &admin, &d, &["FOO"]).await;
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/api/admin/secret-requests",
+            Some(&admin),
+            Some(
+                serde_json::json!({"description": "x", "required_keys": ["SECRET_PROD_DB", "FOO"]}),
+            ),
+        )
+        .await;
+        assert_eq!(s, 201, "{b}");
+        let sr = json(&b)["id"].as_str().unwrap().to_string();
+        let (s, b) = call(&app, "POST", "/api/admin/secret-requests", Some(&admin),
+            Some(serde_json::json!({"description": "p", "key_prefix": "HIDDEN_NS_", "required_keys": ["FOO"]}))).await;
+        assert_eq!(s, 201, "{b}");
+        for (msg, id) in [
+            ("Recipient bypassed required key 'SECRET_PROD_DB'", "fa1"),
+            (
+                "Recipient bypassed required key 'FOO' — note: \"later 'SECRET_X'\"",
+                "fa2",
+            ),
+            ("something unparseable SECRET_Y", "fa3"),
+        ] {
+            sqlx::query("INSERT INTO faux_approvals (id, owner_id, secret_request_id, message) VALUES (?, ?, ?, ?)")
+                .bind(id).bind(TEST_OWNER).bind(&sr).bind(msg)
+                .execute(&state.pool).await.unwrap();
+        }
+
+        let (s, b) = call(&app, "GET", "/api/admin/secret-requests", Some(&dt), None).await;
+        assert_eq!(s, 200);
+        assert!(!b.contains("SECRET_PROD_DB"), "{b}");
+        assert!(!b.contains("HIDDEN_NS_"), "{b}");
+        let rows = json(&b);
+        let first = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["description"] == "x")
+            .unwrap();
+        assert_eq!(first["required_keys"], "[\"FOO\"]");
+        // FOO under prefix HIDDEN_NS_ would be stored as HIDDEN_NS_FOO, which isn't allowed.
+        let second = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["description"] == "p")
+            .unwrap();
+        assert_eq!(second["required_keys"], "[]");
+        assert!(second["key_prefix"].is_null());
+
+        let (s, b) = call(&app, "GET", "/api/admin/faux-approvals", Some(&dt), None).await;
+        assert_eq!(s, 200);
+        let ids: Vec<String> = json(&b)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(ids, vec!["fa2".to_string()], "{b}");
+        assert!(ban_row(&state.pool, &d).await.is_none());
+
+        // Non-device caller: unfiltered.
+        let (_, b) = call(
+            &app,
+            "GET",
+            "/api/admin/secret-requests",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert!(
+            b.contains("SECRET_PROD_DB") && b.contains("HIDDEN_NS_"),
+            "{b}"
+        );
+        let (_, b) = call(&app, "GET", "/api/admin/faux-approvals", Some(&admin), None).await;
+        assert_eq!(json(&b).as_array().unwrap().len(), 3);
+    }
+
+    /// Restricted device logout revokes only its own token; an unrestricted caller's logout
+    /// still revokes every owner session.
+    #[tokio::test]
+    async fn secrev2_restricted_device_logout_revokes_only_itself() {
+        let (app, state, admin, d, dt) = fixture().await;
+        restrict(&app, &admin, &d, &["FOO"]).await;
+        let other = insert_device(&state.pool, "phone").await;
+        let other_tok = insert_device_session(&state.pool, &other).await;
+        let (s, _) = call(&app, "POST", "/api/admin/session/logout", Some(&dt), None).await;
+        assert_eq!(s, 303);
+        let (s, _) = call(&app, "GET", "/api/admin/session/whoami", Some(&dt), None).await;
+        assert_eq!(s, 401, "caller's own token revoked");
+        for t in [&admin, &other_tok] {
+            let (s, _) = call(&app, "GET", "/api/admin/session/whoami", Some(t), None).await;
+            assert_eq!(s, 200, "other sessions survive");
+        }
+        // Unrestricted (allow_all) device: unchanged — all owner sessions revoked.
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/api/admin/session/logout",
+            Some(&other_tok),
+            None,
+        )
+        .await;
+        assert_eq!(s, 303);
+        let (s, _) = call(&app, "GET", "/api/admin/session/whoami", Some(&admin), None).await;
+        assert_eq!(s, 401);
+    }
+
+    /// Every other credential/device-revoking or approving route is fenced for restricted
+    /// devices (plain 403, no ban) and unchanged for the owner.
+    #[tokio::test]
+    async fn secrev2_restricted_device_fenced_routes() {
+        let (app, state, admin, d, dt) = fixture().await;
+        restrict(&app, &admin, &d, &["FOO"]).await;
+        let calls: Vec<(&str, &str, Option<serde_json::Value>)> = vec![
+            ("DELETE", "/api/admin/keys/revoked-sessions", None),
+            (
+                "POST",
+                "/api/admin/approvals/x/approve",
+                Some(serde_json::json!({"confirm": "x"})),
+            ),
+            ("POST", "/api/admin/approvals/x/reject", None),
+            ("DELETE", "/api/admin/blocked-ips/203.0.113.9", None),
+            ("POST", "/api/admin/device-proposals/x/reject", None),
+            ("POST", "/api/admin/session-requests/x/reject", None),
+            ("DELETE", "/api/admin/faux-approvals/x", None),
+        ];
+        for (m, path, body) in &calls {
+            let (s, b) = call(&app, m, path, Some(&dt), body.clone()).await;
+            assert_device_forbidden(s, &format!("{m} {path}: {b}"));
+        }
+        assert!(ban_row(&state.pool, &d).await.is_none());
+        let (s, _) = call(&app, "GET", "/api/admin/session/whoami", Some(&dt), None).await;
+        assert_eq!(s, 200, "no ban, device still works");
+        // Owner: unchanged (not 403).
+        for (m, path, body) in &calls {
+            let (s, b) = call(&app, m, path, Some(&admin), body.clone()).await;
+            assert_ne!(s, 403, "{m} {path}: {b}");
+        }
+    }
+
+    /// H1 regression: one-time key minted by a (then allow_all) device, device later banned:
+    /// refused before consumption; after unban it still works once.
+    #[tokio::test]
+    async fn secrev2_one_time_key_not_consumed_while_banned() {
+        let (app, state, admin, d, dt) = fixture().await;
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/api/admin/keys",
+            Some(&dt),
+            Some(
+                serde_json::json!({"label": "ot", "key_type": "one_time", "allowed_keys": ["FOO"]}),
+            ),
+        )
+        .await;
+        assert_eq!(s, 201, "{b}");
+        let key = json(&b)["key"].as_str().unwrap().to_string();
+        ban_now(&state.pool, &d).await;
+        let resp = app
+            .clone()
+            .oneshot(get_req("/kv/FOO", None, Some(key.clone())))
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 403);
+        let (s, _) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/device-policies/{d}/ban"),
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert!(s == 204 || s == 200, "unban {s}");
+        let resp = app
+            .clone()
+            .oneshot(get_req("/kv/FOO", None, Some(key)))
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+    }
+
+    /// C2 regression: deleting a device that minted keys with allowlists + approval
+    /// requests works, and leaves other devices' / non-device keys alone.
+    #[tokio::test]
+    async fn secrev2_delete_device_with_minted_dependents() {
+        let (app, state, admin, d, dt) = fixture().await;
+        let other = insert_device(&state.pool, "other").await;
+        let other_tok = insert_device_session(&state.pool, &other).await;
+        let (s, b) = call(&app, "POST", "/api/admin/keys", Some(&dt),
+            Some(serde_json::json!({"label": "ar", "key_type": "approval_required", "allowed_keys": ["FOO"]}))).await;
+        assert_eq!(s, 201, "{b}");
+        let ar_id = json(&b)["id"].as_str().unwrap().to_string();
+        let _ = call(
+            &app,
+            "POST",
+            &format!("/api/admin/keys/{ar_id}/request-approval"),
+            None,
+            None,
+        )
+        .await;
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/api/admin/session/cli-token",
+            Some(&dt),
+            Some(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(s, 200, "{b}");
+        let cli: String = serde_json::from_str(&b).unwrap();
+        let (s, b) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/devices/{d}"),
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "{b}");
+        for t in [&dt, &cli] {
+            let (s, _) = call(&app, "GET", "/api/admin/session/whoami", Some(t), None).await;
+            assert_eq!(s, 401);
+        }
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM api_keys WHERE device_id IS NULL AND id != ?")
+                .bind(&ar_id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert!(n >= 1, "admin key survived");
+        let (s, _) = call(
+            &app,
+            "GET",
+            "/api/admin/session/whoami",
+            Some(&other_tok),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        let (s, _) = call(&app, "GET", "/api/admin/session/whoami", Some(&admin), None).await;
+        assert_eq!(s, 200);
+    }
 }

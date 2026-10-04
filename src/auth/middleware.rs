@@ -13,6 +13,9 @@ pub struct SessionClaims {
     /// ask "who am I" (see admin::handlers::whoami). None for OIDC cookies and other
     /// non-device-bound credentials.
     pub device_id: Option<String>,
+    /// `api_keys.id` of the presented session/approval token. None in dev mode. Lets a
+    /// restricted device's logout revoke only its own token.
+    pub api_key_id: Option<String>,
     /// Resolved client IP (from ip_block's `ClientIp` extension), recorded on device bans.
     pub client_ip: Option<IpAddr>,
 }
@@ -52,6 +55,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
                 oidc_subject: "dev".to_string(),
                 email: Some("dev@localhost".to_string()),
                 device_id: None,
+                api_key_id: None,
                 client_ip: parts.extensions.get::<ClientIp>().map(|c| c.0),
             }));
         }
@@ -65,7 +69,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
         // distinguishable from a genuinely unknown token: the former is a benign
         // re-auth (SessionExpired, uncounted), the latter a real failure.
         let row = sqlx::query!(
-            "SELECT owner_id, label, expires_at, device_id
+            "SELECT id, owner_id, label, expires_at, device_id
              FROM api_keys
              WHERE key_hash = ? AND type IN ('session', 'approval') AND status = 'active'",
             key_hash
@@ -94,6 +98,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
             oidc_subject: row.owner_id,
             email: Some(row.label),
             device_id: row.device_id,
+            api_key_id: Some(row.id),
             client_ip: parts.extensions.get::<ClientIp>().map(|c| c.0),
         }))
     }

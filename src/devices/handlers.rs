@@ -178,6 +178,9 @@ pub async fn delete(
             "a device cannot delete itself".to_string(),
         ));
     }
+    // A restricted device must not delete other devices either (it could remove the
+    // owner's phone and with it the owner's sessions).
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
 
     let mut tx = state.pool.begin().await?;
 
@@ -470,9 +473,10 @@ pub async fn link_proposal(
 
 pub async fn reject_proposal(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let updated = sqlx::query!(
         "UPDATE device_proposals SET status = 'rejected' WHERE id = ? AND status = 'pending'",
         id

@@ -182,10 +182,47 @@ pub async fn ensure_may_manage_credentials(
     pool: &SqlitePool,
     claims: &SessionClaims,
 ) -> Result<(), AppError> {
-    if let Some(device_id) = claims.device_id.as_deref() {
-        if is_restricted(pool, device_id).await? {
-            return Err(forbidden_for_device());
-        }
+    if restricted_caller(pool, claims).await?.is_some() {
+        return Err(forbidden_for_device());
+    }
+    Ok(())
+}
+
+/// `Some(device_id)` when the caller is a policy-restricted device, else `None`
+/// (non-device caller, or a device with no policy / allow_all).
+pub async fn restricted_caller<'c>(
+    pool: &SqlitePool,
+    claims: &'c SessionClaims,
+) -> Result<Option<&'c str>, AppError> {
+    match claims.device_id.as_deref() {
+        Some(device_id) if is_restricted(pool, device_id).await? => Ok(Some(device_id)),
+        _ => Ok(None),
+    }
+}
+
+/// Revoking / deleting a single `api_keys` row: a restricted device may only touch
+/// credentials attributed to itself (`api_keys.device_id` = its own id), never the owner's
+/// web/CLI sessions or another device's tokens (owner lockout). Anything else — including an
+/// unknown id, so there's no existence oracle — is the plain [`forbidden_for_device`] 403.
+/// Everyone else passes unchanged.
+pub async fn ensure_may_manage_api_key(
+    pool: &SqlitePool,
+    claims: &SessionClaims,
+    api_key_id: &str,
+) -> Result<(), AppError> {
+    let Some(device_id) = restricted_caller(pool, claims).await? else {
+        return Ok(());
+    };
+    let key_device = sqlx::query_scalar!(
+        "SELECT device_id FROM api_keys WHERE id = ? AND owner_id = ?",
+        api_key_id,
+        claims.oidc_subject
+    )
+    .fetch_optional(pool)
+    .await?
+    .flatten();
+    if key_device.as_deref() != Some(device_id) {
+        return Err(forbidden_for_device());
     }
     Ok(())
 }
