@@ -123,22 +123,58 @@ KV entry *names* (migration 0040, `src/device_policy/`):
 
 - `allow_all` (default; no `device_policies` row behaves identically), `allow_list`,
   `deny_list`, `regex` (whole-name match, anchored `^(?:pat)$`, ≤512 chars, size-limited).
-- **Violation** = a device-attributable request to read a specific KV value the policy doesn't
-  allow (`GET /kv/{key}` with a device Bearer, `GET /api/admin/kv/{key}/value`,
-  `GET /api/{admin/,}devices/{id}/kv/{key}`, provisioned-key envelopes linked to KV entries).
-  Listing names is not a violation. The device is banned for
-  `DEVICE_BAN_BASE_SECS` (default 86400) × 2^(n-1), capped at 30 days, a high-priority
-  notification is sent (names only), and the response is 403 `{"error":"device banned"}`.
-- **While banned** every device-attributable request (AdminAuth / Bearer KV / session-request
-  challenge, create, poll, approve for that device) gets the same 403. Expired bans are ignored
-  and cleared by TTL cleanup; `ban_count` is kept so repeat offences escalate.
+  The bare pattern must compile on its own before it is anchored, so unbalanced parentheses
+  (`FOO)|(.*`) can't escape the anchors — such patterns are rejected with 400.
+- **Device-attributable credential** = any `api_keys` row with `device_id` set: the device's
+  own session token AND every credential that device session mints itself (`POST
+  /api/admin/keys` of any type, `/session-key`, `/session/cli-token`,
+  `/session/device-token`, and session-request approval for its own device). Such credentials
+  carry the minting device's id, so its ban and policy follow them on every auth path
+  (AdminAuth cookie/Bearer, `/kv` Bearer, `X-Api-Key`). Tokens minted from an OIDC/admin
+  (non-device) session are **not** device-attributed.
+- **Violation** = a device-attributable request to read, write, delete or import a specific KV
+  entry the policy doesn't allow: `GET/PUT/DELETE /kv/{key}` (Bearer or `X-Api-Key`),
+  `GET /api/admin/kv/{key}/value`, `PUT /api/admin/kv`, `DELETE /api/admin/kv/{key}`,
+  `POST /api/admin/kv/device`, `POST /api/admin/kv/import` (every resulting name, prefix
+  included; checked before anything is written, so one bad name imports nothing),
+  `GET /api/{admin/,}devices/{id}/kv/{key}`, provisioned-key envelopes linked to KV entries.
+  A disallowed name is a violation whether or not the entry exists (no existence oracle).
+  The device is banned for `DEVICE_BAN_BASE_SECS` (default 86400, clamped to ≥ 60 with a
+  warning) × 2^(n-1), capped at 30 days, a high-priority notification is sent (names only),
+  and the response is 403 `{"error":"device banned"}`. Concurrent violations escalate once.
+- **Listings never ban**: for a restricted device, names-only listings (`GET /kv`,
+  `GET /api/admin/kv`, `GET /api/admin/kv/keys`, the access log, `allowed_keys` in
+  `GET /api/admin/keys`) are filtered to the names its policy allows.
+- **While banned** every device-attributable request (AdminAuth / Bearer KV / `X-Api-Key`,
+  session-request create, poll/claim, approve for that device) gets the same 403. The
+  unauthenticated `POST /session-request/challenge` deliberately does **not** check bans (it
+  would be a ban-status oracle); possession-proven `create_request` does. Expired bans are
+  ignored and cleared by TTL cleanup; `ban_count` is kept so repeat offences escalate.
 - Bans/violations are **not auth failures**: no `AuthFailed` marker, neither per-IP counter moves.
-- A policy-restricted device (mode ≠ `allow_all`) also cannot mint non-device-bound credentials
-  (API keys, CLI/approval tokens, session keys) or fetch management-key envelopes (plain 403,
-  no ban), and no device can delete itself.
+- A policy-restricted device (mode ≠ `allow_all`) is refused (plain 403 "not permitted for
+  this device", no ban) on identity/credential management: minting credentials, management-key
+  envelopes, WebAuthn passkey register begin/finish and credential delete, device register
+  begin/finish, device-proposal link, and approving a session request for any device other
+  than itself (`ensure_may_manage_credentials`). `allow_all` devices keep full behaviour (the
+  Android app approves other devices' session requests). No device can delete itself.
+- **Device deletion** (`DELETE /api/admin/devices/:id`) deletes, in one transaction, every
+  `api_keys` row attributed to the device (its sessions and the tokens it minted) with their
+  dependents (`api_key_allowed_keys`, `approval_requests`, `device_auth_requests`), plus its
+  `session_requests`, `session_request_challenges`, linked `device_proposals`, policy and ban
+  rows. Attributed keys are never detached (`device_id = NULL` would make a live device token
+  an unrestricted non-device credential).
+- `GET /api/{admin/,}devices/{id}/kv/{key}` called by a **non-device** caller (or another
+  device) still applies the *path* device's ban and policy, as a plain 403 with no ban
+  recorded. This is intentional: kv_cli on the device host may fetch with an approval token,
+  and a path parameter must never be able to get a device banned.
 - Management API `/api/admin/device-policies` (`GET /`, `PUT /:device_id`,
-  `DELETE /:device_id/ban`, `GET /bans`) is closed to device-bound sessions (403) so a device
-  can't relax its own policy or unban itself.
+  `DELETE /:device_id/ban`, `GET /bans`) is closed to device-attributable credentials (403) so
+  a device can't relax its own policy or unban itself — including via tokens it minted.
+- **Residual risks**: (1) tokens minted from a non-device (OIDC/admin) session and stored on a
+  device host — e.g. a kv_cli approval token — are not device-attributed and bypass the
+  device's policy, ban and the policy-admin lockout. (2) Devices enrolled by an `allow_all`
+  device before it was restricted are separate devices with their own (default `allow_all`)
+  policies; restricting the enroller does not restrict them. (3) `ban_count` never decays.
 
 ---
 

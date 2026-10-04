@@ -12,8 +12,14 @@
 -- (DEVICE_BAN_BASE_SECS * 2^(n-1), capped at 30 days) during which every device-attributable
 -- request is rejected. ban_count survives unbans/expiry so repeat offences escalate.
 --
+-- Attribution: a device-bound session (and every credential that session mints) carries the
+-- device in api_keys.device_id (0038), so the device's ban and policy apply to all of them.
+--
 -- Rows are removed with their device (ON DELETE CASCADE, foreign_keys is enabled on the pool;
--- devices::handlers::delete also deletes them explicitly).
+-- devices::handlers::delete also deletes them explicitly). api_keys.device_id (0038) has no ON
+-- DELETE action, so device deletion explicitly DELETES the device's api_keys rows (+ their
+-- dependents) in the same transaction — never NULLs them, which would turn a live device token
+-- into an unrestricted non-device credential.
 
 CREATE TABLE device_policies (
     device_id  TEXT PRIMARY KEY REFERENCES devices(id) ON DELETE CASCADE,

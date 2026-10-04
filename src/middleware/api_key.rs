@@ -54,8 +54,10 @@ pub struct ApiKeyAuth {
     /// None = session token = full access to all keys.
     /// Some(keys) = manual token restricted to the listed KV key names.
     pub allowed_keys: Option<Vec<String>>,
-    /// Some only for a device-bound session Bearer token. Handlers reading a specific
-    /// KV value must pass it through `device_policy::enforce::authorize_key`.
+    /// Some for a device-attributable credential: a device-bound session Bearer token, or
+    /// an X-Api-Key minted by a device session. Handlers touching a specific KV entry
+    /// (read/write/delete) must pass it through `device_policy::enforce::authorize_key`;
+    /// listings filter by `device_policy::enforce::listing_filter`.
     pub device_id: Option<String>,
     pub client_ip: Option<IpAddr>,
 }
@@ -233,7 +235,7 @@ async fn auth_manual_key(
     let key_hash = crate::keys::generate::hash_key(raw_key);
 
     let api_key = sqlx::query!(
-        "SELECT id, type as key_type, status, expires_at, owner_id
+        "SELECT id, type as key_type, status, expires_at, owner_id, device_id
          FROM api_keys
          WHERE key_hash = ? AND type NOT IN ('session', 'Bearer')",
         key_hash
@@ -332,6 +334,14 @@ async fn auth_manual_key(
         }
     }
 
+    // A key minted by a device session inherits that device's ban (and, in the handlers,
+    // its key policy). Checked only once the key is proven valid — so revoked/expired keys
+    // still count as failures above — and before a one-time key is consumed. DeviceBanned
+    // carries no AuthFailed marker.
+    if let Some(ref device_id) = api_key.device_id {
+        crate::device_policy::enforce::ensure_not_banned(&state.pool, device_id).await?;
+    }
+
     let allowed_keys = fetch_allowed_keys(&state.pool, &api_key.id).await?;
 
     // Consume one-time key after allowlist is confirmed fetchable.
@@ -367,7 +377,7 @@ async fn auth_manual_key(
         api_key_id: Some(api_key.id),
         op,
         allowed_keys: Some(allowed_keys),
-        device_id: None,
+        device_id: api_key.device_id,
         client_ip,
     })
 }

@@ -29,7 +29,8 @@ either counter.
 | 9  | `X-Api-Key` revoked/used                    | ++           | ++            |
 | 10 | `X-Api-Key` valid, wrong scope              | —            | —             |
 | 11 | No credentials, open-access GET             | —            | —             |
-| 12 | Device-bound session, device policy violation / banned device | — | —      |
+| 12 | Device-attributable credential (session, or Bearer/`X-Api-Key` minted by a device), device policy violation / banned device | — | — |
+| 13 | Restricted device refused identity/credential management (plain 403) | — | — |
 
 Notes:
 
@@ -42,4 +43,13 @@ Notes:
 - **Device policy violation / banned device (12)** is `DeviceBanned` (403
   `{"error":"device banned"}`), not an auth failure — like wrong scope, neither counter
   moves. The device itself is penalised instead (escalating ban in `device_bans`, see
-  `src/device_policy/enforce.rs`).
+  `src/device_policy/enforce.rs`). Applies to reads, writes, deletes and imports, and to
+  credentials the device minted (they carry its `device_id`). For `X-Api-Key` the ban is
+  checked only after the key is proven valid (rows 8/9 still count) and before a one-time
+  key is consumed.
+- **Restricted-device refusal (13)** — minting credentials, passkey/device enrolment,
+  proposal linking, approving another device's session request, management-key envelopes —
+  is `Forbidden` (403 "not permitted for this device"): no ban, neither counter moves.
+- Listing endpoints filter names for restricted devices and never ban.
+- A token whose device was deleted is gone (deleted with the device), so it behaves like an
+  unknown credential (rows 2/6).

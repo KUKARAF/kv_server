@@ -11,7 +11,7 @@ pub async fn run(pool: SqlitePool, interval_secs: u64) {
     }
 }
 
-async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
+pub(crate) async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
     let kv = sqlx::query!(
         "DELETE FROM kv_entries WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')"
     )

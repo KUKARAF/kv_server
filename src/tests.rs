@@ -1851,6 +1851,10 @@ mod device_policy_tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
+        build_policy_app_with_pool(pool).await
+    }
+
+    async fn build_policy_app_with_pool(pool: SqlitePool) -> (Router, Arc<AppState>) {
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         let state = AppState::new(pool, test_config(), None);
         let app = Router::new()
@@ -1864,6 +1868,10 @@ mod device_policy_tests {
             .nest(
                 "/api/admin/management-keys",
                 crate::management_keys::admin_router(),
+            )
+            .nest(
+                "/api/admin/device-proposals",
+                devices::proposal_admin_router(),
             )
             .nest("/api/admin", crate::admin::router())
             .nest("/session-request", crate::session_request::public_router())
@@ -2052,15 +2060,7 @@ mod device_policy_tests {
         assert_banned(s, &b);
         let (s, b) = call(&app, "GET", "/api/admin/session/whoami", Some(&dt), None).await;
         assert_banned(s, &b);
-        let (s, b) = call(
-            &app,
-            "POST",
-            "/session-request/challenge",
-            None,
-            Some(serde_json::json!({ "device_id": device_id })),
-        )
-        .await;
-        assert_banned(s, &b);
+        // (Session-request minting while banned: see session_request_flow_refused_while_banned.)
 
         // Owner sees the ban in the listing and the active-bans endpoint.
         let (s, b) = call(
@@ -2428,6 +2428,10 @@ mod device_policy_tests {
             serde_json::json!({ "mode": "regex", "pattern": "(" }),
             serde_json::json!({ "mode": "regex", "pattern": "a".repeat(513) }),
             serde_json::json!({ "mode": "regex", "pattern": r"\w{1000}\w{1000}" }),
+            // Anchor escapes: invalid on their own, valid only once wrapped in ^(?:…)$.
+            serde_json::json!({ "mode": "regex", "pattern": "FOO)|(.*" }),
+            serde_json::json!({ "mode": "regex", "pattern": "FOO)|.*(?:" }),
+            serde_json::json!({ "mode": "regex", "pattern": "a)|(b" }),
         ];
         for b in bad {
             let (s, _) = put_policy(&app, &admin, &device_id, b.clone()).await;
@@ -2552,7 +2556,7 @@ mod device_policy_tests {
     #[tokio::test]
     async fn deleting_device_removes_policy_and_ban_rows() {
         let (app, state, admin, _device_id, _dt) = fixture().await;
-        // A device without sessions (api_keys.device_id has no ON DELETE action).
+        // (Devices WITH sessions/minted tokens: deleting_device_deletes_all_its_credentials.)
         let d = insert_device(&state.pool, "old-phone").await;
         put_policy(
             &app,
@@ -2589,5 +2593,1271 @@ mod device_policy_tests {
                     .unwrap();
             assert_eq!(n, 0, "{table} row left behind");
         }
+    }
+
+    // ── Helpers for flows needing a real device keypair ─────────────────────────
+
+    use aes_gcm::{
+        aead::{Aead, KeyInit, Payload},
+        Aes256Gcm, Key, Nonce,
+    };
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use hkdf::Hkdf;
+    use rand_core::OsRng;
+    use sha2::Sha256;
+    use x25519_dalek::{PublicKey, StaticSecret};
+
+    async fn insert_device_with_key(pool: &SqlitePool, name: &str) -> (String, StaticSecret) {
+        let secret = StaticSecret::random_from_rng(OsRng);
+        let pub_b64 = STANDARD.encode(PublicKey::from(&secret).as_bytes());
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO devices (id, owner_id, name, public_key, key_type) VALUES (?, ?, ?, ?, 'x25519')",
+        )
+        .bind(&id)
+        .bind(TEST_OWNER)
+        .bind(name)
+        .bind(&pub_b64)
+        .execute(pool)
+        .await
+        .unwrap();
+        (id, secret)
+    }
+
+    fn decrypt_envelope(secret: &StaticSecret, env: &serde_json::Value) -> Vec<u8> {
+        let r = &env["recipient"];
+        let eph: [u8; 32] = STANDARD
+            .decode(r["ephemeral_pub"].as_str().unwrap())
+            .unwrap()
+            .try_into()
+            .unwrap();
+        let shared = secret.diffie_hellman(&PublicKey::from(eph));
+        let hk = Hkdf::<Sha256>::new(Some(&[0u8; 32]), shared.as_bytes());
+        let mut wrap_key = [0u8; 32];
+        hk.expand(b"kv-device-wrap", &mut wrap_key).unwrap();
+        let dek = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&wrap_key))
+            .decrypt(
+                Nonce::from_slice(&STANDARD.decode(r["dek_nonce"].as_str().unwrap()).unwrap()),
+                STANDARD
+                    .decode(r["encrypted_dek"].as_str().unwrap())
+                    .unwrap()
+                    .as_ref(),
+            )
+            .unwrap();
+        Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&dek))
+            .decrypt(
+                Nonce::from_slice(&STANDARD.decode(env["nonce"].as_str().unwrap()).unwrap()),
+                Payload {
+                    msg: &STANDARD
+                        .decode(env["ciphertext"].as_str().unwrap())
+                        .unwrap(),
+                    aad: &STANDARD.decode(env["aad"].as_str().unwrap()).unwrap(),
+                },
+            )
+            .unwrap()
+    }
+
+    /// POST /session-request/challenge → (challenge_id, decrypted nonce).
+    async fn challenge(app: &Router, device_id: &str, secret: &StaticSecret) -> (String, String) {
+        let (s, b) = call(
+            app,
+            "POST",
+            "/session-request/challenge",
+            None,
+            Some(serde_json::json!({ "device_id": device_id })),
+        )
+        .await;
+        assert_eq!(s, 201, "challenge: {b}");
+        let ch = json(&b);
+        let nonce = String::from_utf8(decrypt_envelope(secret, &ch["envelope"])).unwrap();
+        (ch["challenge_id"].as_str().unwrap().to_string(), nonce)
+    }
+
+    async fn create_request(app: &Router, challenge_id: &str, nonce: &str) -> (u16, String) {
+        call(
+            app,
+            "POST",
+            "/session-request",
+            None,
+            Some(serde_json::json!({
+                "label": "twin", "requested_duration_hours": 24,
+                "challenge_id": challenge_id, "nonce": nonce,
+            })),
+        )
+        .await
+    }
+
+    /// challenge → create_request for `device_id`. Returns (id, poll_secret, approve_token).
+    async fn session_request(
+        app: &Router,
+        device_id: &str,
+        secret: &StaticSecret,
+    ) -> (String, String, String) {
+        let (cid, nonce) = challenge(app, device_id, secret).await;
+        let (s, b) = create_request(app, &cid, &nonce).await;
+        assert_eq!(s, 201, "create_request: {b}");
+        let c = json(&b);
+        (
+            c["id"].as_str().unwrap().to_string(),
+            c["poll_secret"].as_str().unwrap().to_string(),
+            c["approve_token"].as_str().unwrap().to_string(),
+        )
+    }
+
+    async fn approve(app: &Router, token: &str, id: &str, approve_token: &str) -> (u16, String) {
+        call(
+            app,
+            "POST",
+            &format!("/api/admin/session-requests/{id}/approve"),
+            Some(token),
+            Some(serde_json::json!({ "token": approve_token, "approved_duration_hours": 24 })),
+        )
+        .await
+    }
+
+    async fn poll(app: &Router, id: &str, poll_secret: &str) -> (u16, String) {
+        call(
+            app,
+            "GET",
+            &format!("/session-request/{id}/status?secret={poll_secret}"),
+            None,
+            None,
+        )
+        .await
+    }
+
+    async fn restrict(app: &Router, admin: &str, device_id: &str, keys: &[&str]) {
+        let (s, b) = put_policy(
+            app,
+            admin,
+            device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": keys }),
+        )
+        .await;
+        assert_eq!(s, 200, "restrict failed: {b}");
+    }
+
+    /// Fresh device + device-bound session, restricted to `keys`.
+    async fn restricted_device(
+        app: &Router,
+        pool: &SqlitePool,
+        admin: &str,
+        keys: &[&str],
+    ) -> (String, String) {
+        let d = insert_device(pool, &format!("dev-{}", Uuid::new_v4())).await;
+        let t = insert_device_session(pool, &d).await;
+        restrict(app, admin, &d, keys).await;
+        (d, t)
+    }
+
+    /// Writes an active ban row directly.
+    async fn ban_now(pool: &SqlitePool, device_id: &str) {
+        sqlx::query(
+            "INSERT INTO device_bans (device_id, owner_id, banned_at, unban_at, ban_count, last_key)
+             VALUES (?, ?, datetime('now'), datetime('now', '+1 hour'), 1, 'X')
+             ON CONFLICT(device_id) DO UPDATE SET banned_at = excluded.banned_at,
+                 unban_at = excluded.unban_at",
+        )
+        .bind(device_id)
+        .bind(TEST_OWNER)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn kv_value(pool: &SqlitePool, key: &str) -> Option<String> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT value FROM kv_entries WHERE key = ? AND owner_id = ?",
+        )
+        .bind(key)
+        .bind(TEST_OWNER)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    }
+
+    /// 403 that is NOT a ban (plain refusal), and no ban row was recorded.
+    async fn assert_refused_not_banned(pool: &SqlitePool, device_id: &str, s: u16, b: &str) {
+        assert_eq!(s, 403, "body: {b}");
+        assert_eq!(json(b)["error"], "not permitted for this device", "{b}");
+        assert!(
+            ban_row(pool, device_id).await.is_none(),
+            "a plain refusal must not ban"
+        );
+    }
+
+    // ── Security review PoCs (ported as regression tests) ───────────────────────
+
+    /// S1 (P0): a restricted device must not approve a session request for a sibling
+    /// (allow_all) twin and so obtain an unrestricted session.
+    #[tokio::test]
+    async fn secrev_s1_restricted_device_cannot_approve_twin() {
+        let (app, state) = build_policy_app().await;
+        seed_kv(&state.pool, &["OPENROUTER_API_KEY", "SECRET_DB"]).await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (d1, _) = insert_device_with_key(&state.pool, "d1-restricted").await;
+        let d1_token = insert_device_session(&state.pool, &d1).await;
+        restrict(&app, &admin, &d1, &["OPENROUTER_API_KEY"]).await;
+        let (d2, d2_sec) = insert_device_with_key(&state.pool, "d2-twin").await;
+
+        let (id, poll_secret, approve_token) = session_request(&app, &d2, &d2_sec).await;
+        let (s, b) = approve(&app, &d1_token, &id, &approve_token).await;
+        let approved = s == 204;
+
+        let (ss, sb) = poll(&app, &id, &poll_secret).await;
+        let v = json(&sb);
+        let mut twin_read = false;
+        if ss == 200 && v["envelope"].is_object() {
+            let token = String::from_utf8(decrypt_envelope(&d2_sec, &v["envelope"])).unwrap();
+            let (rs, _) = call(&app, "GET", "/kv/SECRET_DB", Some(&token), None).await;
+            twin_read = rs == 200;
+        }
+        assert!(
+            !(approved && twin_read),
+            "S1: restricted device minted a twin session that read forbidden SECRET_DB"
+        );
+        assert_refused_not_banned(&state.pool, &d1, s, &b).await;
+        assert_eq!(v["status"], "pending", "request must stay unapproved");
+    }
+
+    /// S2 (P0): deleting a device that owns a session token works, and the token dies.
+    #[tokio::test]
+    async fn secrev_s2_delete_device_with_session_token() {
+        let (app, state) = build_policy_app().await;
+        seed_kv(&state.pool, &["X"]).await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (d, _sec) = insert_device_with_key(&state.pool, "compromised").await;
+        let tok = insert_device_session(&state.pool, &d).await;
+
+        let (s, b) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/devices/{d}"),
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "S2: delete device with a session token: {s} {b}");
+        for path in [
+            "/kv/X",
+            "/api/admin/session/whoami",
+            "/api/admin/kv/X/value",
+        ] {
+            let (s, _) = call(&app, "GET", path, Some(&tok), None).await;
+            assert_eq!(s, 401, "{path}");
+        }
+    }
+
+    /// S3 (P1): unbalanced parens must not escape the ^(?:…)$ anchors.
+    #[tokio::test]
+    async fn secrev_s3_regex_anchor_escape() {
+        use crate::device_policy::enforce::policy_allows;
+        use crate::device_policy::model::PolicyMode;
+        let pat = "FOO)|(.*";
+        assert!(
+            !policy_allows(PolicyMode::Regex, &[], Some(pat), "SECRET_DB"),
+            "S3: regex '{pat}' escaped its anchors"
+        );
+        // …and it's rejected on save with 400.
+        let (app, _state, admin, device_id, _dt) = fixture().await;
+        for p in ["FOO)|(.*", "FOO)|.*(?:", "a)|(b"] {
+            let (s, _) = put_policy(
+                &app,
+                &admin,
+                &device_id,
+                serde_json::json!({ "mode": "regex", "pattern": p }),
+            )
+            .await;
+            assert_eq!(s, 400, "{p}");
+        }
+    }
+
+    /// S4 (P1): a restricted device can neither overwrite nor delete a disallowed key.
+    #[tokio::test]
+    async fn secrev_s4_restricted_device_cannot_write_disallowed_key() {
+        let (app, state) = build_policy_app().await;
+        seed_kv(&state.pool, &["ALLOWED", "OPENROUTER_API_KEY"]).await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (d, _sec) = insert_device_with_key(&state.pool, "writer").await;
+        let d_token = insert_device_session(&state.pool, &d).await;
+        restrict(&app, &admin, &d, &["ALLOWED"]).await;
+
+        let (s, b) = call(
+            &app,
+            "PUT",
+            "/kv/OPENROUTER_API_KEY",
+            Some(&d_token),
+            Some(serde_json::json!({ "value": "attacker-controlled" })),
+        )
+        .await;
+        assert!(s == 403, "S4: overwrote disallowed key (status {s}: {b})");
+        assert_banned(s, &b);
+        assert_eq!(
+            kv_value(&state.pool, "OPENROUTER_API_KEY").await.as_deref(),
+            Some("value-of-OPENROUTER_API_KEY")
+        );
+    }
+
+    /// S4 control: same via the admin KV write endpoint.
+    #[tokio::test]
+    async fn secrev_s4b_restricted_device_admin_write_kv() {
+        let (app, state) = build_policy_app().await;
+        seed_kv(&state.pool, &["ALLOWED"]).await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (d, _sec) = insert_device_with_key(&state.pool, "writer2").await;
+        let d_token = insert_device_session(&state.pool, &d).await;
+        restrict(&app, &admin, &d, &["ALLOWED"]).await;
+
+        let (s, b) = call(
+            &app,
+            "PUT",
+            "/api/admin/kv",
+            Some(&d_token),
+            Some(serde_json::json!({ "key": "OPENROUTER_API_KEY", "value": "x" })),
+        )
+        .await;
+        assert_eq!(s, 403, "S4: wrote disallowed key via /api/admin/kv ({b})");
+        assert!(kv_value(&state.pool, "OPENROUTER_API_KEY").await.is_none());
+    }
+
+    /// S5 (P1): a token minted by an allow_all device stays attributed to it, so a later
+    /// restriction applies to that token too.
+    #[tokio::test]
+    async fn secrev_s5_minted_token_follows_later_restriction() {
+        let (app, state) = build_policy_app().await;
+        seed_kv(&state.pool, &["SECRET_DB"]).await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (d, _sec) = insert_device_with_key(&state.pool, "sneaky").await;
+        let d_token = insert_device_session(&state.pool, &d).await;
+
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/api/admin/session/cli-token",
+            Some(&d_token),
+            Some(serde_json::json!({ "days": 30 })),
+        )
+        .await;
+        assert_eq!(s, 200, "cli-token mint failed: {b}");
+        let minted = json(&b).as_str().unwrap_or_default().to_string();
+        assert!(!minted.is_empty(), "no token minted");
+
+        restrict(&app, &admin, &d, &["NOTHING_USEFUL"]).await;
+
+        let (rs, rb) = call(
+            &app,
+            "GET",
+            "/api/admin/kv/SECRET_DB/value",
+            Some(&minted),
+            None,
+        )
+        .await;
+        assert_ne!(
+            rs, 200,
+            "S5: minted token still reads forbidden keys ({rb})"
+        );
+        assert_banned(rs, &rb);
+        assert_eq!(ban_row(&state.pool, &d).await.unwrap().1, 1);
+    }
+
+    // ── C1: identity / credential management from a restricted device ───────────
+
+    #[tokio::test]
+    async fn restricted_device_refused_identity_management() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        restrict(&app, &admin, &device_id, &["FOO"]).await;
+        sqlx::query(
+            "INSERT INTO zero_trust_credentials (id, owner_id, credential_id, public_key_cose, device_label)
+             VALUES ('cred-1', ?, 'Y3JlZA', '{}', 'yubikey')",
+        )
+        .bind(TEST_OWNER)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let b64 = "AAAA";
+        let reg_credential = serde_json::json!({
+            "id": b64, "rawId": b64, "type": "public-key", "extensions": {},
+            "response": { "attestationObject": b64, "clientDataJSON": b64 },
+        });
+        let assertion = serde_json::json!({
+            "id": b64, "rawId": b64, "type": "public-key", "extensions": {},
+            "response": {
+                "authenticatorData": b64, "clientDataJSON": b64,
+                "signature": b64, "userHandle": null,
+            },
+        });
+        let calls: Vec<(&str, String, Option<serde_json::Value>)> = vec![
+            (
+                "POST",
+                "/api/admin/webauthn/register/begin".into(),
+                Some(serde_json::json!({ "device_label": "evil" })),
+            ),
+            (
+                "POST",
+                "/api/admin/webauthn/register/finish".into(),
+                Some(serde_json::json!({ "challenge_id": "c", "credential": reg_credential })),
+            ),
+            (
+                "DELETE",
+                "/api/admin/webauthn/credentials/cred-1".into(),
+                None,
+            ),
+            (
+                "POST",
+                "/api/devices/register/begin".into(),
+                Some(
+                    serde_json::json!({ "name": "twin", "public_key": "AAAA", "key_type": "x25519" }),
+                ),
+            ),
+            (
+                "POST",
+                "/api/devices/register/finish".into(),
+                Some(serde_json::json!({ "challenge_id": "c", "assertion": assertion })),
+            ),
+            (
+                "POST",
+                "/api/admin/device-proposals/some-proposal/link".into(),
+                Some(serde_json::json!({ "device_id": device_id, "token": "t" })),
+            ),
+        ];
+        for (m, p, b) in &calls {
+            let (s, body) = call(&app, m, p, Some(&dt), b.clone()).await;
+            assert_eq!(s, 403, "{m} {p}: {body}");
+            assert_eq!(
+                json(&body)["error"],
+                "not permitted for this device",
+                "{m} {p}: {body}"
+            );
+        }
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM zero_trust_credentials")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "credential must not be deleted");
+        assert!(ban_row(&state.pool, &device_id).await.is_none());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            rate_count(&state),
+            0,
+            "plain 403 carries no AuthFailed marker"
+        );
+        assert_eq!(block_count(&state.pool).await, 0);
+
+        // An unrestricted device keeps today's behaviour (handler logic runs; here WebAuthn
+        // isn't configured in tests, so it's not a 403 from the guard) and may delete creds.
+        let free = insert_device(&state.pool, "free").await;
+        let ft = insert_device_session(&state.pool, &free).await;
+        for (m, p, b) in calls.iter().filter(|(_, p, _)| p.ends_with("/begin")) {
+            let (s, body) = call(&app, m, p, Some(&ft), b.clone()).await;
+            assert_ne!(json(&body)["error"], "not permitted for this device", "{p}");
+            assert_ne!(s, 403, "{p}: {body}");
+        }
+        let (s, _) = call(
+            &app,
+            "DELETE",
+            "/api/admin/webauthn/credentials/cred-1",
+            Some(&ft),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204);
+    }
+
+    #[tokio::test]
+    async fn session_approve_other_device_only_for_unrestricted_callers() {
+        let (app, state) = build_policy_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (d1, d1_sec) = insert_device_with_key(&state.pool, "phone").await;
+        let d1_token = insert_device_session(&state.pool, &d1).await;
+        let (d2, d2_sec) = insert_device_with_key(&state.pool, "laptop").await;
+
+        // allow_all device (the Android app) approves another device's request: allowed.
+        let (id, _, tok) = session_request(&app, &d2, &d2_sec).await;
+        let (s, b) = approve(&app, &d1_token, &id, &tok).await;
+        assert_eq!(s, 204, "{b}");
+
+        // Restricted: other device refused (no ban), own device still allowed.
+        restrict(&app, &admin, &d1, &["FOO"]).await;
+        let (id, _, tok) = session_request(&app, &d2, &d2_sec).await;
+        let (s, b) = approve(&app, &d1_token, &id, &tok).await;
+        assert_refused_not_banned(&state.pool, &d1, s, &b).await;
+        let (id, poll_secret, tok) = session_request(&app, &d1, &d1_sec).await;
+        let (s, b) = approve(&app, &d1_token, &id, &tok).await;
+        assert_eq!(s, 204, "own device: {b}");
+        // The new session is bound to d1 and therefore restricted like d1.
+        let (_, pb) = poll(&app, &id, &poll_secret).await;
+        let new_token =
+            String::from_utf8(decrypt_envelope(&d1_sec, &json(&pb)["envelope"])).unwrap();
+        let (s, b) = call(
+            &app,
+            "GET",
+            "/api/admin/session/whoami",
+            Some(&new_token),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert_eq!(json(&b)["device_id"], d1.as_str());
+    }
+
+    // ── H1: device-minted credentials stay attributed ───────────────────────────
+
+    #[tokio::test]
+    async fn device_minted_tokens_inherit_ban_and_policy() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+
+        // While allow_all, the device mints a standard X-Api-Key and a CLI (approval) token.
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/api/admin/keys",
+            Some(&dt),
+            Some(serde_json::json!({
+                "label": "minted", "key_type": "standard",
+                "allowed_keys": ["FOO", "OTHER_KEY"],
+            })),
+        )
+        .await;
+        assert_eq!(s, 201, "{b}");
+        let x_api_key = json(&b)["key"].as_str().unwrap().to_string();
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/api/admin/session/cli-token",
+            Some(&dt),
+            Some(serde_json::json!({ "days": 1 })),
+        )
+        .await;
+        assert_eq!(s, 200);
+        let cli = json(&b).as_str().unwrap().to_string();
+        let attributed: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM api_keys WHERE device_id = ?")
+                .bind(&device_id)
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert_eq!(attributed, 3, "session + 2 minted keys carry the device id");
+
+        // A device-attributed approval token is still a device credential: no policy admin.
+        let (s, _) = call(&app, "GET", "/api/admin/device-policies", Some(&cli), None).await;
+        assert_eq!(s, 403);
+        let (_, b) = call(&app, "GET", "/api/admin/session/whoami", Some(&cli), None).await;
+        assert_eq!(json(&b)["device_id"], device_id.as_str());
+
+        restrict(&app, &admin, &device_id, &["FOO"]).await;
+
+        let x_get = |path: &'static str, key: String| {
+            let app = app.clone();
+            async move {
+                let resp = app.oneshot(get_req(path, None, Some(key))).await.unwrap();
+                let s = resp.status().as_u16();
+                let b = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+                (s, String::from_utf8_lossy(&b).to_string())
+            }
+        };
+        // X-Api-Key: allowed by both key scope and device policy.
+        let (s, b) = x_get("/kv/FOO", x_api_key.clone()).await;
+        assert_eq!((s, b.as_str()), (200, "value-of-FOO"));
+        // In key scope, but the minting device's policy refuses it → device banned.
+        let (s, b) = x_get("/kv/OTHER_KEY", x_api_key.clone()).await;
+        assert_banned(s, &b);
+        assert_eq!(ban_row(&state.pool, &device_id).await.unwrap().1, 1);
+        // While banned every attributed credential is refused, even for allowed keys.
+        let (s, b) = x_get("/kv/FOO", x_api_key.clone()).await;
+        assert_banned(s, &b);
+        let (s, b) = call(&app, "GET", "/api/admin/session/whoami", Some(&cli), None).await;
+        assert_banned(s, &b);
+        let (s, b) = call(&app, "GET", "/kv/FOO", Some(&dt), None).await;
+        assert_banned(s, &b);
+
+        // Bearer: a session key minted by the device (unban first; minted while allow_all).
+        let unban = format!("/api/admin/device-policies/{device_id}/ban");
+        assert_eq!(
+            call(&app, "DELETE", &unban, Some(&admin), None).await.0,
+            204
+        );
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_all" }),
+        )
+        .await;
+        let (s, b) = call(&app, "POST", "/api/admin/session-key", Some(&dt), None).await;
+        assert_eq!(s, 201, "{b}");
+        let session_key = json(&b)["key"].as_str().unwrap().to_string();
+        restrict(&app, &admin, &device_id, &["FOO"]).await;
+        let (s, _) = call(&app, "GET", "/kv/FOO", Some(&session_key), None).await;
+        assert_eq!(s, 200);
+        let (s, b) = call(&app, "GET", "/kv/OTHER_KEY", Some(&session_key), None).await;
+        assert_banned(s, &b);
+        assert_eq!(ban_row(&state.pool, &device_id).await.unwrap().1, 2);
+
+        // Non-device admin credentials are never attributed.
+        let (_, b) = call(
+            &app,
+            "POST",
+            "/api/admin/session/cli-token",
+            Some(&admin),
+            Some(serde_json::json!({ "days": 1 })),
+        )
+        .await;
+        let plain = json(&b).as_str().unwrap().to_string();
+        let (s, b) = call(&app, "GET", "/api/admin/session/whoami", Some(&plain), None).await;
+        assert_eq!(s, 200);
+        assert!(json(&b)["device_id"].is_null());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(rate_count(&state), 0);
+        assert_eq!(block_count(&state.pool).await, 0);
+    }
+
+    // ── H2: writes / deletes / imports ──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn restricted_device_writes_deletes_imports_enforced() {
+        let (app, state, admin, _device_id, _dt) = fixture().await;
+        let free = insert_device(&state.pool, "rcpt").await;
+        let recipients = serde_json::json!([{
+            "device_id": free, "key_type": "x25519", "ephemeral_pub": "AA",
+            "dek_nonce": "AA", "encrypted_dek": "AA",
+        }]);
+        let device_write = |key: &str| {
+            serde_json::json!({
+                "key": key, "nonce": "AA", "ciphertext": "AA", "aad": "AA",
+                "recipients": recipients,
+            })
+        };
+        // Allowed operations succeed.
+        let (d, t) = restricted_device(&app, &state.pool, &admin, &["FOO", "P_A", "NEW"]).await;
+        let ok: Vec<(&str, &str, Option<serde_json::Value>, u16)> = vec![
+            (
+                "PUT",
+                "/kv/FOO",
+                Some(serde_json::json!({ "value": "v2" })),
+                204,
+            ),
+            (
+                "PUT",
+                "/api/admin/kv",
+                Some(serde_json::json!({ "key": "NEW", "value": "n" })),
+                204,
+            ),
+            (
+                "POST",
+                "/api/admin/kv/device",
+                Some(device_write("NEW")),
+                201,
+            ),
+            (
+                "POST",
+                "/api/admin/kv/import",
+                Some(serde_json::json!({ "content": "A=1\n# c", "prefix": "P_" })),
+                200,
+            ),
+            ("DELETE", "/kv/FOO", None, 204),
+            ("DELETE", "/api/admin/kv/P_A", None, 204),
+        ];
+        for (m, p, b, want) in ok {
+            let (s, body) = call(&app, m, p, Some(&t), b).await;
+            assert_eq!(s, want, "{m} {p}: {body}");
+        }
+        assert!(ban_row(&state.pool, &d).await.is_none());
+
+        // Each disallowed operation bans a fresh device and changes nothing.
+        let bad: Vec<(&str, &str, Option<serde_json::Value>)> = vec![
+            (
+                "PUT",
+                "/kv/OTHER_KEY",
+                Some(serde_json::json!({ "value": "evil" })),
+            ),
+            ("DELETE", "/kv/OTHER_KEY", None),
+            (
+                "PUT",
+                "/api/admin/kv",
+                Some(serde_json::json!({ "key": "OTHER_KEY", "value": "evil" })),
+            ),
+            ("DELETE", "/api/admin/kv/OTHER_KEY", None),
+            (
+                "POST",
+                "/api/admin/kv/device",
+                Some(device_write("OTHER_KEY")),
+            ),
+            // The prefix is part of the checked name: P_B is not allowed, so nothing
+            // (not even the allowed P_A) is imported.
+            (
+                "POST",
+                "/api/admin/kv/import",
+                Some(serde_json::json!({ "content": "A=1\nB=2", "prefix": "P_" })),
+            ),
+            // Allowed bare name, disallowed once prefixed.
+            (
+                "POST",
+                "/api/admin/kv/import",
+                Some(serde_json::json!({ "content": "FOO=1", "prefix": "X_" })),
+            ),
+        ];
+        for (m, p, b) in bad {
+            let (d, t) = restricted_device(&app, &state.pool, &admin, &["FOO", "P_A"]).await;
+            let (s, body) = call(&app, m, p, Some(&t), b).await;
+            assert_banned(s, &body);
+            assert_eq!(ban_row(&state.pool, &d).await.unwrap().1, 1, "{m} {p}");
+        }
+        assert_eq!(
+            kv_value(&state.pool, "OTHER_KEY").await.as_deref(),
+            Some("value-of-OTHER_KEY")
+        );
+        for k in ["P_A", "P_B", "X_FOO"] {
+            assert!(kv_value(&state.pool, k).await.is_none(), "{k} imported");
+        }
+        let dkv: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM device_kv_bodies WHERE kv_key = 'OTHER_KEY'")
+                .fetch_one(&state.pool)
+                .await
+                .unwrap();
+        assert_eq!(dkv, 0);
+    }
+
+    // ── C2: device deletion removes every credential attributed to it ───────────
+
+    #[tokio::test]
+    async fn deleting_device_deletes_all_its_credentials() {
+        let (app, state) = build_policy_app().await;
+        seed_kv(&state.pool, &["FOO"]).await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (d, d_sec) = insert_device_with_key(&state.pool, "stolen").await;
+        let session = insert_device_session(&state.pool, &d).await;
+        restrict(&app, &admin, &d, &["FOO"]).await;
+        put_policy(&app, &admin, &d, serde_json::json!({ "mode": "allow_all" })).await;
+        let (_, b) = call(
+            &app,
+            "POST",
+            "/api/admin/keys",
+            Some(&session),
+            Some(serde_json::json!({ "label": "m", "key_type": "standard", "allowed_keys": ["FOO"] })),
+        )
+        .await;
+        let x_api_key = json(&b)["key"].as_str().unwrap().to_string();
+        let (_, b) = call(
+            &app,
+            "POST",
+            "/api/admin/session/cli-token",
+            Some(&session),
+            Some(serde_json::json!({ "days": 1 })),
+        )
+        .await;
+        let cli = json(&b).as_str().unwrap().to_string();
+        // Pending + approved session requests and a dangling challenge reference the device.
+        let (id1, _, tok1) = session_request(&app, &d, &d_sec).await;
+        assert_eq!(approve(&app, &admin, &id1, &tok1).await.0, 204);
+        let _ = session_request(&app, &d, &d_sec).await;
+        let _ = challenge(&app, &d, &d_sec).await;
+        sqlx::query(
+            "INSERT INTO device_proposals (id, name, public_key, key_type, poll_secret_hash, expires_at, confirm_token_hash, status, resulting_device_id)
+             VALUES ('p1', 'stolen', 'AAAA', 'x25519', 'h', datetime('now', '+1 hour'), 'h', 'confirmed', ?)",
+        )
+        .bind(&d)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        // The admin's own (non-device) key survives.
+        let other = insert_api_key(&state.pool, "active", None, &["FOO"]).await;
+
+        let (s, b) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/devices/{d}"),
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "{b}");
+
+        for tok in [&session, &cli] {
+            let (s, _) = call(&app, "GET", "/api/admin/session/whoami", Some(tok), None).await;
+            assert_eq!(s, 401);
+        }
+        let (s, _) = call(&app, "GET", "/kv/FOO", Some(&session), None).await;
+        assert_eq!(s, 401);
+        let resp = app
+            .clone()
+            .oneshot(get_req("/kv/FOO", None, Some(x_api_key)))
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 401);
+        let resp = app
+            .clone()
+            .oneshot(get_req("/kv/FOO", None, Some(other)))
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200, "unrelated key unaffected");
+
+        for (table, col) in [
+            ("api_keys", "device_id"),
+            ("session_requests", "device_id"),
+            ("session_request_challenges", "device_id"),
+            ("device_proposals", "resulting_device_id"),
+            ("device_policies", "device_id"),
+        ] {
+            let n: i64 =
+                sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE {col} = ?"))
+                    .bind(&d)
+                    .fetch_one(&state.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(n, 0, "{table} row left behind");
+        }
+        // Deleted, never detached: only the admin session + unrelated key remain.
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM api_keys")
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 2);
+        let orphans: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM api_key_allowed_keys WHERE api_key_id NOT IN (SELECT id FROM api_keys)",
+        )
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(orphans, 0);
+    }
+
+    // ── L1 / L2 / L3 ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn device_ban_base_secs_clamped_to_minimum() {
+        use crate::config::{clamp_device_ban_base_secs, MIN_DEVICE_BAN_BASE_SECS};
+        assert_eq!(MIN_DEVICE_BAN_BASE_SECS, 60);
+        assert_eq!(clamp_device_ban_base_secs(0), 60);
+        assert_eq!(clamp_device_ban_base_secs(59), 60);
+        assert_eq!(clamp_device_ban_base_secs(60), 60);
+        assert_eq!(clamp_device_ban_base_secs(86400), 86400);
+    }
+
+    #[tokio::test]
+    async fn session_request_flow_refused_while_banned() {
+        let (app, state) = build_policy_app().await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (d, sec) = insert_device_with_key(&state.pool, "banned-phone").await;
+
+        // Requests created / approved before the ban.
+        let (pre_approved, pre_secret, tok) = session_request(&app, &d, &sec).await;
+        assert_eq!(approve(&app, &admin, &pre_approved, &tok).await.0, 204);
+        let (pending, _, pending_tok) = session_request(&app, &d, &sec).await;
+        let (cid, nonce) = challenge(&app, &d, &sec).await;
+
+        ban_now(&state.pool, &d).await;
+
+        // L2: the unauthenticated challenge endpoint answers exactly as for an unbanned
+        // device (no ban-status oracle) …
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/session-request/challenge",
+            None,
+            Some(serde_json::json!({ "device_id": d })),
+        )
+        .await;
+        assert_eq!(s, 201, "{b}");
+        assert!(json(&b)["envelope"].is_object());
+        // … but possession-proven request creation, polling/claiming and approval are refused.
+        let (s, b) = create_request(&app, &cid, &nonce).await;
+        assert_banned(s, &b);
+        let (s, b) = poll(&app, &pre_approved, &pre_secret).await;
+        assert_banned(s, &b);
+        assert!(!b.contains("envelope"));
+        let (s, b) = approve(&app, &admin, &pending, &pending_tok).await;
+        assert_banned(s, &b);
+        let status: String = sqlx::query_scalar("SELECT status FROM session_requests WHERE id = ?")
+            .bind(&pre_approved)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "approved", "token not delivered while banned");
+    }
+
+    #[tokio::test]
+    async fn restricted_device_listings_are_filtered_never_banned() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        restrict(&app, &admin, &device_id, &["FOO", "MISSING"]).await;
+        let names = |v: serde_json::Value| -> Vec<String> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e.get("key").unwrap_or(e).as_str().unwrap().to_string())
+                .collect()
+        };
+        for path in [
+            "/kv",
+            "/kv?prefix=FOO",
+            "/api/admin/kv",
+            "/api/admin/kv?prefix=F",
+            "/api/admin/kv/keys",
+        ] {
+            let (s, b) = call(&app, "GET", path, Some(&dt), None).await;
+            assert_eq!(s, 200, "{path}: {b}");
+            assert_eq!(names(json(&b)), vec!["FOO"], "{path}");
+        }
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "regex", "pattern": "FOO.*" }),
+        )
+        .await;
+        let (_, b) = call(&app, "GET", "/api/admin/kv/keys", Some(&dt), None).await;
+        assert_eq!(names(json(&b)), vec!["FOO", "FOO_BAR"]);
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "deny_list", "keys": ["OTHER_KEY"] }),
+        )
+        .await;
+        let (_, b) = call(&app, "GET", "/kv", Some(&dt), None).await;
+        assert_eq!(
+            names(json(&b)),
+            vec!["FOO", "FOO_BAR", "OPENROUTER_API_KEY"]
+        );
+        // Admin (non-device) sees everything; listing never bans.
+        let (_, b) = call(&app, "GET", "/api/admin/kv/keys", Some(&admin), None).await;
+        assert_eq!(names(json(&b)).len(), 4);
+        assert!(ban_row(&state.pool, &device_id).await.is_none());
+    }
+
+    // ── Envelope endpoints ──────────────────────────────────────────────────────
+
+    async fn seed_management_key(pool: &SqlitePool, device_ids: &[&str]) -> String {
+        let mk = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO management_keys (id, owner_id, provider, label) VALUES (?, ?, 'openrouter', 'mk')",
+        )
+        .bind(&mk)
+        .bind(TEST_OWNER)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO management_key_bodies (management_key_id, nonce, ciphertext, aad) VALUES (?, 'n', 'c', 'a')",
+        )
+        .bind(&mk)
+        .execute(pool)
+        .await
+        .unwrap();
+        for d in device_ids {
+            sqlx::query(
+                "INSERT INTO management_key_recipients (id, management_key_id, device_id, key_type, ephemeral_pub, dek_nonce, encrypted_dek)
+                 VALUES (?, ?, ?, 'x25519', 'e', 'n', 'k')",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(&mk)
+            .bind(d)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        mk
+    }
+
+    /// Provisioned key `pk` under `mk`, wrapped to `device_ids`; if `linked_kv` is set, a
+    /// KV entry of that name is generated from it.
+    async fn seed_provisioned_key(
+        pool: &SqlitePool,
+        mk: &str,
+        device_ids: &[&str],
+        linked_kv: Option<&str>,
+    ) -> String {
+        let pk = Uuid::new_v4().to_string();
+        let provider_key_id = format!("prov-{pk}");
+        sqlx::query(
+            "INSERT INTO provisioned_keys (id, management_key_id, provider, provider_key_id, label) VALUES (?, ?, 'openrouter', ?, 'pk')",
+        )
+        .bind(&pk)
+        .bind(mk)
+        .bind(&provider_key_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO provisioned_key_bodies (provisioned_key_id, nonce, ciphertext, aad) VALUES (?, 'n', 'c', 'a')",
+        )
+        .bind(&pk)
+        .execute(pool)
+        .await
+        .unwrap();
+        for d in device_ids {
+            sqlx::query(
+                "INSERT INTO provisioned_key_recipients (id, provisioned_key_id, device_id, key_type, ephemeral_pub, dek_nonce, encrypted_dek)
+                 VALUES (?, ?, ?, 'x25519', 'e', 'n', 'k')",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(&pk)
+            .bind(d)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        if let Some(k) = linked_kv {
+            sqlx::query(
+                "INSERT INTO kv_entries (key, owner_id, value, source_management_key_id, source_provider_key_id)
+                 VALUES (?, ?, 'secret', ?, ?)",
+            )
+            .bind(k)
+            .bind(TEST_OWNER)
+            .bind(mk)
+            .bind(&provider_key_id)
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+        pk
+    }
+
+    #[tokio::test]
+    async fn provisioned_key_envelope_enforced() {
+        let (app, state, admin, _device_id, _dt) = fixture().await;
+        let (ok_d, ok_t) = restricted_device(&app, &state.pool, &admin, &["LINKED"]).await;
+        let (bad_d, bad_t) = restricted_device(&app, &state.pool, &admin, &["FOO"]).await;
+        let (unl_d, unl_t) = restricted_device(&app, &state.pool, &admin, &["LINKED"]).await;
+        let free_d = insert_device(&state.pool, "free").await;
+        let free_t = insert_device_session(&state.pool, &free_d).await;
+        let all = [
+            ok_d.as_str(),
+            bad_d.as_str(),
+            unl_d.as_str(),
+            free_d.as_str(),
+        ];
+        let mk = seed_management_key(&state.pool, &all).await;
+        let linked = seed_provisioned_key(&state.pool, &mk, &all, Some("LINKED")).await;
+        let unlinked = seed_provisioned_key(&state.pool, &mk, &all, None).await;
+        let path = |pk: &str, d: &str| {
+            format!("/api/admin/management-keys/{mk}/provisioned-keys/{pk}/devices/{d}")
+        };
+
+        let (s, b) = call(&app, "GET", &path(&linked, &ok_d), Some(&ok_t), None).await;
+        assert_eq!(s, 200, "allowed linked entry: {b}");
+        // Linked KV entry not allowed by the policy → violation → ban.
+        let (s, b) = call(&app, "GET", &path(&linked, &bad_d), Some(&bad_t), None).await;
+        assert_banned(s, &b);
+        assert_eq!(
+            ban_row(&state.pool, &bad_d).await.unwrap().2.as_deref(),
+            Some("LINKED")
+        );
+        // Restricted device, provisioned key with no KV entry: plain 403, no ban.
+        let (s, b) = call(&app, "GET", &path(&unlinked, &unl_d), Some(&unl_t), None).await;
+        assert_refused_not_banned(&state.pool, &unl_d, s, &b).await;
+        // Unrestricted device and non-device admin: unaffected.
+        let (s, _) = call(&app, "GET", &path(&unlinked, &free_d), Some(&free_t), None).await;
+        assert_eq!(s, 200);
+        let (s, _) = call(&app, "GET", &path(&unlinked, &unl_d), Some(&admin), None).await;
+        assert_eq!(s, 200);
+    }
+
+    #[tokio::test]
+    async fn management_key_envelope_refused_for_restricted_device() {
+        let (app, state, admin, _device_id, _dt) = fixture().await;
+        let (r_d, r_t) = restricted_device(&app, &state.pool, &admin, &["FOO"]).await;
+        let free_d = insert_device(&state.pool, "free").await;
+        let free_t = insert_device_session(&state.pool, &free_d).await;
+        let mk = seed_management_key(&state.pool, &[&r_d, &free_d]).await;
+
+        let (s, b) = call(
+            &app,
+            "GET",
+            &format!("/api/admin/management-keys/{mk}/devices/{r_d}"),
+            Some(&r_t),
+            None,
+        )
+        .await;
+        assert_refused_not_banned(&state.pool, &r_d, s, &b).await;
+        for (d, t) in [(&free_d, &free_t), (&r_d, &admin)] {
+            let (s, b) = call(
+                &app,
+                "GET",
+                &format!("/api/admin/management-keys/{mk}/devices/{d}"),
+                Some(t),
+                None,
+            )
+            .await;
+            assert_eq!(s, 200, "{b}");
+        }
+    }
+
+    /// A restricted device can't revoke management keys or change their defaults (it could
+    /// otherwise cut off or redirect the provider keys every other consumer relies on).
+    #[tokio::test]
+    async fn management_key_mutations_refused_for_restricted_device() {
+        let (app, state, admin, _device_id, _dt) = fixture().await;
+        let (r_d, r_t) = restricted_device(&app, &state.pool, &admin, &["FOO"]).await;
+        let mk = seed_management_key(&state.pool, &[&r_d]).await;
+
+        let (s, b) = call(
+            &app,
+            "PATCH",
+            &format!("/api/admin/management-keys/{mk}"),
+            Some(&r_t),
+            Some(serde_json::json!({ "default_limit": 1.0 })),
+        )
+        .await;
+        assert_refused_not_banned(&state.pool, &r_d, s, &b).await;
+        let (s, b) = call(
+            &app,
+            "POST",
+            &format!("/api/admin/management-keys/{mk}/revoke"),
+            Some(&r_t),
+            None,
+        )
+        .await;
+        assert_refused_not_banned(&state.pool, &r_d, s, &b).await;
+        let status: String = sqlx::query_scalar("SELECT status FROM management_keys WHERE id = ?")
+            .bind(&mk)
+            .fetch_one(&state.pool)
+            .await
+            .unwrap();
+        assert_eq!(status, "active");
+
+        // The non-device admin session still can.
+        let (s, b) = call(
+            &app,
+            "POST",
+            &format!("/api/admin/management-keys/{mk}/revoke"),
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204, "{b}");
+    }
+
+    /// M3: a non-device caller (e.g. kv_cli with an approval token minted from a non-device
+    /// session) fetching a device-encrypted envelope for path device D gets D's ban and policy
+    /// applied as a plain refusal — it never records a ban (a path parameter can't ban).
+    #[tokio::test]
+    async fn device_kv_non_device_caller_checks_path_device() {
+        let (app, state, admin, _device_id, _dt) = fixture().await;
+        let d = insert_device(&state.pool, "cli-host").await;
+        for k in ["FOO", "OTHER_KEY"] {
+            sqlx::query(
+                "INSERT INTO device_kv_bodies (kv_key, owner_id, nonce, ciphertext, aad) VALUES (?, ?, 'n', 'c', 'a')",
+            )
+            .bind(k)
+            .bind(TEST_OWNER)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO device_kv_recipients (id, kv_key, owner_id, device_id, key_type, ephemeral_pub, dek_nonce, encrypted_dek)
+                 VALUES (?, ?, ?, ?, 'x25519', 'e', 'n', 'k')",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(k)
+            .bind(TEST_OWNER)
+            .bind(&d)
+            .execute(&state.pool)
+            .await
+            .unwrap();
+        }
+        let path = |k: &str| format!("/api/devices/{d}/kv/{k}");
+        let (s, _) = call(&app, "GET", &path("OTHER_KEY"), Some(&admin), None).await;
+        assert_eq!(s, 200, "allow_all path device");
+
+        restrict(&app, &admin, &d, &["FOO"]).await;
+        let (s, b) = call(&app, "GET", &path("FOO"), Some(&admin), None).await;
+        assert_eq!(s, 200, "{b}");
+        let (s, b) = call(&app, "GET", &path("OTHER_KEY"), Some(&admin), None).await;
+        assert_refused_not_banned(&state.pool, &d, s, &b).await;
+
+        ban_now(&state.pool, &d).await;
+        let (s, b) = call(&app, "GET", &path("FOO"), Some(&admin), None).await;
+        assert_banned(s, &b);
+        assert_eq!(
+            ban_row(&state.pool, &d).await.unwrap().1,
+            1,
+            "no escalation"
+        );
+    }
+
+    // ── Races / housekeeping ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn concurrent_violations_ban_exactly_once() {
+        let path = std::env::temp_dir().join(format!("kv-race-{}.db", Uuid::new_v4()));
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_secs(10));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(8)
+            .connect_with(opts)
+            .await
+            .unwrap();
+        let (app, state) = build_policy_app_with_pool(pool).await;
+        seed_kv(
+            &state.pool,
+            &["FOO", "A", "B", "C", "D", "E", "F", "G", "H"],
+        )
+        .await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let (d, t) = restricted_device(&app, &state.pool, &admin, &["FOO"]).await;
+
+        let mut set = tokio::task::JoinSet::new();
+        for k in ["A", "B", "C", "D", "E", "F", "G", "H"] {
+            let app = app.clone();
+            let t = t.clone();
+            set.spawn(async move { call(&app, "GET", &format!("/kv/{k}"), Some(&t), None).await });
+        }
+        while let Some(r) = set.join_next().await {
+            let (s, b) = r.unwrap();
+            assert_banned(s, &b);
+        }
+        assert_eq!(
+            ban_row(&state.pool, &d).await.unwrap().1,
+            1,
+            "escalated more than once"
+        );
+        state.pool.close().await;
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn ttl_cleanup_clears_expired_bans_keeping_count() {
+        let (_app, state, _admin, expired_d, _dt) = fixture().await;
+        let active_d = insert_device(&state.pool, "still-banned").await;
+        sqlx::query(
+            "INSERT INTO device_bans (device_id, owner_id, banned_at, unban_at, ban_count, last_key)
+             VALUES (?, ?, datetime('now', '-2 hours'), datetime('now', '-1 second'), 3, 'K1'),
+                    (?, ?, datetime('now'), datetime('now', '+1 hour'), 2, 'K2')",
+        )
+        .bind(&expired_d)
+        .bind(TEST_OWNER)
+        .bind(&active_d)
+        .bind(TEST_OWNER)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        crate::tasks::ttl_cleanup::cleanup(&state.pool)
+            .await
+            .unwrap();
+
+        let row = |d: String| {
+            let pool = state.pool.clone();
+            async move {
+                sqlx::query_as::<_, (Option<String>, Option<String>, i64, Option<String>)>(
+                    "SELECT banned_at, unban_at, ban_count, last_key FROM device_bans WHERE device_id = ?",
+                )
+                .bind(d)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        let (banned_at, unban_at, count, last_key) = row(expired_d.clone()).await;
+        assert!(banned_at.is_none() && unban_at.is_none());
+        assert_eq!((count, last_key.as_deref()), (3, Some("K1")));
+        let (banned_at, unban_at, count, _) = row(active_d.clone()).await;
+        assert!(banned_at.is_some() && unban_at.is_some());
+        assert_eq!(count, 2);
     }
 }

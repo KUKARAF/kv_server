@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM device_proposals WHERE resulting_device_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "7d56003b9b05a4b7203d73d02daf83f6d4d000eca5eb4f4384da233cf8d85c25"
+}

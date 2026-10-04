@@ -1,8 +1,15 @@
 //! Enforcement of per-device key policies and device bans.
 //!
 //! Every device-attributable request runs `ensure_not_banned`; every device-attributable
-//! read of a specific KV entry value runs `authorize_key` (ban check + policy check, and on
-//! violation: escalating ban + notification). Both reject with `AppError::DeviceBanned`,
+//! read, write, delete or import of a specific KV entry runs `authorize_key` (ban check +
+//! policy check, and on violation: escalating ban + notification). Listings are filtered by
+//! `listing_filter` (never a violation). Identity/credential management from a restricted
+//! device is refused by `ensure_may_manage_credentials` (plain 403, no ban).
+//!
+//! "Device-attributable" = authenticated by an `api_keys` row whose `device_id` is set: the
+//! device-bound session minted by session-request approval, AND every credential a device
+//! session itself minted (API keys, session keys, CLI/approval tokens), which inherit the
+//! minting device's id so its ban and policy follow them. Both reject with `AppError::DeviceBanned`,
 //! which carries no `AuthFailed` marker — a policy violation is not an authentication
 //! failure and must move neither per-IP counter (expected_behaviour_for_tests.md).
 
@@ -15,7 +22,7 @@ use crate::{
 };
 use regex::{Regex, RegexBuilder};
 use sqlx::{SqliteExecutor, SqlitePool};
-use std::net::IpAddr;
+use std::{collections::HashSet, net::IpAddr};
 
 /// Cap on any single device ban: 30 days (same cap as IP blocks).
 const MAX_BAN_SECS: u64 = 30 * 24 * 3600;
@@ -39,7 +46,15 @@ pub fn compile_pattern(pattern: &str) -> Result<Regex, String> {
     if pattern.chars().count() > MAX_PATTERN_LEN {
         return Err(format!("pattern exceeds {MAX_PATTERN_LEN} characters"));
     }
-    RegexBuilder::new(&format!("^(?:{pattern})$"))
+    // The BARE pattern must compile on its own first. Otherwise unbalanced parentheses can
+    // close the wrapping group and escape the anchors: `FOO)|(.*` is invalid alone but
+    // `^(?:FOO)|(.*)$` compiles and matches every name.
+    build_limited(pattern)?;
+    build_limited(&format!("^(?:{pattern})$"))
+}
+
+fn build_limited(pattern: &str) -> Result<Regex, String> {
+    RegexBuilder::new(pattern)
         .size_limit(REGEX_SIZE_LIMIT)
         .dfa_size_limit(REGEX_SIZE_LIMIT)
         .build()
@@ -154,25 +169,84 @@ pub async fn key_permitted(
     })
 }
 
-/// A restricted device-bound session must not be able to mint fresh credentials (API keys,
-/// CLI/approval tokens, session keys) or obtain management-key material: those are not
-/// device-bound and would let it sidestep its own policy. Plain 403, no ban — it is not a
-/// KV read. Unrestricted (allow_all / no policy) devices and non-device sessions pass.
-pub async fn ensure_may_mint_credentials(
+/// The one guard for identity / credential management from a device-bound session.
+///
+/// A policy-restricted device must not mint fresh credentials (API keys, CLI/approval
+/// tokens, session keys), obtain management-key material, register or delete passkeys,
+/// enrol or link devices, or approve a session request for a device other than itself:
+/// each of those would let it build an unrestricted "twin" and sidestep its own policy.
+/// Plain 403 (`Forbidden`, no ban, no AuthFailed marker) — it is not a KV read.
+/// Unrestricted (allow_all / no policy) devices and non-device sessions pass; a banned
+/// device never gets here (AdminAuth already rejected it).
+pub async fn ensure_may_manage_credentials(
     pool: &SqlitePool,
     claims: &SessionClaims,
 ) -> Result<(), AppError> {
     if let Some(device_id) = claims.device_id.as_deref() {
         if is_restricted(pool, device_id).await? {
-            return Err(AppError::Forbidden(
-                "not permitted for this device".to_string(),
-            ));
+            return Err(forbidden_for_device());
         }
     }
     Ok(())
 }
 
-/// Ban check, then policy check for a device-attributable read of `kv_key`. On violation
+/// The `Forbidden` returned by [`ensure_may_manage_credentials`].
+pub fn forbidden_for_device() -> AppError {
+    AppError::Forbidden("not permitted for this device".to_string())
+}
+
+/// Name filter for listings (KV key names only, never values). Listing never bans: a
+/// restricted device simply doesn't see names its policy would refuse.
+pub enum KeyFilter {
+    /// Non-device caller or allow_all device: everything is visible.
+    All,
+    Policy {
+        mode: PolicyMode,
+        keys: HashSet<String>,
+        /// Compiled once per listing; `None` for a regex policy fails closed.
+        re: Option<Regex>,
+    },
+}
+
+impl KeyFilter {
+    pub fn allows(&self, kv_key: &str) -> bool {
+        match self {
+            KeyFilter::All => true,
+            KeyFilter::Policy { mode, keys, re } => match mode {
+                PolicyMode::AllowAll => true,
+                PolicyMode::AllowList => keys.contains(kv_key),
+                PolicyMode::DenyList => !keys.contains(kv_key),
+                PolicyMode::Regex => re.as_ref().is_some_and(|r| r.is_match(kv_key)),
+            },
+        }
+    }
+}
+
+/// Builds the listing filter for the (optional) device behind a request.
+pub async fn listing_filter(
+    pool: &SqlitePool,
+    device_id: Option<&str>,
+) -> Result<KeyFilter, AppError> {
+    let Some(device_id) = device_id else {
+        return Ok(KeyFilter::All);
+    };
+    Ok(match load_policy(pool, device_id).await? {
+        None => KeyFilter::All,
+        Some(p) if p.mode == PolicyMode::AllowAll => KeyFilter::All,
+        Some(p) => KeyFilter::Policy {
+            mode: p.mode,
+            re: p
+                .pattern
+                .as_deref()
+                .and_then(|pat| compile_pattern(pat).ok()),
+            keys: p.keys.into_iter().collect(),
+        },
+    })
+}
+
+/// Ban check, then policy check for a device-attributable read, write or delete of
+/// `kv_key`. Only ever called with the AUTHENTICATED device id (never a path parameter),
+/// so nobody can get someone else's device banned. On violation
 /// records an escalating ban, fires a notification and returns `DeviceBanned`.
 pub async fn authorize_key(
     state: &AppState,
@@ -312,6 +386,12 @@ mod tests {
             // Missing / invalid pattern fails closed.
             (Regex, &[], None, "FOO", false),
             (Regex, &[], Some("("), "(", false),
+            // Unbalanced parens must not escape the anchors (they don't compile bare).
+            (Regex, &[], Some("FOO)|(.*"), "SECRET_DB", false),
+            (Regex, &[], Some("FOO)|(.*"), "FOO", false),
+            (Regex, &[], Some("FOO)|.*(?:"), "SECRET_DB", false),
+            (Regex, &[], Some("a)|(b"), "a", false),
+            (Regex, &[], Some("a)|(b"), "b", false),
         ];
         for (mode, keys, pattern, key, expected) in cases {
             assert_eq!(
@@ -326,6 +406,9 @@ mod tests {
     fn compile_pattern_rejects_bad_input() {
         assert!(compile_pattern("").is_err());
         assert!(compile_pattern("(").is_err());
+        for escape in ["FOO)|(.*", "FOO)|.*(?:", "a)|(b"] {
+            assert!(compile_pattern(escape).is_err(), "{escape}");
+        }
         assert!(compile_pattern(&"a".repeat(MAX_PATTERN_LEN + 1)).is_err());
         assert!(compile_pattern(&"a".repeat(MAX_PATTERN_LEN)).is_ok());
         // Small source, huge compiled program → rejected by size_limit.

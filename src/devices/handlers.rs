@@ -29,6 +29,8 @@ pub async fn register_begin(
     auth: AdminAuth,
     Json(body): Json<RegisterDeviceRequest>,
 ) -> Result<Json<RegisterDeviceBeginResponse>, AppError> {
+    // A restricted device must not enrol another (unrestricted) device — twin escape.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let webauthn = state.webauthn.as_ref().ok_or_else(webauthn_unavailable)?;
     let owner_id = &auth.0.oidc_subject;
 
@@ -86,6 +88,8 @@ pub async fn register_finish(
     auth: AdminAuth,
     Json(body): Json<RegisterDeviceFinishRequest>,
 ) -> Result<(StatusCode, Json<RegisterDeviceResponse>), AppError> {
+    // A restricted device must not enrol another (unrestricted) device — twin escape.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let webauthn = state.webauthn.as_ref().ok_or_else(webauthn_unavailable)?;
     let owner_id = &auth.0.oidc_subject;
 
@@ -177,32 +181,79 @@ pub async fn delete(
 
     let mut tx = state.pool.begin().await?;
 
+    let owned = sqlx::query_scalar!(
+        r#"SELECT 1 as "x: i32" FROM devices WHERE id = ? AND owner_id = ?"#,
+        id,
+        owner_id
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    if owned.is_none() {
+        return Err(AppError::NotFound);
+    }
+
+    // Every credential attributed to this device dies with it: its session tokens AND the
+    // keys/tokens it minted (api_keys.device_id). They are DELETED, never detached —
+    // `device_id = NULL` would turn a live device token into an unrestricted, unbannable
+    // non-device credential. Dependents go first (FKs are enforced on the pool).
+    sqlx::query!(
+        "DELETE FROM api_key_allowed_keys
+         WHERE api_key_id IN (SELECT id FROM api_keys WHERE device_id = ?)",
+        id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM approval_requests
+         WHERE api_key_id IN (SELECT id FROM api_keys WHERE device_id = ?)",
+        id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM device_auth_requests
+         WHERE api_key_id IN (SELECT id FROM api_keys WHERE device_id = ?)",
+        id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM session_requests
+         WHERE device_id = ?
+            OR session_key_id IN (SELECT id FROM api_keys WHERE device_id = ?)",
+        id,
+        id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM session_request_challenges WHERE device_id = ?",
+        id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM device_proposals WHERE resulting_device_id = ?",
+        id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!("DELETE FROM api_keys WHERE device_id = ?", id)
+        .execute(&mut *tx)
+        .await?;
+
     // Policy/ban rows also cascade via FK, but delete them explicitly so cleanup doesn't
-    // depend on the foreign_keys pragma. Scoped to an owned device only.
-    sqlx::query!(
-        "DELETE FROM device_policy_keys
-         WHERE device_id = ? AND device_id IN (SELECT id FROM devices WHERE owner_id = ?)",
-        id,
-        owner_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query!(
-        "DELETE FROM device_policies
-         WHERE device_id = ? AND device_id IN (SELECT id FROM devices WHERE owner_id = ?)",
-        id,
-        owner_id
-    )
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query!(
-        "DELETE FROM device_bans
-         WHERE device_id = ? AND device_id IN (SELECT id FROM devices WHERE owner_id = ?)",
-        id,
-        owner_id
-    )
-    .execute(&mut *tx)
-    .await?;
+    // depend on the foreign_keys pragma. (Device-encrypted / management-key recipient rows
+    // cascade via FK.)
+    sqlx::query!("DELETE FROM device_policy_keys WHERE device_id = ?", id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query!("DELETE FROM device_policies WHERE device_id = ?", id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query!("DELETE FROM device_bans WHERE device_id = ?", id)
+        .execute(&mut *tx)
+        .await?;
 
     let affected = sqlx::query!(
         "DELETE FROM devices WHERE id = ? AND owner_id = ?",
@@ -361,6 +412,8 @@ pub async fn link_proposal(
     Path(id): Path<String>,
     Json(body): Json<LinkProposalBody>,
 ) -> Result<StatusCode, AppError> {
+    // Linking binds a proposed key to an enrolled device: same guard as enrolment.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner_id = &auth.0.oidc_subject;
 
     let proposal = sqlx::query!(
@@ -456,11 +509,13 @@ pub async fn get_device_kv(
         return Err(AppError::NotFound);
     }
 
-    // Device key policy. The caller's own device (device-bound session) gets the full
-    // check — ban + policy, violation ⇒ escalating ban. The envelope itself is only usable
-    // by `device_id` (the path device), so its policy applies too; when that device isn't
-    // the authenticated caller (e.g. kv_cli with an approval token) there is no proof of
-    // who is asking, so it's a plain refusal without recording a ban.
+    // Device key policy. The caller's own device (device-attributable credential) gets the
+    // full check — ban + policy, violation ⇒ escalating ban. The envelope itself is only
+    // usable by `device_id` (the path device), so its ban + policy apply too. When that
+    // device isn't the authenticated caller — intentionally supported: kv_cli on the device
+    // host fetching with an approval token minted from a non-device session — there is no
+    // proof of who is asking, so it's a plain 403 without recording a ban (a path parameter
+    // must never be able to get a device banned). Documented in specs.md.
     if let Some(ref session_device) = auth.0.device_id {
         crate::device_policy::enforce::authorize_key(
             &state,

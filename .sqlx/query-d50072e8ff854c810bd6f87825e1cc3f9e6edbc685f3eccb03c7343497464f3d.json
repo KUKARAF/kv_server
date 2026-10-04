@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM session_request_challenges WHERE device_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "d50072e8ff854c810bd6f87825e1cc3f9e6edbc685f3eccb03c7343497464f3d"
+}

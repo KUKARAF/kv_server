@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, type as key_type, status, expires_at, owner_id\n         FROM api_keys\n         WHERE key_hash = ? AND type NOT IN ('session', 'Bearer')",
+  "query": "SELECT id, type as key_type, status, expires_at, owner_id, device_id\n         FROM api_keys\n         WHERE key_hash = ? AND type NOT IN ('session', 'Bearer')",
   "describe": {
     "columns": [
       {
@@ -27,6 +27,11 @@
         "name": "owner_id",
         "ordinal": 4,
         "type_info": "Text"
+      },
+      {
+        "name": "device_id",
+        "ordinal": 5,
+        "type_info": "Text"
       }
     ],
     "parameters": {
@@ -37,8 +42,9 @@
       false,
       false,
       true,
-      false
+      false,
+      true
     ]
   },
-  "hash": "fbbfa4fbfe8ad663d97af391821967de231f2aa80d70b0502ee2ba670a9a85cb"
+  "hash": "2bb39e0bfca49a471433d1b0818c89d04f3276d48d4f45e991dd6a9a37ae9e9c"
 }

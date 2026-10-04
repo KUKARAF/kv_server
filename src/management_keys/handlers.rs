@@ -16,6 +16,9 @@ pub async fn create_management_key(
     auth: AdminAuth,
     Json(body): Json<CreateManagementKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateManagementKeyResponse>), AppError> {
+    // A restricted device must not create, change or revoke management keys (it could swap in
+    // a provider key it controls or revoke the real ones).
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner_id = &auth.0.oidc_subject;
 
     if body.recipients.is_empty() {
@@ -115,6 +118,9 @@ pub async fn update_management_key_defaults(
     Path(id): Path<String>,
     Json(body): Json<UpdateManagementKeyDefaultsRequest>,
 ) -> Result<StatusCode, AppError> {
+    // A restricted device must not create, change or revoke management keys (it could swap in
+    // a provider key it controls or revoke the real ones).
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner_id = &auth.0.oidc_subject;
     validate_limit_reset(&body.default_limit_reset)?;
 
@@ -145,7 +151,7 @@ pub async fn get_management_key_envelope(
     let owner_id = &auth.0.oidc_subject;
     // A management key mints arbitrary provider keys — a policy-restricted device must
     // not obtain one (it would sidestep its KV key policy entirely).
-    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
 
     let owned = sqlx::query_scalar!(
         r#"SELECT 1 as "x: i32" FROM management_keys WHERE id = ? AND owner_id = ?"#,
@@ -207,6 +213,9 @@ pub async fn revoke_management_key(
     auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // A restricted device must not create, change or revoke management keys (it could swap in
+    // a provider key it controls or revoke the real ones).
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner_id = &auth.0.oidc_subject;
     let affected = sqlx::query!(
         "UPDATE management_keys SET status = 'revoked' WHERE id = ? AND owner_id = ? AND status = 'active'",
@@ -249,6 +258,9 @@ pub async fn create_provisioned_key(
     Path(management_key_id): Path<String>,
     Json(body): Json<CreateProvisionedKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateProvisionedKeyResponse>), AppError> {
+    // A restricted device must not create, change or revoke management keys (it could swap in
+    // a provider key it controls or revoke the real ones).
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner_id = &auth.0.oidc_subject;
     require_owned_management_key(&state, &management_key_id, owner_id).await?;
 
@@ -454,6 +466,9 @@ pub async fn delete_provisioned_key(
     auth: AdminAuth,
     Path((management_key_id, provisioned_key_id)): Path<(String, String)>,
 ) -> Result<StatusCode, AppError> {
+    // A restricted device must not create, change or revoke management keys (it could swap in
+    // a provider key it controls or revoke the real ones).
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner_id = &auth.0.oidc_subject;
     require_owned_management_key(&state, &management_key_id, owner_id).await?;
 

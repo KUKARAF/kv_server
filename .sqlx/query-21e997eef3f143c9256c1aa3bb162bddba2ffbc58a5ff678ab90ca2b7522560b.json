@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM api_key_allowed_keys\n         WHERE api_key_id IN (SELECT id FROM api_keys WHERE device_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "21e997eef3f143c9256c1aa3bb162bddba2ffbc58a5ff678ab90ca2b7522560b"
+}

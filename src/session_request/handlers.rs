@@ -32,8 +32,9 @@ pub async fn create_challenge(
     .await?
     .ok_or(AppError::NotFound)?;
 
-    // A banned device can't start minting a fresh session.
-    ensure_not_banned(&state.pool, &body.device_id).await?;
+    // Deliberately NO ban check here: this endpoint is unauthenticated, so answering
+    // "device banned" would be a ban-status oracle for anyone holding a device id. The
+    // ban is enforced once possession is proven (create_request) and again on poll/approve.
 
     let challenge_id = Uuid::new_v4().to_string();
     let (nonce, nonce_hash) = generate_api_key();
@@ -331,6 +332,14 @@ pub async fn approve(
     let key_id = Uuid::new_v4().to_string();
     let duration_hours = body.approved_duration_hours.unwrap_or(24);
 
+    // Resolved before the transaction (the pool may have a single connection). A restricted
+    // device session may only approve a request for ITSELF; approving one for another device
+    // would mint an unrestricted twin session (twin-device escape).
+    let caller_restricted = match auth.0.device_id.as_deref() {
+        Some(caller) => crate::device_policy::enforce::is_restricted(&state.pool, caller).await?,
+        None => false,
+    };
+
     let mut tx = state.pool.begin().await?;
 
     let row = sqlx::query!(
@@ -355,6 +364,9 @@ pub async fn approve(
     // token is unusable without that device's private key. The device is captured at create
     // time; if it's gone (deleted between request and approval) we can't deliver securely.
     let device_id = row.device_id.ok_or(AppError::NotFound)?;
+    if caller_restricted && auth.0.device_id.as_deref() != Some(device_id.as_str()) {
+        return Err(crate::device_policy::enforce::forbidden_for_device());
+    }
     // No point minting a session for a banned device (it'd be rejected on every use).
     ensure_not_banned(&mut *tx, &device_id).await?;
     let device = sqlx::query!(

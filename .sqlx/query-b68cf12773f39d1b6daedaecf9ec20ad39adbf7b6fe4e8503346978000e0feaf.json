@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM session_requests\n         WHERE device_id = ?\n            OR session_key_id IN (SELECT id FROM api_keys WHERE device_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "b68cf12773f39d1b6daedaecf9ec20ad39adbf7b6fe4e8503346978000e0feaf"
+}

@@ -24,6 +24,9 @@ pub async fn list_keys(
     auth: AdminAuth,
 ) -> Result<Json<Vec<ApiKeyWithAllowedKeys>>, AppError> {
     let owner = &auth.0.oidc_subject;
+    let visible =
+        crate::device_policy::enforce::listing_filter(&state.pool, auth.0.device_id.as_deref())
+            .await?;
     let keys = sqlx::query_as!(
         ApiKeyRow,
         r#"SELECT id, label, type as "key_type", status, expires_at, created_at, last_used_at
@@ -40,7 +43,10 @@ pub async fn list_keys(
             key.id
         )
         .fetch_all(&state.pool)
-        .await?;
+        .await?
+        .into_iter()
+        .filter(|k| visible.allows(k))
+        .collect();
         result.push(ApiKeyWithAllowedKeys { key, allowed_keys });
     }
 
@@ -52,8 +58,10 @@ pub async fn create_key(
     auth: AdminAuth,
     Json(body): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
-    // Minted credentials are not device-bound: a policy-restricted device must not mint them.
-    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
+    // A policy-restricted device must not mint credentials; an unrestricted one may, and
+    // the new key inherits its device_id so the device's ban + policy follow it.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
+    let minted_by_device = auth.0.device_id.as_deref();
     let valid_types = [
         "standard",
         "one_time",
@@ -87,15 +95,16 @@ pub async fn create_key(
     };
 
     sqlx::query!(
-        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id, device_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         id,
         key_hash,
         body.label,
         body.key_type,
         status,
         body.expires_at,
-        owner
+        owner,
+        minted_by_device
     )
     .execute(&state.pool)
     .await?;
@@ -182,8 +191,10 @@ pub async fn create_session_key(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
-    // Minted credentials are not device-bound: a policy-restricted device must not mint them.
-    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
+    // A policy-restricted device must not mint credentials; an unrestricted one may, and
+    // the new key inherits its device_id so the device's ban + policy follow it.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
+    let minted_by_device = auth.0.device_id.as_deref();
     let owner = &auth.0.oidc_subject;
 
     // Only revoke previous CLI session tokens (label = 'session'), not the web session
@@ -199,11 +210,12 @@ pub async fn create_session_key(
     let id = Uuid::new_v4().to_string();
 
     sqlx::query!(
-        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
-         VALUES (?, ?, 'session', 'session', 'active', datetime('now', '+15 hours'), ?)",
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id, device_id)
+         VALUES (?, ?, 'session', 'session', 'active', datetime('now', '+15 hours'), ?, ?)",
         id,
         key_hash,
-        owner
+        owner,
+        minted_by_device
     )
     .execute(&state.pool)
     .await?;
@@ -324,8 +336,10 @@ pub async fn create_cli_token(
     auth: AdminAuth,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<String>, AppError> {
-    // Minted credentials are not device-bound: a policy-restricted device must not mint them.
-    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
+    // A policy-restricted device must not mint credentials; an unrestricted one may, and
+    // the new key inherits its device_id so the device's ban + policy follow it.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
+    let minted_by_device = auth.0.device_id.as_deref();
     // Request body is client-supplied JSON; use `.get()` rather than indexing
     // so a missing/wrong-typed "days" field falls through to the default
     // instead of risking a panic.
@@ -342,12 +356,13 @@ pub async fn create_cli_token(
         .to_string();
 
     sqlx::query!(
-        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
-         VALUES (?, ?, 'kv-cli', 'approval', 'active', ?, ?)",
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id, device_id)
+         VALUES (?, ?, 'kv-cli', 'approval', 'active', ?, ?, ?)",
         id,
         key_hash,
         expires_at,
-        owner
+        owner,
+        minted_by_device
     )
     .execute(&state.pool)
     .await?;
@@ -360,8 +375,10 @@ pub async fn create_device_token(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
 ) -> Result<Json<String>, AppError> {
-    // Minted credentials are not device-bound: a policy-restricted device must not mint them.
-    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
+    // A policy-restricted device must not mint credentials; an unrestricted one may, and
+    // the new key inherits its device_id so the device's ban + policy follow it.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
+    let minted_by_device = auth.0.device_id.as_deref();
     let owner = &auth.0.oidc_subject;
     let (plaintext, key_hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();
@@ -369,9 +386,9 @@ pub async fn create_device_token(
     let mut tx = state.pool.begin().await?;
 
     sqlx::query!(
-        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id)
-         VALUES (?, ?, 'kv-approver device', 'approval', 'active', datetime('now', '+180 days'), ?)",
-        id, key_hash, owner
+        "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id, device_id)
+         VALUES (?, ?, 'kv-approver device', 'approval', 'active', datetime('now', '+180 days'), ?, ?)",
+        id, key_hash, owner, minted_by_device
     )
     .execute(&mut *tx)
     .await?;
@@ -521,7 +538,10 @@ pub async fn list_kv_entries(
     Query(q): Query<crate::kv::handlers::ListQuery>,
 ) -> Result<Json<Vec<crate::kv::model::KvMetaResponse>>, AppError> {
     let owner = &auth.0.oidc_subject;
-    let rows = match q.prefix {
+    let visible =
+        crate::device_policy::enforce::listing_filter(&state.pool, auth.0.device_id.as_deref())
+            .await?;
+    let rows: Vec<crate::kv::model::KvMetaResponse> = match q.prefix {
         Some(prefix) => {
             let pattern = format!("{}%", prefix);
             sqlx::query!(
@@ -601,6 +621,11 @@ pub async fn list_kv_entries(
         })
         .collect(),
     };
+    // Names-only listing: a restricted device only sees names its policy allows (never a ban).
+    let rows = rows
+        .into_iter()
+        .filter(|r| visible.allows(&r.key))
+        .collect();
     Ok(Json(rows))
 }
 
@@ -618,10 +643,36 @@ pub async fn list_kv_keys(
     )
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(keys))
+    let visible =
+        crate::device_policy::enforce::listing_filter(&state.pool, auth.0.device_id.as_deref())
+            .await?;
+    Ok(Json(
+        keys.into_iter().filter(|k| visible.allows(k)).collect(),
+    ))
 }
 
 // ── Admin KV write / import / patch / delete ─────────────────────────────────
+
+/// Device-attributable access (read, write, delete, import) to the KV entry `key`: a
+/// device-bound caller is held to its key policy; a violation bans the device. No-op for
+/// non-device callers.
+pub(crate) async fn authorize_device_key(
+    state: &AppState,
+    auth: &AdminAuth,
+    key: &str,
+) -> Result<(), AppError> {
+    if let Some(ref device_id) = auth.0.device_id {
+        crate::device_policy::enforce::authorize_key(
+            state,
+            device_id,
+            &auth.0.oidc_subject,
+            key,
+            auth.0.client_ip,
+        )
+        .await?;
+    }
+    Ok(())
+}
 
 pub async fn admin_write_kv(
     State(state): State<Arc<AppState>>,
@@ -629,6 +680,7 @@ pub async fn admin_write_kv(
     Json(body): Json<AdminKvWriteRequest>,
 ) -> Result<StatusCode, AppError> {
     let owner = &auth.0.oidc_subject;
+    authorize_device_key(&state, &auth, &body.key).await?;
 
     // Validate ZT fields: either all required ZT fields present, or none.
     let is_zt = body.zt_ciphertext.is_some()
@@ -709,16 +761,7 @@ pub async fn admin_get_kv_value(
 ) -> Result<String, AppError> {
     let owner = &auth.0.oidc_subject;
     // Returns a KV value: device-bound sessions are subject to their key policy.
-    if let Some(ref device_id) = auth.0.device_id {
-        crate::device_policy::enforce::authorize_key(
-            &state,
-            device_id,
-            owner,
-            &key,
-            auth.0.client_ip,
-        )
-        .await?;
-    }
+    authorize_device_key(&state, &auth, &key).await?;
     let row = sqlx::query!(
         r#"SELECT value, device_encrypted as "device_encrypted: bool", zt_ciphertext
            FROM kv_entries
@@ -751,6 +794,7 @@ pub async fn admin_delete_kv(
     Path(key): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let owner = &auth.0.oidc_subject;
+    authorize_device_key(&state, &auth, &key).await?;
     let result = sqlx::query!(
         "DELETE FROM kv_entries WHERE key = ? AND owner_id = ?",
         key,
@@ -775,8 +819,8 @@ pub async fn admin_import_kv(
     let ttl_sliding = body.ttl_sliding as i64;
     let open_access = body.open_access as i64;
 
-    let mut imported = 0usize;
     let mut skipped = 0usize;
+    let mut entries: Vec<(String, String)> = Vec::new();
 
     for line in body.content.lines() {
         let trimmed = line.trim();
@@ -789,7 +833,17 @@ pub async fn admin_import_kv(
             continue;
         };
         let key = format!("{}{}", prefix, raw_key.trim());
-        let value = unquote(raw_value.trim());
+        entries.push((key, unquote(raw_value.trim())));
+    }
+
+    // Check every resulting name (prefix included) BEFORE writing anything, so a policy
+    // violation anywhere in the file bans the device and imports nothing.
+    for (key, _) in &entries {
+        authorize_device_key(&state, &auth, key).await?;
+    }
+
+    let mut imported = 0usize;
+    for (key, value) in &entries {
         let expires_at = compute_expires_at(body.ttl_hours);
 
         sqlx::query!(
@@ -825,16 +879,22 @@ fn unquote(s: &str) -> String {
 
 pub async fn list_access_log(
     State(state): State<Arc<AppState>>,
-    _auth: AdminAuth,
-) -> Json<Vec<serde_json::Value>> {
+    auth: AdminAuth,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    let visible =
+        crate::device_policy::enforce::listing_filter(&state.pool, auth.0.device_id.as_deref())
+            .await?;
     let entries = state
         .access_log
         .lock()
         .map(|log| log.iter().rev().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
-    Json(
+    // Key names are listing data: hide names a restricted device's policy refuses
+    // (list operations log an empty key name and stay visible).
+    Ok(Json(
         entries
             .into_iter()
+            .filter(|e| e.key.is_empty() || visible.allows(&e.key))
             .map(|e| {
                 serde_json::json!({
                     "ip": e.ip,
@@ -845,7 +905,7 @@ pub async fn list_access_log(
                 })
             })
             .collect(),
-    )
+    ))
 }
 
 // ── Blocked IPs ──────────────────────────────────────────────────────────────
