@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id, status, expires_at, owner_id\n         FROM api_keys\n         WHERE key_hash = ? AND type = 'session'",
+  "query": "SELECT id, owner_id, label, expires_at, device_id\n             FROM api_keys\n             WHERE key_hash = ? AND type IN ('session', 'approval') AND status = 'active'",
   "describe": {
     "columns": [
       {
@@ -9,18 +9,23 @@
         "type_info": "Text"
       },
       {
-        "name": "status",
+        "name": "owner_id",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "expires_at",
+        "name": "label",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "owner_id",
+        "name": "expires_at",
         "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_id",
+        "ordinal": 4,
         "type_info": "Text"
       }
     ],
@@ -30,9 +35,10 @@
     "nullable": [
       false,
       false,
+      false,
       true,
-      false
+      true
     ]
   },
-  "hash": "537c34c3d5d926d5e6ddb53d2a53e865fbc29d8a0fb95795fd9a3b31aba20427"
+  "hash": "d4449dacad14a2123432d64759f3a4b44966063b629951ba3c1475b928aeb6a0"
 }

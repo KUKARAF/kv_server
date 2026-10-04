@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT mode, pattern FROM device_policies WHERE device_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "mode",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "pattern",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "93ea0ae059ce56e5b559af0e732591b8ba0470d0df2f2f0ae604e55d85cd797f"
+}

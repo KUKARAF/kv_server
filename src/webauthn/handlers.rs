@@ -49,6 +49,9 @@ pub async fn register_begin(
     auth: AdminAuth,
     Json(body): Json<RegisterBeginRequest>,
 ) -> Result<Json<RegisterBeginResponse>, AppError> {
+    // A restricted device must not add/remove passkeys (the root of trust for device
+    // enrolment) — that is the first step of the twin-device escape.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let webauthn = state.webauthn.as_ref().ok_or_else(webauthn_unavailable)?;
     let owner_id = &auth.0.oidc_subject;
 
@@ -99,6 +102,9 @@ pub async fn register_finish(
     auth: AdminAuth,
     Json(body): Json<RegisterFinishRequest>,
 ) -> Result<Json<RegisterFinishResponse>, AppError> {
+    // A restricted device must not add/remove passkeys (the root of trust for device
+    // enrolment) — that is the first step of the twin-device escape.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let webauthn = state.webauthn.as_ref().ok_or_else(webauthn_unavailable)?;
     let owner_id = &auth.0.oidc_subject;
 
@@ -364,6 +370,9 @@ pub async fn delete_credential(
     auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // A restricted device must not add/remove passkeys (the root of trust for device
+    // enrolment) — that is the first step of the twin-device escape.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner_id = &auth.0.oidc_subject;
     let result = sqlx::query!(
         "DELETE FROM zero_trust_credentials WHERE id = ? AND owner_id = ?",

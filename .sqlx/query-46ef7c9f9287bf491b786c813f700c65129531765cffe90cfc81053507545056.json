@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO api_keys (id, key_hash, label, type, status, expires_at, owner_id, device_id)\n         VALUES (?, ?, 'kv-cli', 'approval', 'active', ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "46ef7c9f9287bf491b786c813f700c65129531765cffe90cfc81053507545056"
+}

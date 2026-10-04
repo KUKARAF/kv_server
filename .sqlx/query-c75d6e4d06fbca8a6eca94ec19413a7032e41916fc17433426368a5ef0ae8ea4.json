@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT k.device_id as \"device_id!: String\", k.kv_key as \"kv_key!: String\"\n           FROM device_policy_keys k\n           JOIN devices d ON d.id = k.device_id\n           WHERE d.owner_id = ? AND (? IS NULL OR d.id = ?)\n           ORDER BY k.kv_key",
+  "describe": {
+    "columns": [
+      {
+        "name": "device_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "kv_key!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "c75d6e4d06fbca8a6eca94ec19413a7032e41916fc17433426368a5ef0ae8ea4"
+}

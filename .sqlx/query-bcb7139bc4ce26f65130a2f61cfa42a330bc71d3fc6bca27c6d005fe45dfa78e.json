@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT 1 as \"x: i32\" FROM device_bans\n           WHERE device_id = ? AND banned_at IS NOT NULL\n             AND unban_at IS NOT NULL AND unban_at > datetime('now')",
+  "describe": {
+    "columns": [
+      {
+        "name": "x: i32",
+        "ordinal": 0,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bcb7139bc4ce26f65130a2f61cfa42a330bc71d3fc6bca27c6d005fe45dfa78e"
+}

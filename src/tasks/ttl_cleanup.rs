@@ -11,7 +11,7 @@ pub async fn run(pool: SqlitePool, interval_secs: u64) {
     }
 }
 
-async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
+pub(crate) async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
     let kv = sqlx::query!(
         "DELETE FROM kv_entries WHERE expires_at IS NOT NULL AND expires_at <= datetime('now')"
     )
@@ -78,6 +78,17 @@ async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
     .await?
     .rows_affected();
 
+    // Clear expired device bans; ban_count/last_key stay as history so the next
+    // violation escalates.
+    let devices_unbanned = sqlx::query!(
+        "UPDATE device_bans SET banned_at = NULL, unban_at = NULL
+         WHERE banned_at IS NOT NULL AND unban_at IS NOT NULL
+           AND unban_at <= datetime('now')"
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+
     if kv
         + approvals
         + device_auth
@@ -86,6 +97,7 @@ async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
         + device_proposals
         + shares
         + unblocked
+        + devices_unbanned
         > 0
     {
         tracing::info!(
@@ -97,6 +109,7 @@ async fn cleanup(pool: &SqlitePool) -> anyhow::Result<()> {
             device_proposals_expired = device_proposals,
             shares_deleted = shares,
             ips_unblocked = unblocked,
+            devices_unbanned = devices_unbanned,
             "TTL cleanup complete"
         );
     }

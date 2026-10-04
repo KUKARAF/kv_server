@@ -3,6 +3,7 @@ mod auth;
 mod config;
 mod crypto;
 mod db;
+mod device_policy;
 mod devices;
 mod error;
 mod keys;
@@ -94,6 +95,7 @@ async fn main() -> Result<()> {
         .nest("/webauthn", webauthn::router())
         .nest("/api/devices", devices::router())
         .nest("/api/admin/devices", devices::admin_router())
+        .nest("/api/admin/device-policies", device_policy::admin_router())
         .nest(
             "/api/admin/device-proposals",
             devices::proposal_admin_router(),

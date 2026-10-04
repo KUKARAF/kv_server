@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE device_bans SET banned_at = NULL, unban_at = NULL\n         WHERE device_id = ?\n           AND device_id IN (SELECT id FROM devices WHERE owner_id = ?)\n           AND banned_at IS NOT NULL AND unban_at IS NOT NULL\n           AND unban_at > datetime('now')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2fd7595f57e5ca7c9957c488363773fa4290470775375eb2ecdbefba643bd4aa"
+}

@@ -28,10 +28,33 @@ pub struct Config {
     pub daily_rate_limit: u32,
     pub auth_failure_threshold: u32,
     pub auth_block_base_secs: u64,
+    /// Base duration of the first device ban (policy violation); doubles per repeat
+    /// offence, capped at 30 days (see device_policy::enforce).
+    pub device_ban_base_secs: u64,
     pub ttl_cleanup_interval_secs: u64,
     pub trust_proxy_headers: bool,
 
     pub public_base_url: String,
+}
+
+/// Floor for `DEVICE_BAN_BASE_SECS`. A zero/tiny base makes `unban_at ≈ now`, so the ban is
+/// never observed as active: every violating request would escalate `ban_count` again and
+/// fire another high-priority notification (notification flood).
+pub const MIN_DEVICE_BAN_BASE_SECS: u64 = 60;
+
+/// Clamps the configured device-ban base duration to at least
+/// [`MIN_DEVICE_BAN_BASE_SECS`], logging a warning when it had to.
+pub fn clamp_device_ban_base_secs(secs: u64) -> u64 {
+    if secs < MIN_DEVICE_BAN_BASE_SECS {
+        tracing::warn!(
+            configured = secs,
+            used = MIN_DEVICE_BAN_BASE_SECS,
+            "DEVICE_BAN_BASE_SECS below minimum — clamped"
+        );
+        MIN_DEVICE_BAN_BASE_SECS
+    } else {
+        secs
+    }
 }
 
 impl Config {
@@ -90,6 +113,13 @@ impl Config {
                 .unwrap_or_else(|_| "3600".to_string())
                 .parse()
                 .context("AUTH_BLOCK_BASE_SECS must be a number")?,
+
+            device_ban_base_secs: clamp_device_ban_base_secs(
+                env::var("DEVICE_BAN_BASE_SECS")
+                    .unwrap_or_else(|_| "86400".to_string())
+                    .parse()
+                    .context("DEVICE_BAN_BASE_SECS must be a number")?,
+            ),
 
             ttl_cleanup_interval_secs: env::var("TTL_CLEANUP_INTERVAL_SECS")
                 .unwrap_or_else(|_| "300".to_string())

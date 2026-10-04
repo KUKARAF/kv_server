@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT confirm_token_hash FROM device_proposals WHERE id = ? AND status = 'pending'",
+  "query": "SELECT kv_key FROM device_policy_keys WHERE device_id = ?",
   "describe": {
     "columns": [
       {
-        "name": "confirm_token_hash",
+        "name": "kv_key",
         "ordinal": 0,
         "type_info": "Text"
       }
@@ -16,5 +16,5 @@
       false
     ]
   },
-  "hash": "401109fcf5dec00a16331ba9d5be1c82f5da5a2b78b37f22d49b9de4e848543e"
+  "hash": "6fa5fdf2baf53526793b42c77284407ddb00a104f7ddac7ab1c0dbbabee35d05"
 }

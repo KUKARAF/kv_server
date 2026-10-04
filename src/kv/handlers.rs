@@ -42,6 +42,27 @@ fn log_access(
     }
 }
 
+/// Device-attributable request (device-bound session Bearer, or an X-Api-Key minted by a
+/// device session) touching the KV entry `key` — read, write or delete: hold the device to
+/// its key policy; a violation bans it. No-op for non-device credentials.
+async fn authorize_device_access(
+    state: &AppState,
+    auth: &ApiKeyAuth,
+    key: &str,
+) -> Result<(), AppError> {
+    if let (Some(device_id), Some(owner_id)) = (&auth.device_id, &auth.owner_id) {
+        crate::device_policy::enforce::authorize_key(
+            state,
+            device_id,
+            owner_id,
+            key,
+            auth.client_ip,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct RequestAccessResponse {
     pub confirm: String,
@@ -114,6 +135,9 @@ pub async fn get_entry(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<String, AppError> {
+    // Device-attributable credential: enforce the device's key policy on the decoded key
+    // name, before any lookup (a disallowed name is a violation whether or not it exists).
+    authorize_device_access(&state, &auth, &key).await?;
     check_kv_access(&auth.allowed_keys, &key)?;
     log_access(&state, &headers, addr, &auth, &key);
     let (value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext, device_encrypted) =
@@ -200,6 +224,7 @@ pub async fn upsert_entry(
     Path(key): Path<String>,
     Json(body): Json<KvUpsertRequest>,
 ) -> Result<StatusCode, AppError> {
+    authorize_device_access(&state, &auth, &key).await?;
     check_kv_access(&auth.allowed_keys, &key)?;
     log_access(&state, &headers, addr, &auth, &key);
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
@@ -289,6 +314,7 @@ pub async fn delete_entry(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    authorize_device_access(&state, &auth, &key).await?;
     check_kv_access(&auth.allowed_keys, &key)?;
     log_access(&state, &headers, addr, &auth, &key);
     let owner_id = auth.owner_id.ok_or(AppError::Unauthorized)?;
@@ -375,11 +401,19 @@ pub async fn list_entries(
         .collect(),
     };
 
-    let rows = if let Some(ref keys) = auth.allowed_keys {
+    let rows: Vec<KvMetaResponse> = if let Some(ref keys) = auth.allowed_keys {
         rows.into_iter().filter(|e| keys.contains(&e.key)).collect()
     } else {
         rows
     };
+    // Names-only listing: a restricted device only sees names its policy allows (never a ban).
+    let visible =
+        crate::device_policy::enforce::listing_filter(&state.pool, auth.device_id.as_deref())
+            .await?;
+    let rows = rows
+        .into_iter()
+        .filter(|e| visible.allows(&e.key))
+        .collect();
 
     Ok(Json(rows))
 }
@@ -493,6 +527,8 @@ pub async fn write_device_kv(
     Json(body): Json<DeviceKvWriteRequest>,
 ) -> Result<StatusCode, AppError> {
     let owner_id = &auth.0.oidc_subject;
+    // A device-attributable write of `body.key`: policy applies, violation ⇒ ban.
+    crate::admin::handlers::authorize_device_key(&state, &auth, &body.key).await?;
 
     if body.recipients.is_empty() {
         return Err(AppError::Forbidden(

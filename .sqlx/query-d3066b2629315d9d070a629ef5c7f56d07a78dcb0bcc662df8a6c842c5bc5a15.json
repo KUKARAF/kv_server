@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT key_prefix FROM secret_requests WHERE id = ? AND owner_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "key_prefix",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "d3066b2629315d9d070a629ef5c7f56d07a78dcb0bcc662df8a6c842c5bc5a15"
+}

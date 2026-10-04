@@ -54,6 +54,12 @@ pub struct ApiKeyAuth {
     /// None = session token = full access to all keys.
     /// Some(keys) = manual token restricted to the listed KV key names.
     pub allowed_keys: Option<Vec<String>>,
+    /// Some for a device-attributable credential: a device-bound session Bearer token, or
+    /// an X-Api-Key minted by a device session. Handlers touching a specific KV entry
+    /// (read/write/delete) must pass it through `device_policy::enforce::authorize_key`;
+    /// listings filter by `device_policy::enforce::listing_filter`.
+    pub device_id: Option<String>,
+    pub client_ip: Option<IpAddr>,
 }
 
 /// Check whether an authenticated token is allowed to access a specific KV key.
@@ -112,7 +118,7 @@ async fn auth_session_bearer(
     let key_hash = crate::keys::generate::hash_key(token);
 
     let api_key = sqlx::query!(
-        "SELECT id, status, expires_at, owner_id
+        "SELECT id, status, expires_at, owner_id, device_id
          FROM api_keys
          WHERE key_hash = ? AND type = 'session'",
         key_hash
@@ -160,6 +166,12 @@ async fn auth_session_bearer(
         }
     }
 
+    // A banned device is rejected for every op before the handler runs. Checked only
+    // after the token is proven valid, so revoked tokens still count as failures above.
+    if let Some(ref device_id) = api_key.device_id {
+        crate::device_policy::enforce::ensure_not_banned(&state.pool, device_id).await?;
+    }
+
     // Spawn last_used_at update and failure-counter reset.
     let id = api_key.id.clone();
     let pool = state.pool.clone();
@@ -180,6 +192,8 @@ async fn auth_session_bearer(
         api_key_id: Some(api_key.id),
         op,
         allowed_keys: None,
+        device_id: api_key.device_id,
+        client_ip,
     })
 }
 
@@ -221,7 +235,7 @@ async fn auth_manual_key(
     let key_hash = crate::keys::generate::hash_key(raw_key);
 
     let api_key = sqlx::query!(
-        "SELECT id, type as key_type, status, expires_at, owner_id
+        "SELECT id, type as key_type, status, expires_at, owner_id, device_id
          FROM api_keys
          WHERE key_hash = ? AND type NOT IN ('session', 'Bearer')",
         key_hash
@@ -320,6 +334,14 @@ async fn auth_manual_key(
         }
     }
 
+    // A key minted by a device session inherits that device's ban (and, in the handlers,
+    // its key policy). Checked only once the key is proven valid — so revoked/expired keys
+    // still count as failures above — and before a one-time key is consumed. DeviceBanned
+    // carries no AuthFailed marker.
+    if let Some(ref device_id) = api_key.device_id {
+        crate::device_policy::enforce::ensure_not_banned(&state.pool, device_id).await?;
+    }
+
     let allowed_keys = fetch_allowed_keys(&state.pool, &api_key.id).await?;
 
     // Consume one-time key after allowlist is confirmed fetchable.
@@ -355,6 +377,8 @@ async fn auth_manual_key(
         api_key_id: Some(api_key.id),
         op,
         allowed_keys: Some(allowed_keys),
+        device_id: api_key.device_id,
+        client_ip,
     })
 }
 
@@ -391,6 +415,8 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                 api_key_id: None,
                 op,
                 allowed_keys: None,
+                device_id: None,
+                client_ip,
             });
         }
 

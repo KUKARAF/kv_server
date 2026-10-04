@@ -1,5 +1,6 @@
 use crate::{
     auth::middleware::AdminAuth,
+    device_policy::enforce::ensure_not_banned,
     error::AppError,
     keys::generate::{generate_api_key, hash_key},
     session_request::model::*,
@@ -30,6 +31,10 @@ pub async fn create_challenge(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    // Deliberately NO ban check here: this endpoint is unauthenticated, so answering
+    // "device banned" would be a ban-status oracle for anyone holding a device id. The
+    // ban is enforced once possession is proven (create_request) and again on poll/approve.
 
     let challenge_id = Uuid::new_v4().to_string();
     let (nonce, nonce_hash) = generate_api_key();
@@ -97,6 +102,10 @@ pub async fn create_request(
         return Err(AppError::NotFound);
     }
 
+    // Possession proven — now refuse if that device is banned (checked on the tx's
+    // connection; the pool may have a single connection).
+    ensure_not_banned(&mut *tx, &challenge.device_id).await?;
+
     // Atomically consume: a decrypted nonce can only ever create one pending request.
     let consumed = sqlx::query!(
         "UPDATE session_request_challenges SET status = 'consumed'
@@ -154,7 +163,7 @@ pub async fn poll_status(
     Query(q): Query<PollQuery>,
 ) -> Result<Json<PollStatusResponse>, AppError> {
     let row = sqlx::query!(
-        "SELECT status, poll_secret,
+        "SELECT status, poll_secret, device_id,
                 wrap_key_type, wrap_nonce, wrap_ciphertext, wrap_aad,
                 wrap_ephemeral_pub, wrap_dek_nonce, wrap_encrypted_dek
          FROM session_requests WHERE id = ?",
@@ -170,6 +179,11 @@ pub async fn poll_status(
     match &row.poll_secret {
         Some(stored) if *stored == provided_hash => {}
         _ => return Err(AppError::NotFound),
+    }
+
+    // A banned device can neither poll nor claim a session token.
+    if let Some(ref device_id) = row.device_id {
+        ensure_not_banned(&state.pool, device_id).await?;
     }
 
     if row.status != "approved" {
@@ -318,6 +332,14 @@ pub async fn approve(
     let key_id = Uuid::new_v4().to_string();
     let duration_hours = body.approved_duration_hours.unwrap_or(24);
 
+    // Resolved before the transaction (the pool may have a single connection). A restricted
+    // device session may only approve a request for ITSELF; approving one for another device
+    // would mint an unrestricted twin session (twin-device escape).
+    let caller_restricted = match auth.0.device_id.as_deref() {
+        Some(caller) => crate::device_policy::enforce::is_restricted(&state.pool, caller).await?,
+        None => false,
+    };
+
     let mut tx = state.pool.begin().await?;
 
     let row = sqlx::query!(
@@ -342,6 +364,11 @@ pub async fn approve(
     // token is unusable without that device's private key. The device is captured at create
     // time; if it's gone (deleted between request and approval) we can't deliver securely.
     let device_id = row.device_id.ok_or(AppError::NotFound)?;
+    if caller_restricted && auth.0.device_id.as_deref() != Some(device_id.as_str()) {
+        return Err(crate::device_policy::enforce::forbidden_for_device());
+    }
+    // No point minting a session for a banned device (it'd be rejected on every use).
+    ensure_not_banned(&mut *tx, &device_id).await?;
     let device = sqlx::query!(
         "SELECT key_type, public_key, owner_id FROM devices WHERE id = ?",
         device_id
@@ -416,6 +443,8 @@ pub async fn reject(
     auth: AdminAuth,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    // A restricted device must not deny the owner's other devices their sessions.
+    crate::device_policy::enforce::ensure_may_manage_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
 
     // Same ownership check as `approve` — an admin may only reject requests targeting a
