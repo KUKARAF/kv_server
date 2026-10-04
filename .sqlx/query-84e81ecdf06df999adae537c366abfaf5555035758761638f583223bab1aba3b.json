@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO device_policy_keys (device_id, kv_key) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "84e81ecdf06df999adae537c366abfaf5555035758761638f583223bab1aba3b"
+}

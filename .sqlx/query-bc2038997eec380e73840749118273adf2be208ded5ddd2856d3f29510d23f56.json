@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT d.id as \"device_id!: String\", d.name as \"device_name!: String\",\n                  p.mode as \"mode?: String\", p.pattern as \"pattern?: String\",\n                  b.banned_at as \"banned_at?: String\", b.unban_at as \"unban_at?: String\",\n                  b.ban_count as \"ban_count?: i64\", b.last_key as \"last_key?: String\",\n                  (b.banned_at IS NOT NULL AND b.unban_at IS NOT NULL\n                   AND b.unban_at > datetime('now')) as \"ban_active?: bool\"\n           FROM devices d\n           LEFT JOIN device_policies p ON p.device_id = d.id\n           LEFT JOIN device_bans b ON b.device_id = d.id\n           WHERE d.owner_id = ? AND (? IS NULL OR d.id = ?)\n           ORDER BY d.name, d.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "device_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_name!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "mode?: String",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "pattern?: String",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "banned_at?: String",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "unban_at?: String",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "ban_count?: i64",
+        "ordinal": 6,
+        "type_info": "Int64"
+      },
+      {
+        "name": "last_key?: String",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "ban_active?: bool",
+        "ordinal": 8,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "bc2038997eec380e73840749118273adf2be208ded5ddd2856d3f29510d23f56"
+}

@@ -114,6 +114,18 @@ pub async fn get_entry(
     headers: HeaderMap,
     Path(key): Path<String>,
 ) -> Result<String, AppError> {
+    // Device-bound session: enforce the device's key policy on the decoded key name,
+    // before any lookup (a disallowed name is a violation whether or not it exists).
+    if let (Some(device_id), Some(owner_id)) = (&auth.device_id, &auth.owner_id) {
+        crate::device_policy::enforce::authorize_key(
+            &state,
+            device_id,
+            owner_id,
+            &key,
+            auth.client_ip,
+        )
+        .await?;
+    }
     check_kv_access(&auth.allowed_keys, &key)?;
     log_access(&state, &headers, addr, &auth, &key);
     let (value, ttl_hours, ttl_sliding, expires_at, zt_ciphertext, device_encrypted) =

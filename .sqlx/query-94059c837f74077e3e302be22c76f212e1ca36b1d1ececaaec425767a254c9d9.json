@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT k.key FROM kv_entries k\n         JOIN provisioned_keys p\n           ON p.provider_key_id = k.source_provider_key_id\n          AND p.management_key_id = k.source_management_key_id\n         WHERE p.id = ? AND p.management_key_id = ? AND k.owner_id = ?\n         ORDER BY k.key",
+  "describe": {
+    "columns": [
+      {
+        "name": "key",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "94059c837f74077e3e302be22c76f212e1ca36b1d1ececaaec425767a254c9d9"
+}

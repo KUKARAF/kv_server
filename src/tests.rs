@@ -38,6 +38,7 @@ fn test_config() -> Config {
         daily_rate_limit: 100,
         auth_failure_threshold: 50,
         auth_block_base_secs: 3600,
+        device_ban_base_secs: 3600,
         ttl_cleanup_interval_secs: 300,
         trust_proxy_headers: true,
         public_base_url: "http://localhost:3000".to_string(),
@@ -1834,5 +1835,759 @@ mod whoami_tests {
         let resp = whoami(&app, &plaintext).await;
         assert_eq!(resp["device_id"].as_str().unwrap(), device_id);
         assert_eq!(resp["device_name"].as_str().unwrap(), "bigboy");
+    }
+}
+
+/// Per-device key policies + temporary device bans (src/device_policy).
+// serde_json::Value indexing returns Null for missing keys instead of panicking.
+#[allow(clippy::indexing_slicing)]
+mod device_policy_tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    async fn build_policy_app() -> (Router, Arc<AppState>) {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let state = AppState::new(pool, test_config(), None);
+        let app = Router::new()
+            .nest("/kv", kv::router())
+            .nest("/api/devices", devices::router())
+            .nest("/api/admin/devices", devices::admin_router())
+            .nest(
+                "/api/admin/device-policies",
+                crate::device_policy::admin_router(),
+            )
+            .nest(
+                "/api/admin/management-keys",
+                crate::management_keys::admin_router(),
+            )
+            .nest("/api/admin", crate::admin::router())
+            .nest("/session-request", crate::session_request::public_router())
+            .layer(axum_middleware::from_fn(
+                middleware::security_headers::layer,
+            ))
+            .layer(axum_middleware::from_fn_with_state(
+                Arc::clone(&state),
+                middleware::rate_limit::layer,
+            ))
+            .layer(axum_middleware::from_fn_with_state(
+                Arc::clone(&state),
+                middleware::ip_block::layer,
+            ))
+            .with_state(Arc::clone(&state))
+            .layer(MockConnectInfo(SocketAddr::new(TEST_IP, 12345)));
+        (app, state)
+    }
+
+    async fn insert_device(pool: &SqlitePool, name: &str) -> String {
+        let id = Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO devices (id, owner_id, name, public_key, key_type)
+             VALUES (?, ?, ?, 'AAAA', 'x25519')",
+        )
+        .bind(&id)
+        .bind(TEST_OWNER)
+        .bind(name)
+        .execute(pool)
+        .await
+        .unwrap();
+        id
+    }
+
+    /// Device-bound session token, exactly as session_request approval mints it.
+    async fn insert_device_session(pool: &SqlitePool, device_id: &str) -> String {
+        let (plaintext, hash) = generate_api_key();
+        sqlx::query(
+            "INSERT INTO api_keys (id, key_hash, label, type, status, owner_id, device_id, expires_at)
+             VALUES (?, ?, 'session', 'session', 'active', ?, ?, datetime('now', '+1 hour'))",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(&hash)
+        .bind(TEST_OWNER)
+        .bind(device_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        plaintext
+    }
+
+    async fn seed_kv(pool: &SqlitePool, keys: &[&str]) {
+        for k in keys {
+            sqlx::query("INSERT INTO kv_entries (key, owner_id, value) VALUES (?, ?, ?)")
+                .bind(k)
+                .bind(TEST_OWNER)
+                .bind(format!("value-of-{k}"))
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn call(
+        app: &Router,
+        method: &str,
+        path: &str,
+        token: Option<&str>,
+        body: Option<serde_json::Value>,
+    ) -> (u16, String) {
+        let body = body.map(|b| b.to_string());
+        let resp = app
+            .clone()
+            .oneshot(req(method, path, token, body.as_deref()))
+            .await
+            .unwrap();
+        let status = resp.status().as_u16();
+        let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    fn json(s: &str) -> serde_json::Value {
+        serde_json::from_str(s).unwrap_or(serde_json::Value::Null)
+    }
+
+    async fn put_policy(
+        app: &Router,
+        admin: &str,
+        device_id: &str,
+        body: serde_json::Value,
+    ) -> (u16, serde_json::Value) {
+        let (s, b) = call(
+            app,
+            "PUT",
+            &format!("/api/admin/device-policies/{device_id}"),
+            Some(admin),
+            Some(body),
+        )
+        .await;
+        (s, json(&b))
+    }
+
+    fn assert_banned(status: u16, body: &str) {
+        assert_eq!(status, 403, "body: {body}");
+        assert_eq!(json(body), serde_json::json!({ "error": "device banned" }));
+    }
+
+    async fn ban_row(
+        pool: &SqlitePool,
+        device_id: &str,
+    ) -> Option<(Option<String>, i64, Option<String>)> {
+        sqlx::query_as::<_, (Option<String>, i64, Option<String>)>(
+            "SELECT banned_at, ban_count, last_key FROM device_bans WHERE device_id = ?",
+        )
+        .bind(device_id)
+        .fetch_optional(pool)
+        .await
+        .unwrap()
+    }
+
+    /// Common fixture: app, state, non-device admin token, device id, device token.
+    async fn fixture() -> (Router, Arc<AppState>, String, String, String) {
+        let (app, state) = build_policy_app().await;
+        seed_kv(
+            &state.pool,
+            &["OPENROUTER_API_KEY", "OTHER_KEY", "FOO", "FOO_BAR"],
+        )
+        .await;
+        let admin = insert_session_key(&state.pool, "active", None).await;
+        let device_id = insert_device(&state.pool, "hermes").await;
+        let device_token = insert_device_session(&state.pool, &device_id).await;
+        (app, state, admin, device_id, device_token)
+    }
+
+    #[tokio::test]
+    async fn no_policy_device_reads_any_key() {
+        let (app, state, _admin, device_id, dt) = fixture().await;
+        for k in ["OPENROUTER_API_KEY", "OTHER_KEY", "FOO_BAR"] {
+            let (s, b) = call(&app, "GET", &format!("/kv/{k}"), Some(&dt), None).await;
+            assert_eq!(s, 200);
+            assert_eq!(b, format!("value-of-{k}"));
+        }
+        let (s, _) = call(
+            &app,
+            "GET",
+            "/api/admin/kv/OTHER_KEY/value",
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert!(ban_row(&state.pool, &device_id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn allow_list_violation_bans_device_everywhere() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        let (s, row) = put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": ["OPENROUTER_API_KEY"] }),
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert_eq!(row["mode"], "allow_list");
+        assert_eq!(row["keys"], serde_json::json!(["OPENROUTER_API_KEY"]));
+        assert!(row["ban"].is_null());
+
+        let (s, b) = call(&app, "GET", "/kv/OPENROUTER_API_KEY", Some(&dt), None).await;
+        assert_eq!((s, b.as_str()), (200, "value-of-OPENROUTER_API_KEY"));
+
+        // Violation: name only in the response, no value, no policy contents.
+        let (s, b) = call(&app, "GET", "/kv/OTHER_KEY", Some(&dt), None).await;
+        assert_banned(s, &b);
+        assert!(!b.contains("value-of") && !b.contains("OPENROUTER"));
+        let (banned_at, count, last_key) = ban_row(&state.pool, &device_id).await.unwrap();
+        assert!(banned_at.is_some());
+        assert_eq!(count, 1);
+        assert_eq!(last_key.as_deref(), Some("OTHER_KEY"));
+
+        // Banned: even the allowed key, any AdminAuth endpoint, and session minting.
+        let (s, b) = call(&app, "GET", "/kv/OPENROUTER_API_KEY", Some(&dt), None).await;
+        assert_banned(s, &b);
+        let (s, b) = call(&app, "GET", "/kv", Some(&dt), None).await;
+        assert_banned(s, &b);
+        let (s, b) = call(&app, "GET", "/api/admin/session/whoami", Some(&dt), None).await;
+        assert_banned(s, &b);
+        let (s, b) = call(
+            &app,
+            "POST",
+            "/session-request/challenge",
+            None,
+            Some(serde_json::json!({ "device_id": device_id })),
+        )
+        .await;
+        assert_banned(s, &b);
+
+        // Owner sees the ban in the listing and the active-bans endpoint.
+        let (s, b) = call(
+            &app,
+            "GET",
+            "/api/admin/device-policies",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        let list = json(&b);
+        assert_eq!(list[0]["ban"]["active"], true);
+        assert_eq!(list[0]["ban"]["ban_count"], 1);
+        assert_eq!(list[0]["ban"]["last_key"], "OTHER_KEY");
+        let (s, b) = call(
+            &app,
+            "GET",
+            "/api/admin/device-policies/bans",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        let bans = json(&b);
+        assert_eq!(bans.as_array().unwrap().len(), 1);
+        assert_eq!(bans[0]["device_id"], device_id.as_str());
+        assert_eq!(bans[0]["device_name"], "hermes");
+        assert_eq!(bans[0]["active"], true);
+    }
+
+    #[tokio::test]
+    async fn deny_list_happy_and_violation() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        let (s, _) = put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "deny_list", "keys": ["OTHER_KEY"] }),
+        )
+        .await;
+        assert_eq!(s, 200);
+        let (s, _) = call(&app, "GET", "/kv/OPENROUTER_API_KEY", Some(&dt), None).await;
+        assert_eq!(s, 200);
+        // Percent-encoded name is decoded before the policy check (no bypass).
+        let (s, b) = call(&app, "GET", "/kv/OTHER%5FKEY", Some(&dt), None).await;
+        assert_banned(s, &b);
+        assert_eq!(ban_row(&state.pool, &device_id).await.unwrap().1, 1);
+    }
+
+    #[tokio::test]
+    async fn regex_happy_and_violation_is_anchored() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        let (s, row) = put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "regex", "pattern": "FOO", "keys": ["ignored"] }),
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert_eq!(row["pattern"], "FOO");
+        assert_eq!(row["keys"], serde_json::json!([]));
+        let (s, _) = call(&app, "GET", "/kv/FOO", Some(&dt), None).await;
+        assert_eq!(s, 200);
+        let (s, b) = call(&app, "GET", "/kv/FOO_BAR", Some(&dt), None).await;
+        assert_banned(s, &b);
+        assert_eq!(
+            ban_row(&state.pool, &device_id).await.unwrap().2.as_deref(),
+            Some("FOO_BAR")
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_value_and_device_kv_reads_are_enforced() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        let (s, b) = call(&app, "GET", "/api/admin/kv/FOO/value", Some(&dt), None).await;
+        assert_eq!((s, b.as_str()), (200, "value-of-FOO"));
+        let (s, b) = call(
+            &app,
+            "GET",
+            "/api/admin/kv/OTHER_KEY/value",
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_banned(s, &b);
+        assert_eq!(ban_row(&state.pool, &device_id).await.unwrap().1, 1);
+
+        // Device-encrypted fetch (separate device so it isn't already banned).
+        let d2 = insert_device(&state.pool, "laptop").await;
+        let t2 = insert_device_session(&state.pool, &d2).await;
+        put_policy(
+            &app,
+            &admin,
+            &d2,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        let (s, b) = call(
+            &app,
+            "GET",
+            &format!("/api/devices/{d2}/kv/OTHER_KEY"),
+            Some(&t2),
+            None,
+        )
+        .await;
+        assert_banned(s, &b);
+        assert_eq!(ban_row(&state.pool, &d2).await.unwrap().1, 1);
+
+        // Non-device caller asking for a disallowed key's envelope for d3: refused, no ban.
+        let d3 = insert_device(&state.pool, "cli-box").await;
+        put_policy(
+            &app,
+            &admin,
+            &d3,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        let (s, b) = call(
+            &app,
+            "GET",
+            &format!("/api/admin/devices/{d3}/kv/OTHER_KEY"),
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 403);
+        assert_ne!(json(&b)["error"], "device banned");
+        assert!(ban_row(&state.pool, &d3).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn violation_moves_neither_ip_counter() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        for _ in 0..3 {
+            let (s, _) = call(&app, "GET", "/kv/OTHER_KEY", Some(&dt), None).await;
+            assert_eq!(s, 403);
+            let (s, _) = call(&app, "GET", "/api/admin/session/whoami", Some(&dt), None).await;
+            assert_eq!(s, 403);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(rate_count(&state), 0, "rate counter must not move");
+        assert_eq!(
+            block_count(&state.pool).await,
+            0,
+            "block counter must not move"
+        );
+        // Banned once, not escalated by repeated requests while banned.
+        assert_eq!(ban_row(&state.pool, &device_id).await.unwrap().1, 1);
+    }
+
+    #[tokio::test]
+    async fn non_device_requests_unaffected_by_device_policy() {
+        let (app, state, admin, device_id, _dt) = fixture().await;
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        let (s, _) = call(&app, "GET", "/kv/OTHER_KEY", Some(&admin), None).await;
+        assert_eq!(s, 200);
+        let (s, _) = call(
+            &app,
+            "GET",
+            "/api/admin/kv/OTHER_KEY/value",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        let api_key = insert_api_key(&state.pool, "active", None, &["OTHER_KEY"]).await;
+        let resp = app
+            .clone()
+            .oneshot(get_req("/kv/OTHER_KEY", None, Some(api_key)))
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        assert!(ban_row(&state.pool, &device_id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn unban_keeps_count_and_next_ban_escalates() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        let unban_path = format!("/api/admin/device-policies/{device_id}/ban");
+
+        // No active ban yet → 404.
+        let (s, _) = call(&app, "DELETE", &unban_path, Some(&admin), None).await;
+        assert_eq!(s, 404);
+
+        call(&app, "GET", "/kv/OTHER_KEY", Some(&dt), None).await;
+        let (s, _) = call(&app, "DELETE", &unban_path, Some(&admin), None).await;
+        assert_eq!(s, 204);
+        let (banned_at, count, _) = ban_row(&state.pool, &device_id).await.unwrap();
+        assert!(banned_at.is_none());
+        assert_eq!(count, 1, "unban keeps ban_count");
+        let (s, _) = call(&app, "GET", "/kv/FOO", Some(&dt), None).await;
+        assert_eq!(s, 200, "unbanned device works again");
+
+        let (s, b) = call(
+            &app,
+            "GET",
+            "/api/admin/device-policies",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert_eq!(json(&b)[0]["ban"]["active"], false);
+
+        // Second offence: base 3600s doubled → > 90 min.
+        call(&app, "GET", "/kv/OTHER_KEY", Some(&dt), None).await;
+        let (count, over_90m) = sqlx::query_as::<_, (i64, i64)>(
+            "SELECT ban_count, unban_at > datetime('now', '+90 minutes') FROM device_bans WHERE device_id = ?",
+        )
+        .bind(&device_id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(over_90m, 1, "second ban must be longer than the first");
+    }
+
+    #[tokio::test]
+    async fn device_session_cannot_manage_policies_or_unban_itself() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        let base = "/api/admin/device-policies";
+        let body = serde_json::json!({ "mode": "allow_all" });
+        let calls: Vec<(&str, String, Option<serde_json::Value>)> = vec![
+            ("GET", base.to_string(), None),
+            ("GET", format!("{base}/bans"), None),
+            ("PUT", format!("{base}/{device_id}"), Some(body.clone())),
+            ("DELETE", format!("{base}/{device_id}/ban"), None),
+        ];
+        for (m, p, b) in &calls {
+            let (s, resp) = call(&app, m, p, Some(&dt), b.clone()).await;
+            assert_eq!(s, 403, "{m} {p}: {resp}");
+        }
+
+        // Banned device trying to unban itself / reset its policy: still 403, ban intact.
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        call(&app, "GET", "/kv/OTHER_KEY", Some(&dt), None).await;
+        for (m, p, b) in &calls {
+            let (s, _) = call(&app, m, p, Some(&dt), b.clone()).await;
+            assert_eq!(s, 403);
+        }
+        assert!(ban_row(&state.pool, &device_id).await.unwrap().0.is_some());
+
+        // A device can't delete itself to shed its policy/ban.
+        let d2 = insert_device(&state.pool, "other").await;
+        let t2 = insert_device_session(&state.pool, &d2).await;
+        let (s, _) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/devices/{d2}"),
+            Some(&t2),
+            None,
+        )
+        .await;
+        assert_eq!(s, 403);
+    }
+
+    #[tokio::test]
+    async fn restricted_device_cannot_mint_credentials() {
+        let (app, _state, admin, device_id, dt) = fixture().await;
+        let cli = serde_json::json!({ "days": 1 });
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/api/admin/session/cli-token",
+            Some(&dt),
+            Some(cli.clone()),
+        )
+        .await;
+        assert_eq!(s, 200, "unrestricted device keeps today's behaviour");
+
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/api/admin/session/cli-token",
+            Some(&dt),
+            Some(cli.clone()),
+        )
+        .await;
+        assert_eq!(s, 403);
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/api/admin/session/device-token",
+            Some(&dt),
+            None,
+        )
+        .await;
+        assert_eq!(s, 403);
+        let (s, _) = call(&app, "POST", "/api/admin/session-key", Some(&dt), None).await;
+        assert_eq!(s, 403);
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/api/admin/keys",
+            Some(&dt),
+            Some(serde_json::json!({ "label": "x", "key_type": "standard", "allowed_keys": ["OTHER_KEY"] })),
+        )
+        .await;
+        assert_eq!(s, 403);
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/api/admin/session/cli-token",
+            Some(&admin),
+            Some(cli),
+        )
+        .await;
+        assert_eq!(s, 200, "non-device admin unaffected");
+    }
+
+    #[tokio::test]
+    async fn put_validation() {
+        let (app, _state, admin, device_id, _dt) = fixture().await;
+        let bad = [
+            serde_json::json!({ "mode": "allow_some" }),
+            serde_json::json!({ "mode": "allow_list", "keys": [] }),
+            serde_json::json!({ "mode": "deny_list" }),
+            serde_json::json!({ "mode": "allow_list", "keys": ["  ", ""] }),
+            serde_json::json!({ "mode": "allow_list", "keys": ["x".repeat(257)] }),
+            serde_json::json!({ "mode": "allow_list", "keys": (0..501).map(|i| format!("K{i}")).collect::<Vec<_>>() }),
+            serde_json::json!({ "mode": "regex" }),
+            serde_json::json!({ "mode": "regex", "pattern": "" }),
+            serde_json::json!({ "mode": "regex", "pattern": "(" }),
+            serde_json::json!({ "mode": "regex", "pattern": "a".repeat(513) }),
+            serde_json::json!({ "mode": "regex", "pattern": r"\w{1000}\w{1000}" }),
+        ];
+        for b in bad {
+            let (s, _) = put_policy(&app, &admin, &device_id, b.clone()).await;
+            assert!((400..500).contains(&s), "{b} → {s}");
+        }
+
+        let (s, _) = put_policy(
+            &app,
+            &admin,
+            "no-such-device",
+            serde_json::json!({ "mode": "allow_all" }),
+        )
+        .await;
+        assert_eq!(s, 404);
+
+        // Trim + dedup; switching mode clears stale keys/pattern.
+        let (s, row) = put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": [" FOO ", "FOO", "BAR", ""], "pattern": "x" }),
+        )
+        .await;
+        assert_eq!(s, 200);
+        let mut keys: Vec<String> = serde_json::from_value(row["keys"].clone()).unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["BAR", "FOO"]);
+        assert!(row["pattern"].is_null());
+        let (s, row) = put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_all" }),
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert_eq!(row["keys"], serde_json::json!([]));
+        assert_eq!(row["mode"], "allow_all");
+    }
+
+    #[tokio::test]
+    async fn list_shows_unconfigured_devices_as_allow_all() {
+        let (app, state, admin, device_id, _dt) = fixture().await;
+        // Another owner's device must not be listed.
+        sqlx::query(
+            "INSERT INTO devices (id, owner_id, name, public_key, key_type) VALUES ('foreign', 'someone-else', 'x', 'AAAA', 'x25519')",
+        )
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let (s, b) = call(
+            &app,
+            "GET",
+            "/api/admin/device-policies",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert_eq!(
+            json(&b),
+            serde_json::json!([{
+                "device_id": device_id, "device_name": "hermes", "mode": "allow_all",
+                "keys": [], "pattern": null, "ban": null
+            }])
+        );
+        let (s, _) = put_policy(
+            &app,
+            &admin,
+            "foreign",
+            serde_json::json!({ "mode": "allow_all" }),
+        )
+        .await;
+        assert_eq!(s, 404);
+    }
+
+    #[tokio::test]
+    async fn expired_ban_no_longer_blocks() {
+        let (app, state, admin, device_id, dt) = fixture().await;
+        put_policy(
+            &app,
+            &admin,
+            &device_id,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        call(&app, "GET", "/kv/OTHER_KEY", Some(&dt), None).await;
+        let (s, _) = call(&app, "GET", "/kv/FOO", Some(&dt), None).await;
+        assert_eq!(s, 403);
+
+        sqlx::query(
+            "UPDATE device_bans SET unban_at = datetime('now', '-1 second') WHERE device_id = ?",
+        )
+        .bind(&device_id)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+        let (s, _) = call(&app, "GET", "/kv/FOO", Some(&dt), None).await;
+        assert_eq!(s, 200);
+        let (s, b) = call(
+            &app,
+            "GET",
+            "/api/admin/device-policies/bans",
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert_eq!(json(&b), serde_json::json!([]));
+        // An expired ban can't be "lifted" again.
+        let (s, _) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/device-policies/{device_id}/ban"),
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 404);
+    }
+
+    #[tokio::test]
+    async fn deleting_device_removes_policy_and_ban_rows() {
+        let (app, state, admin, _device_id, _dt) = fixture().await;
+        // A device without sessions (api_keys.device_id has no ON DELETE action).
+        let d = insert_device(&state.pool, "old-phone").await;
+        put_policy(
+            &app,
+            &admin,
+            &d,
+            serde_json::json!({ "mode": "allow_list", "keys": ["FOO"] }),
+        )
+        .await;
+        sqlx::query(
+            "INSERT INTO device_bans (device_id, owner_id, banned_at, unban_at, ban_count, last_key)
+             VALUES (?, ?, datetime('now'), datetime('now', '+1 hour'), 1, 'OTHER_KEY')",
+        )
+        .bind(&d)
+        .bind(TEST_OWNER)
+        .execute(&state.pool)
+        .await
+        .unwrap();
+
+        let (s, _) = call(
+            &app,
+            "DELETE",
+            &format!("/api/admin/devices/{d}"),
+            Some(&admin),
+            None,
+        )
+        .await;
+        assert_eq!(s, 204);
+        for table in ["device_policies", "device_policy_keys", "device_bans"] {
+            let n: i64 =
+                sqlx::query_scalar(&format!("SELECT COUNT(*) FROM {table} WHERE device_id = ?"))
+                    .bind(&d)
+                    .fetch_one(&state.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(n, 0, "{table} row left behind");
+        }
     }
 }

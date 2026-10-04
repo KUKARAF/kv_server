@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO device_bans (device_id, owner_id, ban_count) VALUES (?, ?, 0)\n         ON CONFLICT(device_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c4c096079d1792156b70d5c863479d421cbb3d7d442d2b34ad6e232bbe5329fc"
+}

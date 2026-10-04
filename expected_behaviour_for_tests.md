@@ -29,6 +29,7 @@ either counter.
 | 9  | `X-Api-Key` revoked/used                    | ++           | ++            |
 | 10 | `X-Api-Key` valid, wrong scope              | —            | —             |
 | 11 | No credentials, open-access GET             | —            | —             |
+| 12 | Device-bound session, device policy violation / banned device | — | —      |
 
 Notes:
 
@@ -38,3 +39,7 @@ Notes:
 - **Expired Bearer (4)** is fully benign (`SessionExpired`): neither counter moves, so a
   polling dashboard with a lapsed cookie can't self-ban.
 - **Wrong scope (10)** is `Forbidden` (403), not an auth failure — neither counter moves.
+- **Device policy violation / banned device (12)** is `DeviceBanned` (403
+  `{"error":"device banned"}`), not an auth failure — like wrong scope, neither counter
+  moves. The device itself is penalised instead (escalating ban in `device_bans`, see
+  `src/device_policy/enforce.rs`).

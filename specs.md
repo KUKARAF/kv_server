@@ -115,6 +115,33 @@ Served as static files by the Rust service. OIDC-gated. Provides:
 
 ---
 
+### Device key policies & bans
+
+Device-bound session tokens (minted via session-request approval, `api_keys.device_id` set)
+are full admin sessions for their owner. Each registered device can be limited to a subset of
+KV entry *names* (migration 0040, `src/device_policy/`):
+
+- `allow_all` (default; no `device_policies` row behaves identically), `allow_list`,
+  `deny_list`, `regex` (whole-name match, anchored `^(?:pat)$`, ≤512 chars, size-limited).
+- **Violation** = a device-attributable request to read a specific KV value the policy doesn't
+  allow (`GET /kv/{key}` with a device Bearer, `GET /api/admin/kv/{key}/value`,
+  `GET /api/{admin/,}devices/{id}/kv/{key}`, provisioned-key envelopes linked to KV entries).
+  Listing names is not a violation. The device is banned for
+  `DEVICE_BAN_BASE_SECS` (default 86400) × 2^(n-1), capped at 30 days, a high-priority
+  notification is sent (names only), and the response is 403 `{"error":"device banned"}`.
+- **While banned** every device-attributable request (AdminAuth / Bearer KV / session-request
+  challenge, create, poll, approve for that device) gets the same 403. Expired bans are ignored
+  and cleared by TTL cleanup; `ban_count` is kept so repeat offences escalate.
+- Bans/violations are **not auth failures**: no `AuthFailed` marker, neither per-IP counter moves.
+- A policy-restricted device (mode ≠ `allow_all`) also cannot mint non-device-bound credentials
+  (API keys, CLI/approval tokens, session keys) or fetch management-key envelopes (plain 403,
+  no ban), and no device can delete itself.
+- Management API `/api/admin/device-policies` (`GET /`, `PUT /:device_id`,
+  `DELETE /:device_id/ban`, `GET /bans`) is closed to device-bound sessions (403) so a device
+  can't relax its own policy or unban itself.
+
+---
+
 ### Rate limiting
 
 Daily request limit configured via Docker Compose env var, enforced in axum middleware (tower-governor or similar). Resets at midnight UTC.

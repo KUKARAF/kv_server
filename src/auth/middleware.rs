@@ -1,6 +1,9 @@
-use crate::{error::AppError, keys::generate::hash_key, state::AppState};
+use crate::{
+    device_policy::enforce::ensure_not_banned, error::AppError, keys::generate::hash_key,
+    middleware::ip_block::ClientIp, state::AppState,
+};
 use axum::{async_trait, extract::FromRequestParts, http::request::Parts};
-use std::sync::Arc;
+use std::{net::IpAddr, sync::Arc};
 
 #[derive(Debug, Clone)]
 pub struct SessionClaims {
@@ -10,6 +13,8 @@ pub struct SessionClaims {
     /// ask "who am I" (see admin::handlers::whoami). None for OIDC cookies and other
     /// non-device-bound credentials.
     pub device_id: Option<String>,
+    /// Resolved client IP (from ip_block's `ClientIp` extension), recorded on device bans.
+    pub client_ip: Option<IpAddr>,
 }
 
 pub struct AdminAuth(pub SessionClaims);
@@ -47,6 +52,7 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
                 oidc_subject: "dev".to_string(),
                 email: Some("dev@localhost".to_string()),
                 device_id: None,
+                client_ip: parts.extensions.get::<ClientIp>().map(|c| c.0),
             }));
         }
 
@@ -78,10 +84,17 @@ impl FromRequestParts<Arc<AppState>> for AdminAuth {
             }
         }
 
+        // A banned device is rejected before any handler logic runs. DeviceBanned carries
+        // no AuthFailed marker: a ban is a policy consequence, not an auth failure.
+        if let Some(ref device_id) = row.device_id {
+            ensure_not_banned(&state.pool, device_id).await?;
+        }
+
         Ok(AdminAuth(SessionClaims {
             oidc_subject: row.owner_id,
             email: Some(row.label),
             device_id: row.device_id,
+            client_ip: parts.extensions.get::<ClientIp>().map(|c| c.0),
         }))
     }
 }

@@ -167,18 +167,56 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     let owner_id = &auth.0.oidc_subject;
+
+    // A device must not delete itself: that would wipe its own policy/ban rows.
+    if auth.0.device_id.as_deref() == Some(id.as_str()) {
+        return Err(AppError::Forbidden(
+            "a device cannot delete itself".to_string(),
+        ));
+    }
+
+    let mut tx = state.pool.begin().await?;
+
+    // Policy/ban rows also cascade via FK, but delete them explicitly so cleanup doesn't
+    // depend on the foreign_keys pragma. Scoped to an owned device only.
+    sqlx::query!(
+        "DELETE FROM device_policy_keys
+         WHERE device_id = ? AND device_id IN (SELECT id FROM devices WHERE owner_id = ?)",
+        id,
+        owner_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM device_policies
+         WHERE device_id = ? AND device_id IN (SELECT id FROM devices WHERE owner_id = ?)",
+        id,
+        owner_id
+    )
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query!(
+        "DELETE FROM device_bans
+         WHERE device_id = ? AND device_id IN (SELECT id FROM devices WHERE owner_id = ?)",
+        id,
+        owner_id
+    )
+    .execute(&mut *tx)
+    .await?;
+
     let affected = sqlx::query!(
         "DELETE FROM devices WHERE id = ? AND owner_id = ?",
         id,
         owner_id
     )
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?
     .rows_affected();
 
     if affected == 0 {
         return Err(AppError::NotFound);
     }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -416,6 +454,30 @@ pub async fn get_device_kv(
 
     if device_exists.is_none() {
         return Err(AppError::NotFound);
+    }
+
+    // Device key policy. The caller's own device (device-bound session) gets the full
+    // check — ban + policy, violation ⇒ escalating ban. The envelope itself is only usable
+    // by `device_id` (the path device), so its policy applies too; when that device isn't
+    // the authenticated caller (e.g. kv_cli with an approval token) there is no proof of
+    // who is asking, so it's a plain refusal without recording a ban.
+    if let Some(ref session_device) = auth.0.device_id {
+        crate::device_policy::enforce::authorize_key(
+            &state,
+            session_device,
+            owner_id,
+            &kv_key,
+            auth.0.client_ip,
+        )
+        .await?;
+    }
+    if auth.0.device_id.as_deref() != Some(device_id.as_str()) {
+        crate::device_policy::enforce::ensure_not_banned(&state.pool, &device_id).await?;
+        if !crate::device_policy::enforce::key_permitted(&state.pool, &device_id, &kv_key).await? {
+            return Err(AppError::Forbidden(
+                "not permitted for this device".to_string(),
+            ));
+        }
     }
 
     let body = sqlx::query!(

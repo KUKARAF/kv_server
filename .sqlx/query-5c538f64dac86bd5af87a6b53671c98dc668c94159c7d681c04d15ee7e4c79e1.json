@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE device_bans\n         SET banned_at = datetime('now'),\n             unban_at  = datetime('now', ?),\n             ban_count = ?,\n             last_key  = ?,\n             last_ip   = ?\n         WHERE device_id = ? AND ban_count = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "5c538f64dac86bd5af87a6b53671c98dc668c94159c7d681c04d15ee7e4c79e1"
+}

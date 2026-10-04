@@ -1,5 +1,6 @@
 use crate::{
     auth::middleware::AdminAuth,
+    device_policy::enforce::ensure_not_banned,
     error::AppError,
     keys::generate::{generate_api_key, hash_key},
     session_request::model::*,
@@ -30,6 +31,9 @@ pub async fn create_challenge(
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
+
+    // A banned device can't start minting a fresh session.
+    ensure_not_banned(&state.pool, &body.device_id).await?;
 
     let challenge_id = Uuid::new_v4().to_string();
     let (nonce, nonce_hash) = generate_api_key();
@@ -97,6 +101,10 @@ pub async fn create_request(
         return Err(AppError::NotFound);
     }
 
+    // Possession proven — now refuse if that device is banned (checked on the tx's
+    // connection; the pool may have a single connection).
+    ensure_not_banned(&mut *tx, &challenge.device_id).await?;
+
     // Atomically consume: a decrypted nonce can only ever create one pending request.
     let consumed = sqlx::query!(
         "UPDATE session_request_challenges SET status = 'consumed'
@@ -154,7 +162,7 @@ pub async fn poll_status(
     Query(q): Query<PollQuery>,
 ) -> Result<Json<PollStatusResponse>, AppError> {
     let row = sqlx::query!(
-        "SELECT status, poll_secret,
+        "SELECT status, poll_secret, device_id,
                 wrap_key_type, wrap_nonce, wrap_ciphertext, wrap_aad,
                 wrap_ephemeral_pub, wrap_dek_nonce, wrap_encrypted_dek
          FROM session_requests WHERE id = ?",
@@ -170,6 +178,11 @@ pub async fn poll_status(
     match &row.poll_secret {
         Some(stored) if *stored == provided_hash => {}
         _ => return Err(AppError::NotFound),
+    }
+
+    // A banned device can neither poll nor claim a session token.
+    if let Some(ref device_id) = row.device_id {
+        ensure_not_banned(&state.pool, device_id).await?;
     }
 
     if row.status != "approved" {
@@ -342,6 +355,8 @@ pub async fn approve(
     // token is unusable without that device's private key. The device is captured at create
     // time; if it's gone (deleted between request and approval) we can't deliver securely.
     let device_id = row.device_id.ok_or(AppError::NotFound)?;
+    // No point minting a session for a banned device (it'd be rejected on every use).
+    ensure_not_banned(&mut *tx, &device_id).await?;
     let device = sqlx::query!(
         "SELECT key_type, public_key, owner_id FROM devices WHERE id = ?",
         device_id

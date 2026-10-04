@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM device_bans\n         WHERE device_id = ? AND device_id IN (SELECT id FROM devices WHERE owner_id = ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "267571f5c7500c2b8d74bb63b11c0b9d498afb24ed8484666acd80b99a2a5e90"
+}

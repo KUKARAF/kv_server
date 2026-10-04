@@ -54,6 +54,10 @@ pub struct ApiKeyAuth {
     /// None = session token = full access to all keys.
     /// Some(keys) = manual token restricted to the listed KV key names.
     pub allowed_keys: Option<Vec<String>>,
+    /// Some only for a device-bound session Bearer token. Handlers reading a specific
+    /// KV value must pass it through `device_policy::enforce::authorize_key`.
+    pub device_id: Option<String>,
+    pub client_ip: Option<IpAddr>,
 }
 
 /// Check whether an authenticated token is allowed to access a specific KV key.
@@ -112,7 +116,7 @@ async fn auth_session_bearer(
     let key_hash = crate::keys::generate::hash_key(token);
 
     let api_key = sqlx::query!(
-        "SELECT id, status, expires_at, owner_id
+        "SELECT id, status, expires_at, owner_id, device_id
          FROM api_keys
          WHERE key_hash = ? AND type = 'session'",
         key_hash
@@ -160,6 +164,12 @@ async fn auth_session_bearer(
         }
     }
 
+    // A banned device is rejected for every op before the handler runs. Checked only
+    // after the token is proven valid, so revoked tokens still count as failures above.
+    if let Some(ref device_id) = api_key.device_id {
+        crate::device_policy::enforce::ensure_not_banned(&state.pool, device_id).await?;
+    }
+
     // Spawn last_used_at update and failure-counter reset.
     let id = api_key.id.clone();
     let pool = state.pool.clone();
@@ -180,6 +190,8 @@ async fn auth_session_bearer(
         api_key_id: Some(api_key.id),
         op,
         allowed_keys: None,
+        device_id: api_key.device_id,
+        client_ip,
     })
 }
 
@@ -355,6 +367,8 @@ async fn auth_manual_key(
         api_key_id: Some(api_key.id),
         op,
         allowed_keys: Some(allowed_keys),
+        device_id: None,
+        client_ip,
     })
 }
 
@@ -391,6 +405,8 @@ impl FromRequestParts<Arc<AppState>> for ApiKeyAuth {
                 api_key_id: None,
                 op,
                 allowed_keys: None,
+                device_id: None,
+                client_ip,
             });
         }
 

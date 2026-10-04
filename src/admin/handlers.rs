@@ -52,6 +52,8 @@ pub async fn create_key(
     auth: AdminAuth,
     Json(body): Json<CreateKeyRequest>,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
+    // Minted credentials are not device-bound: a policy-restricted device must not mint them.
+    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
     let valid_types = [
         "standard",
         "one_time",
@@ -180,6 +182,8 @@ pub async fn create_session_key(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
 ) -> Result<(StatusCode, Json<CreateKeyResponse>), AppError> {
+    // Minted credentials are not device-bound: a policy-restricted device must not mint them.
+    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
 
     // Only revoke previous CLI session tokens (label = 'session'), not the web session
@@ -320,6 +324,8 @@ pub async fn create_cli_token(
     auth: AdminAuth,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<String>, AppError> {
+    // Minted credentials are not device-bound: a policy-restricted device must not mint them.
+    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
     // Request body is client-supplied JSON; use `.get()` rather than indexing
     // so a missing/wrong-typed "days" field falls through to the default
     // instead of risking a panic.
@@ -354,6 +360,8 @@ pub async fn create_device_token(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
 ) -> Result<Json<String>, AppError> {
+    // Minted credentials are not device-bound: a policy-restricted device must not mint them.
+    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
     let owner = &auth.0.oidc_subject;
     let (plaintext, key_hash) = generate_api_key();
     let id = Uuid::new_v4().to_string();
@@ -700,6 +708,17 @@ pub async fn admin_get_kv_value(
     Path(key): Path<String>,
 ) -> Result<String, AppError> {
     let owner = &auth.0.oidc_subject;
+    // Returns a KV value: device-bound sessions are subject to their key policy.
+    if let Some(ref device_id) = auth.0.device_id {
+        crate::device_policy::enforce::authorize_key(
+            &state,
+            device_id,
+            owner,
+            &key,
+            auth.0.client_ip,
+        )
+        .await?;
+    }
     let row = sqlx::query!(
         r#"SELECT value, device_encrypted as "device_encrypted: bool", zt_ciphertext
            FROM kv_entries

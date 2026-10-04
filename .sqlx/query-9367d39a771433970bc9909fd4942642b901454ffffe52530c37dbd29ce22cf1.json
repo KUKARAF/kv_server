@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT ban_count,\n                  (banned_at IS NOT NULL AND unban_at IS NOT NULL\n                   AND unban_at > datetime('now')) as \"active!: bool\"\n           FROM device_bans WHERE device_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "ban_count",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "active!: bool",
+        "ordinal": 1,
+        "type_info": "Int"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "9367d39a771433970bc9909fd4942642b901454ffffe52530c37dbd29ce22cf1"
+}

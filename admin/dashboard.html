@@ -19,6 +19,7 @@
     <button onclick="showTab('keys')" class="tab-btn" id="tab-keys">API Keys</button>
     <button onclick="showTab('approvals')" class="tab-btn" id="tab-approvals">Approvals</button>
     <button onclick="showTab('devices')" class="tab-btn" id="tab-devices">Devices</button>
+    <button onclick="showTab('device-policies')" class="tab-btn" id="tab-device-policies">Device Policies</button>
     <button onclick="showTab('entries')" class="tab-btn" id="tab-entries">KV Entries</button>
     <button onclick="showTab('zero-trust')" class="tab-btn" id="tab-zero-trust">Zero Trust</button>
     <button onclick="showTab('management-keys')" class="tab-btn" id="tab-management-keys">Management Keys</button>
@@ -40,6 +41,9 @@
     </div>
     <div id="tab-devices-content" class="tab-content hidden">
       <div hx-get="/admin/partials/device-auth.html" hx-trigger="load" hx-swap="innerHTML"></div>
+    </div>
+    <div id="tab-device-policies-content" class="tab-content hidden">
+      <div hx-get="/admin/partials/device-policies.html" hx-trigger="load" hx-swap="innerHTML"></div>
     </div>
     <div id="tab-entries-content" class="tab-content hidden">
       <div hx-get="/admin/partials/kv-entries.html" hx-trigger="load" hx-swap="innerHTML"></div>

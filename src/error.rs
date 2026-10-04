@@ -48,6 +48,15 @@ pub enum AppError {
     #[error("zero trust required")]
     ZeroTrustRequired,
 
+    // 403 for a device that is (or just got) banned for violating its key policy.
+    // Deliberately NOT an auth failure: carries no AuthFailed marker, so it moves
+    // neither per-IP counter (same treatment as a wrong-scope 403).
+    #[error("device banned")]
+    DeviceBanned,
+
+    #[error("bad request: {0}")]
+    BadRequest(String),
+
     #[error("internal error")]
     Internal(#[from] anyhow::Error),
 }
@@ -112,6 +121,14 @@ impl IntoResponse for AppError {
                 .into_response();
         }
 
+        if matches!(self, AppError::DeviceBanned) {
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({ "error": "device banned" })),
+            )
+                .into_response();
+        }
+
         if let AppError::Forbidden(msg) = &self {
             return (StatusCode::FORBIDDEN, Json(json!({ "error": msg }))).into_response();
         }
@@ -119,9 +136,10 @@ impl IntoResponse for AppError {
         let (status, message) = match &self {
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".to_string()),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             // Each of these variants is already handled by an early `return`
             // above (RateLimited, Unauthorized, SessionExpired, Forbidden,
-            // PendingApproval, ZeroTrustRequired, KeyConflict), so this arm
+            // PendingApproval, ZeroTrustRequired, DeviceBanned, KeyConflict), so this arm
             // can never actually execute; it only exists because `match`
             // requires exhaustiveness and the compiler can't see the
             // earlier early returns as ruling these out.
@@ -132,6 +150,7 @@ impl IntoResponse for AppError {
             | AppError::Forbidden(_)
             | AppError::PendingApproval { .. }
             | AppError::ZeroTrustRequired
+            | AppError::DeviceBanned
             | AppError::KeyConflict(_) => unreachable!(),
             AppError::Internal(e) => {
                 tracing::error!("internal error: {e:#}");

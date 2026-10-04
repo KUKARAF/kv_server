@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO device_policies (device_id, owner_id, mode, pattern, updated_at)\n         VALUES (?, ?, ?, ?, datetime('now'))\n         ON CONFLICT(device_id) DO UPDATE SET\n             owner_id   = excluded.owner_id,\n             mode       = excluded.mode,\n             pattern    = excluded.pattern,\n             updated_at = excluded.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "46d02b9cf84a396b2e4b6e604bf1a7617d270b0133d238774e6906b445451962"
+}

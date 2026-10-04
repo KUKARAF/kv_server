@@ -1,0 +1,204 @@
+<section>
+  <h2>Device Policies</h2>
+  <p>Restrict which KV entries each registered device may read. A device that requests an entry its
+    policy does not allow is temporarily banned (escalating: each ban lasts twice as long as the last).
+    Devices with no policy can read every entry.</p>
+
+  <button type="button" class="btn-secondary" id="dp-refresh">Refresh</button>
+
+  <!-- Shared suggestions for the per-row "add key" inputs (names only, never values) -->
+  <datalist id="dp-kv-keys"></datalist>
+
+  <div id="device-policies-table" style="margin-top:1rem;">Loading...</div>
+</section>
+
+<script>
+(() => {
+  const MODES = [
+    ['allow_all',  'Allow all keys'],
+    ['allow_list', 'Only listed keys'],
+    ['deny_list',  'All except listed keys'],
+    ['regex',      'Regex'],
+  ];
+  const CELL = 'padding:6px 8px;vertical-align:top;';
+  const TH = 'text-align:left;padding:6px 8px;font-size:12px;color:var(--muted);font-weight:500;';
+
+  // Server timestamps are SQLite datetime('now') — "YYYY-MM-DD HH:MM:SS" in UTC with no zone
+  // marker. Parse them as UTC; fall back to the raw string if they don't parse.
+  function fmtTs(s) {
+    if (!s) return '';
+    const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? s.replace(' ', 'T') + 'Z' : s;
+    const d = new Date(iso);
+    return isNaN(d) ? String(s) : d.toLocaleString();
+  }
+
+  // Server error text comes back as {error}; showToast renders HTML, so it must be escaped.
+  async function errText(resp) {
+    try {
+      const body = await resp.json();
+      if (body && body.error) return String(body.error);
+    } catch { /* non-JSON body */ }
+    return 'HTTP ' + resp.status;
+  }
+
+  function banHtml(ban) {
+    if (!ban || !ban.ban_count) return '<span style="color:var(--muted)">—</span>';
+    const n = Number(ban.ban_count) || 0;
+    const last = ban.last_key
+      ? ` — last requested <code>${esc(ban.last_key)}</code>` : '';
+    if (ban.active) {
+      return `<div style="color:var(--danger)">Banned until ${esc(fmtTs(ban.unban_at))}</div>`
+        + `<div style="font-size:0.85em;color:var(--muted)">(${n}×${last})</div>`
+        + `<button type="button" class="btn-secondary dp-unban" style="font-size:0.8em;padding:2px 8px;margin-top:4px">Unban</button>`;
+    }
+    return `<span style="color:var(--muted);font-size:0.85em">previously banned ${n}×${last}</span>`;
+  }
+
+  function rowHtml(p) {
+    const mode = MODES.some(([v]) => v === p.mode) ? p.mode : 'allow_all';
+    const opts = MODES.map(([v, label]) =>
+      `<option value="${v}"${v === mode ? ' selected' : ''}>${label}</option>`).join('');
+    const keys = Array.isArray(p.keys) ? p.keys.join('\n') : '';
+    const rowStyle = p.ban && p.ban.active
+      ? 'background:color-mix(in srgb,var(--danger,#e53e3e) 8%,transparent)' : '';
+    return `<tr class="dp-row" data-device-id="${esc(p.device_id)}" data-device-name="${esc(p.device_name)}"
+        style="border-top:1px solid var(--border);${rowStyle}">
+      <td style="${CELL}">${esc(p.device_name)}</td>
+      <td style="${CELL}"><select class="dp-mode">${opts}</select></td>
+      <td style="${CELL}min-width:260px">
+        <div class="dp-keys-wrap">
+          <textarea class="dp-keys" rows="3" placeholder="One KV entry name per line"
+            style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;">${esc(keys)}</textarea>
+          <div style="display:flex;gap:0.25rem;margin-top:4px;">
+            <input type="text" class="dp-key-add" list="dp-kv-keys" placeholder="Pick existing entry…"
+              style="flex:1;font-size:12px;">
+            <button type="button" class="btn-secondary dp-key-add-btn" style="font-size:0.8em;padding:2px 8px">Add</button>
+          </div>
+        </div>
+        <div class="dp-pattern-wrap">
+          <input type="text" class="dp-pattern" maxlength="512" value="${esc(p.pattern || '')}"
+            placeholder="e.g. OPENROUTER_.*"
+            style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;">
+          <div style="font-size:11px;color:var(--muted);margin-top:2px;">Matched against the whole key name.</div>
+        </div>
+        <span class="dp-all-note" style="color:var(--muted);font-size:0.85em">Every entry allowed.</span>
+      </td>
+      <td style="${CELL}text-align:right">
+        <button type="button" class="btn-secondary dp-save" style="font-size:0.8em;padding:2px 8px">Save</button>
+      </td>
+      <td style="${CELL}font-size:0.9em">${banHtml(p.ban)}</td>
+    </tr>`;
+  }
+
+  // Show only the inputs relevant to the selected mode.
+  function syncMode(tr) {
+    const mode = tr.querySelector('.dp-mode').value;
+    const listMode = mode === 'allow_list' || mode === 'deny_list';
+    tr.querySelector('.dp-keys-wrap').style.display = listMode ? '' : 'none';
+    tr.querySelector('.dp-pattern-wrap').style.display = mode === 'regex' ? '' : 'none';
+    tr.querySelector('.dp-all-note').style.display = mode === 'allow_all' ? '' : 'none';
+  }
+
+  async function loadDevicePolicies() {
+    const el = document.getElementById('device-policies-table');
+    const resp = await fetch('/api/admin/device-policies');
+    if (!resp.ok) { el.textContent = 'Failed to load: ' + await errText(resp); return; }
+    const data = await resp.json();
+    if (!data.length) { el.innerHTML = '<p style="color:var(--muted)">No devices registered.</p>'; return; }
+    el.innerHTML = '<table style="width:100%;border-collapse:collapse;">'
+      + '<thead><tr>'
+      + `<th style="${TH}">Device</th>`
+      + `<th style="${TH}">Mode</th>`
+      + `<th style="${TH}">Keys / pattern</th>`
+      + `<th style="${TH}"></th>`
+      + `<th style="${TH}">Ban status</th>`
+      + '</tr></thead><tbody>'
+      + data.map(rowHtml).join('')
+      + '</tbody></table>';
+    el.querySelectorAll('.dp-row').forEach(syncMode);
+  }
+
+  async function loadKvKeyNames() {
+    const resp = await fetch('/api/admin/kv/keys');
+    if (!resp.ok) return;
+    const keys = await resp.json();
+    document.getElementById('dp-kv-keys').innerHTML =
+      keys.map(k => `<option value="${esc(k)}">`).join('');
+  }
+
+  async function savePolicy(tr, btn) {
+    const mode = tr.querySelector('.dp-mode').value;
+    const body = { mode, keys: [], pattern: null };
+    if (mode === 'allow_list' || mode === 'deny_list') {
+      body.keys = [...new Set(tr.querySelector('.dp-keys').value
+        .split('\n').map(k => k.trim()).filter(Boolean))];
+    } else if (mode === 'regex') {
+      body.pattern = tr.querySelector('.dp-pattern').value;
+    }
+    const name = tr.dataset.deviceName;
+    btn.disabled = true;
+    const resp = await fetch('/api/admin/device-policies/' + encodeURIComponent(tr.dataset.deviceId), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    btn.disabled = false;
+    if (resp.ok) {
+      showToast('Policy saved for ' + esc(name), { type: 'success' });
+      loadDevicePolicies();
+    } else {
+      showToast('Failed to save policy: ' + esc(await errText(resp)), { type: 'error' });
+    }
+  }
+
+  async function unbanDevice(tr, btn) {
+    const name = tr.dataset.deviceName;
+    if (!confirm('Lift the ban on ' + name + '?')) return;
+    btn.disabled = true;
+    const resp = await fetch('/api/admin/device-policies/' + encodeURIComponent(tr.dataset.deviceId) + '/ban',
+      { method: 'DELETE' });
+    if (resp.ok) {
+      showToast('Unbanned ' + esc(name), { type: 'success' });
+      loadDevicePolicies();
+    } else {
+      showToast('Failed to unban: ' + esc(await errText(resp)), { type: 'error' });
+      btn.disabled = false;
+    }
+  }
+
+  function addKey(tr) {
+    const input = tr.querySelector('.dp-key-add');
+    const val = input.value.trim();
+    if (!val) return;
+    const ta = tr.querySelector('.dp-keys');
+    const existing = ta.value.split('\n').map(k => k.trim()).filter(Boolean);
+    if (!existing.includes(val)) ta.value = existing.concat(val).join('\n');
+    input.value = '';
+  }
+
+  // Event delegation — no inline handlers built from (attacker-influenced) data.
+  const table = document.getElementById('device-policies-table');
+  table.addEventListener('change', e => {
+    if (e.target.classList.contains('dp-mode')) syncMode(e.target.closest('.dp-row'));
+  });
+  table.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    const tr = btn.closest('.dp-row');
+    if (!tr) return;
+    if (btn.classList.contains('dp-save')) savePolicy(tr, btn);
+    else if (btn.classList.contains('dp-unban')) unbanDevice(tr, btn);
+    else if (btn.classList.contains('dp-key-add-btn')) addKey(tr);
+  });
+  table.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.classList.contains('dp-key-add')) {
+      e.preventDefault();
+      addKey(e.target.closest('.dp-row'));
+    }
+  });
+  document.getElementById('dp-refresh').addEventListener('click', loadDevicePolicies);
+
+  loadDevicePolicies();
+  loadKvKeyNames();
+})();
+</script>

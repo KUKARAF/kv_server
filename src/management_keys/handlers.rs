@@ -143,6 +143,9 @@ pub async fn get_management_key_envelope(
     Path((id, device_id)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let owner_id = &auth.0.oidc_subject;
+    // A management key mints arbitrary provider keys — a policy-restricted device must
+    // not obtain one (it would sidestep its KV key policy entirely).
+    crate::device_policy::enforce::ensure_may_mint_credentials(&state.pool, &auth.0).await?;
 
     let owned = sqlx::query_scalar!(
         r#"SELECT 1 as "x: i32" FROM management_keys WHERE id = ? AND owner_id = ?"#,
@@ -338,6 +341,46 @@ pub async fn list_provisioned_keys(
     Ok(Json(rows))
 }
 
+async fn authorize_provisioned_key(
+    state: &AppState,
+    device_id: &str,
+    owner_id: &str,
+    management_key_id: &str,
+    provisioned_key_id: &str,
+    client_ip: Option<std::net::IpAddr>,
+) -> Result<(), AppError> {
+    use crate::device_policy::enforce;
+
+    enforce::ensure_not_banned(&state.pool, device_id).await?;
+    if !enforce::is_restricted(&state.pool, device_id).await? {
+        return Ok(());
+    }
+
+    let linked = sqlx::query_scalar!(
+        "SELECT k.key FROM kv_entries k
+         JOIN provisioned_keys p
+           ON p.provider_key_id = k.source_provider_key_id
+          AND p.management_key_id = k.source_management_key_id
+         WHERE p.id = ? AND p.management_key_id = ? AND k.owner_id = ?
+         ORDER BY k.key",
+        provisioned_key_id,
+        management_key_id,
+        owner_id
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    if linked.is_empty() {
+        return Err(AppError::Forbidden(
+            "not permitted for this device".to_string(),
+        ));
+    }
+    for kv_key in &linked {
+        enforce::authorize_key(state, device_id, owner_id, kv_key, client_ip).await?;
+    }
+    Ok(())
+}
+
 pub async fn get_provisioned_key_envelope(
     State(state): State<Arc<AppState>>,
     auth: AdminAuth,
@@ -345,6 +388,21 @@ pub async fn get_provisioned_key_envelope(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let owner_id = &auth.0.oidc_subject;
     require_owned_management_key(&state, &management_key_id, owner_id).await?;
+
+    // A provisioned key's secret is the value of the KV entries generated from it
+    // (kv_entries.source_*), so a device-bound session is held to its key policy for
+    // each linked entry. A policy-restricted device may not fetch unlinked provisioned keys.
+    if let Some(ref session_device) = auth.0.device_id {
+        authorize_provisioned_key(
+            &state,
+            session_device,
+            owner_id,
+            &management_key_id,
+            &provisioned_key_id,
+            auth.0.client_ip,
+        )
+        .await?;
+    }
 
     let body = sqlx::query!(
         "SELECT b.nonce, b.ciphertext, b.aad

@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.device_id as \"device_id!: String\", d.name as \"device_name!: String\",\n                  b.banned_at, b.unban_at, b.ban_count, b.last_key\n           FROM device_bans b\n           JOIN devices d ON d.id = b.device_id\n           WHERE d.owner_id = ?\n             AND b.banned_at IS NOT NULL AND b.unban_at IS NOT NULL\n             AND b.unban_at > datetime('now')\n           ORDER BY b.unban_at DESC",
+  "describe": {
+    "columns": [
+      {
+        "name": "device_id!: String",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "device_name!: String",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "banned_at",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "unban_at",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "ban_count",
+        "ordinal": 4,
+        "type_info": "Int64"
+      },
+      {
+        "name": "last_key",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "f4994bd9754d83c128eccb9cd52a4b78f066e9ef662c886027d676c1a47f20fd"
+}
